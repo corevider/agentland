@@ -5,7 +5,7 @@
   "identifier": "dev.agentland.app",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://localhost:5173",
+    "devUrl": "http://localhost:5273",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
   },

@@ -14,7 +14,7 @@ async fn main() -> anyhow::Result<()> {
 
     println!("core:    http://127.0.0.1:{port}");
     println!("token:   {token}");
-    println!("browser: http://localhost:5173/?port={port}&token={token}");
+    println!("browser: http://localhost:5273/?port={port}&token={token}");
 
     let manager = Arc::new(PtyManager::new());
     serve(
