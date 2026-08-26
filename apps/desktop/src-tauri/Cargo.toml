@@ -13,4 +13,5 @@ anyhow.workspace = true
 serde.workspace = true
 tauri = { version = "2", features = [] }
 tokio.workspace = true
+tracing.workspace = true
 tracing-subscriber = "0.3"
