@@ -9,15 +9,15 @@
         <style>
             :root {
                 color-scheme: dark;
-                --ground: #0b1113;
-                --surface: #141c1f;
-                --line: #26343a;
-                --ink: #e3ebee;
-                --muted: #7b8d94;
-                --accent: #45bcc4;
-                --good: #5aa87c;
-                --warn: #c99a2e;
-                --bad: #d46969;
+                --ground: #0d1c1f;
+                --surface: #12262a;
+                --line: #24454d;
+                --ink: #eef0e6;
+                --muted: #91a3a1;
+                --accent: #46bfb0;
+                --good: #6fbf73;
+                --warn: #f0a95c;
+                --bad: #e5705f;
             }
 
             * {
@@ -26,7 +26,9 @@
 
             body {
                 margin: 0;
-                background: var(--ground);
+                background:
+                    radial-gradient(120% 70% at 50% -10%, #17323740 0%, transparent 60%),
+                    var(--ground);
                 color: var(--ink);
                 font: 16px/1.5 system-ui, -apple-system, sans-serif;
                 padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
@@ -69,6 +71,7 @@
                 background: var(--surface);
                 padding: 12px 14px;
                 margin-bottom: 10px;
+                border-radius: 12px;
             }
 
             .row {
@@ -94,6 +97,7 @@
             button {
                 flex: 1;
                 padding: 12px;
+                border-radius: 10px;
                 font: inherit;
                 font-size: 15px;
                 background: transparent;

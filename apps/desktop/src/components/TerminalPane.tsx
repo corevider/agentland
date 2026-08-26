@@ -232,15 +232,15 @@ export function TerminalPane({ session, focused, on_focus, on_metrics }: Props) 
 
     return (
         <div
-            className={`flex min-h-0 flex-col border bg-[#0d1315] ${focused ? "border-[#45bcc4]" : "border-[#26343a]"}`}
+            className={`flex min-h-0 flex-col border bg-lagoon-deep ${focused ? "border-turquoise" : "border-reef"}`}
             onMouseDown={() => on_focus(session.id)}
         >
-            <div className="flex items-center justify-between gap-2 border-b border-[#26343a] px-2 py-1 font-mono text-[11px] text-[#7b8d94]">
+            <div className="flex items-center justify-between gap-2 border-b border-reef px-2 py-1 font-mono text-[11px] text-shell">
                 <span className="truncate">{session.id}</span>
 
                 {stats ? (
                     <span className="flex items-center gap-2 tabular-nums">
-                        <span className={stats.alive ? "text-[#5aa87c]" : "text-[#7b8d94]"}>
+                        <span className={stats.alive ? "text-palm" : "text-shell"}>
                             {stats.alive
                                 ? now - stats.last_output_at <= 2
                                     ? "working"
@@ -252,7 +252,7 @@ export function TerminalPane({ session, focused, on_focus, on_metrics }: Props) 
                             {format_bytes(stats.bytes)}
                         </span>
                         {stats.context_percent !== null ? (
-                            <span className="text-[#45bcc4]">{stats.context_percent}% ctx</span>
+                            <span className="text-turquoise">{stats.context_percent}% ctx</span>
                         ) : null}
                     </span>
                 ) : null}

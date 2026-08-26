@@ -85,11 +85,11 @@ export function ContextMenu({ request, on_close }: { request: MenuRequest | null
     return (
         <div
             ref={holder}
-            className="fixed z-50 border border-[#3a4d55] bg-[#141c1f] py-1 shadow-lg"
+            className="fixed z-50 border border-foam bg-lagoon py-1 shadow-lg rounded-lg"
             style={{ left, top, width: MENU_WIDTH }}
         >
             {request.title ? (
-                <div className="border-b border-[#26343a] px-3 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-[#7b8d94]">
+                <div className="border-b border-reef px-3 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-shell">
                     {request.title}
                 </div>
             ) : null}
@@ -98,7 +98,7 @@ export function ContextMenu({ request, on_close }: { request: MenuRequest | null
                 <button
                     key={index}
                     className={`flex w-full items-baseline justify-between gap-3 px-3 py-2 text-left text-xs disabled:opacity-40 ${
-                        item.danger ? "text-[#d46969] hover:bg-[#241416]" : "text-[#e3ebee] hover:bg-[#1b262a]"
+                        item.danger ? "text-coral hover:bg-lagoon" : "text-linen hover:bg-shallow"
                     }`}
                     disabled={item.disabled}
                     onClick={() => {
@@ -108,7 +108,7 @@ export function ContextMenu({ request, on_close }: { request: MenuRequest | null
                 >
                     <span>{item.label}</span>
                     {item.hint ? (
-                        <span className="font-mono text-[10px] text-[#5d6e75]">{item.hint}</span>
+                        <span className="font-mono text-[10px] text-shade">{item.hint}</span>
                     ) : null}
                 </button>
             ))}

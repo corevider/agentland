@@ -25,10 +25,10 @@ interface Props {
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
     return (
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#1c262a] py-3">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-reef/60 py-3">
             <div>
-                <div className="text-sm text-[#e3ebee]">{label}</div>
-                {hint ? <div className="font-mono text-[11px] text-[#7b8d94]">{hint}</div> : null}
+                <div className="text-sm text-linen">{label}</div>
+                {hint ? <div className="font-mono text-[11px] text-shell">{hint}</div> : null}
             </div>
             {children}
         </div>
@@ -48,7 +48,7 @@ function Select({
 }) {
     return (
         <select
-            className="border border-[#26343a] bg-[#0d1315] px-2 py-1 font-mono text-xs"
+            className="border border-reef bg-lagoon-deep px-2 py-1 font-mono text-xs rounded-lg"
             value={value}
             onChange={(event) => on_change(Number(event.target.value))}
         >
@@ -65,11 +65,11 @@ export function SettingsPage({ settings, on_change, on_close, gpu, surface }: Pr
     const [section, set_section] = useState<SectionId>("benchmark");
 
     return (
-        <div className="absolute inset-0 z-10 flex flex-col bg-[#0b1113]">
-            <header className="flex items-center justify-between border-b border-[#26343a] px-4 py-3">
-                <span className="font-mono text-xs uppercase tracking-[0.14em] text-[#45bcc4]">Settings</span>
+        <div className="absolute inset-0 z-10 flex flex-col bg-lagoon-deep">
+            <header className="flex items-center justify-between border-b border-reef px-4 py-3">
+                <span className="font-display text-[17px] font-semibold text-linen">Settings</span>
                 <button
-                    className="border border-[#3a4d55] px-3 py-1 font-mono text-xs"
+                    className="border border-foam px-3 py-1 font-mono text-xs rounded-lg"
                     onClick={on_close}
                     autoFocus
                 >
@@ -78,19 +78,19 @@ export function SettingsPage({ settings, on_change, on_close, gpu, surface }: Pr
             </header>
 
             <div className="flex min-h-0 flex-1">
-                <nav className="w-56 shrink-0 border-r border-[#26343a] p-2">
+                <nav className="w-56 shrink-0 border-r border-reef p-2">
                     {SECTIONS.map((entry) => (
                         <button
                             key={entry.id}
                             className={`mb-1 block w-full px-3 py-2 text-left ${
                                 section === entry.id
-                                    ? "bg-[#14343a] text-[#45bcc4]"
-                                    : "text-[#a4b5bb] hover:bg-[#141c1f]"
+                                    ? "bg-shallow text-turquoise"
+                                    : "text-driftwood hover:bg-lagoon"
                             }`}
                             onClick={() => set_section(entry.id)}
                         >
                             <div className="text-sm">{entry.label}</div>
-                            <div className="font-mono text-[10px] text-[#7b8d94]">{entry.hint}</div>
+                            <div className="font-mono text-[10px] text-shell">{entry.hint}</div>
                         </button>
                     ))}
                 </nav>
@@ -98,7 +98,7 @@ export function SettingsPage({ settings, on_change, on_close, gpu, surface }: Pr
                 <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
                     {section === "benchmark" ? (
                         <div className="max-w-2xl">
-                            <p className="mb-4 max-w-prose text-sm text-[#a4b5bb]">
+                            <p className="mb-4 max-w-prose text-sm text-driftwood">
                                 The gate is eight panes at 10,000 lines per second each. Raise the load to find
                                 where this machine actually breaks.
                             </p>
@@ -130,21 +130,21 @@ export function SettingsPage({ settings, on_change, on_close, gpu, surface }: Pr
 
                     {section === "terminal" ? (
                         <div className="max-w-2xl">
-                            <p className="mb-4 max-w-prose text-sm text-[#a4b5bb]">
+                            <p className="mb-4 max-w-prose text-sm text-driftwood">
                                 Under heavy output a pane renders what a human can read and records the rest.
                                 These limits are why the gate passes.
                             </p>
                             <Row label="Focused pane" hint="writes once per animation frame">
-                                <span className="font-mono text-xs text-[#7b8d94]">live</span>
+                                <span className="font-mono text-xs text-shell">live</span>
                             </Row>
                             <Row label="Background panes" hint="throttled while another pane has focus">
-                                <span className="font-mono text-xs text-[#7b8d94]">250 ms</span>
+                                <span className="font-mono text-xs text-shell">250 ms</span>
                             </Row>
                             <Row label="Overload tail" hint="a flooded pane keeps only its last bytes">
-                                <span className="font-mono text-xs text-[#7b8d94]">48 KB</span>
+                                <span className="font-mono text-xs text-shell">48 KB</span>
                             </Row>
                             <Row label="Skipped output" hint="never lost — the core writes every byte to disk">
-                                <span className="font-mono text-xs text-[#5aa87c]">sessions/&lt;id&gt;.log</span>
+                                <span className="font-mono text-xs text-palm">sessions/&lt;id&gt;.log</span>
                             </Row>
                         </div>
                     ) : null}
@@ -152,20 +152,20 @@ export function SettingsPage({ settings, on_change, on_close, gpu, surface }: Pr
                     {section === "diagnostics" ? (
                         <div className="max-w-2xl">
                             <Row label="Surface" hint="which webview is rendering this window">
-                                <span className="font-mono text-xs text-[#7b8d94]">{surface}</span>
+                                <span className="font-mono text-xs text-shell">{surface}</span>
                             </Row>
                             <Row label="WebGL" hint="the island needs one context">
-                                <span className="font-mono text-xs text-[#7b8d94]">
+                                <span className="font-mono text-xs text-shell">
                                     {gpu.webgl2 ? "webgl2" : gpu.renderer === "none" ? "unavailable" : "webgl1"}
                                 </span>
                             </Row>
                             <Row label="GPU" hint="unmasked renderer string">
-                                <span className="max-w-md truncate font-mono text-xs text-[#7b8d94]">
+                                <span className="max-w-md truncate font-mono text-xs text-shell">
                                     {gpu.renderer}
                                 </span>
                             </Row>
                             <Row label="Contexts granted" hint="probed at startup">
-                                <span className="font-mono text-xs text-[#7b8d94]">{gpu.max_contexts}</span>
+                                <span className="font-mono text-xs text-shell">{gpu.max_contexts}</span>
                             </Row>
                         </div>
                     ) : null}

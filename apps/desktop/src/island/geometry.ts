@@ -67,10 +67,10 @@ export const ROLE_SHAPE: Record<string, "workbench" | "watchtower" | "radio" | "
 };
 
 export const PRESENCE_COLOR: Record<string, string> = {
-    done: "#5aa87c",
-    working: "#c99a2e",
-    attention: "#d46969",
-    idle: "#46565d",
+    done: "#6fbf73",
+    working: "#f0a95c",
+    attention: "#e5705f",
+    idle: "#63797a",
 };
 
 export const PRESENCE_LABEL: Record<string, string> = {

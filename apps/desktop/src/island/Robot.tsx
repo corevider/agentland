@@ -2,9 +2,9 @@ import { useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
-const PANEL = "#dfe6e9";
-const JOINT = "#2a3338";
-const VISOR = "#11181c";
+const PANEL = "#eef0e6";
+const JOINT = "#37474a";
+const VISOR = "#122024";
 
 interface Props {
     agent_id: string;
@@ -77,7 +77,7 @@ export function Robot({ agent_id, presence, accent, highlighted }: Props) {
         }
     });
 
-    const panel = highlighted ? "#7fd6da" : PANEL;
+    const panel = highlighted ? "#8fe0d5" : PANEL;
 
     return (
         <group ref={body} userData={{ agent_id }} scale={0.44}>

@@ -274,7 +274,7 @@ export default function App() {
 
     return (
         <div
-            className="relative flex h-screen flex-col bg-[#0b1113] text-[#d6e2e6]"
+            className="relative flex h-screen flex-col bg-lagoon-deep text-linen"
             onContextMenu={open_window_menu}
         >
             <ContextMenu request={menu.request} on_close={menu.close} />
@@ -288,8 +288,10 @@ export default function App() {
                 />
             ) : null}
 
-            <header className="flex flex-wrap items-center gap-4 border-b border-[#26343a] px-4 py-3">
-                <span className="font-mono text-xs uppercase tracking-[0.14em] text-[#45bcc4]">Agentland</span>
+            <header className="flex flex-wrap items-center gap-4 border-b border-reef/70 px-5 py-3">
+                <span className="font-display text-[19px] font-semibold tracking-tight text-linen">
+                    Agentland
+                </span>
 
                 <div className="flex">
                     {(["island", "panes", "board", "repos", "crew"] as const).map((choice) => (
@@ -297,8 +299,8 @@ export default function App() {
                             key={choice}
                             className={`border px-3 py-1 font-mono text-xs ${
                                 view === choice
-                                    ? "border-[#45bcc4] text-[#45bcc4]"
-                                    : "border-[#26343a] text-[#7b8d94]"
+                                    ? "border-turquoise text-turquoise"
+                                    : "border-reef text-shell"
                             }`}
                             onClick={() => set_view(choice)}
                         >
@@ -308,7 +310,7 @@ export default function App() {
                 </div>
 
                 <button
-                    className="border border-[#45bcc4] px-3 py-1 font-mono text-xs text-[#45bcc4] disabled:opacity-40"
+                    className="border border-turquoise px-3 py-1 font-mono text-xs text-turquoise disabled:opacity-40 rounded-lg"
                     onClick={run_benchmark}
                     disabled={busy}
                 >
@@ -316,36 +318,36 @@ export default function App() {
                 </button>
 
                 <button
-                    className="border border-[#3a4d55] px-3 py-1 font-mono text-xs disabled:opacity-40"
+                    className="border border-foam px-3 py-1 font-mono text-xs disabled:opacity-40 rounded-lg"
                     onClick={open_shells}
                     disabled={busy}
                 >
                     open shells
                 </button>
 
-                <button className="border border-[#3a4d55] px-3 py-1 font-mono text-xs" onClick={clear}>
+                <button className="border border-foam px-3 py-1 font-mono text-xs rounded-lg" onClick={clear}>
                     clear
                 </button>
 
-                <span className="font-mono text-[11px] text-[#7b8d94]">
+                <span className="font-mono text-[11px] text-shell">
                     {pane_count} × {rate.toLocaleString()} lps
                 </span>
 
                 <div className="ml-auto flex items-center gap-5 font-mono text-xs tabular-nums">
-                    <span className={verdict === "pass" ? "text-[#5aa87c]" : verdict === "marginal" ? "text-[#c99a2e]" : "text-[#d46969]"}>
+                    <span className={verdict === "pass" ? "text-palm" : verdict === "marginal" ? "text-sun" : "text-coral"}>
                         {frame_stats.fps} fps
                     </span>
-                    <span className="text-[#7b8d94]">worst {frame_stats.worst_frame_ms} ms</span>
-                    <span className="text-[#7b8d94]">{throughput.mb_per_second} MB/s</span>
-                    <span className="text-[#7b8d94]">
+                    <span className="text-shell">worst {frame_stats.worst_frame_ms} ms</span>
+                    <span className="text-shell">{throughput.mb_per_second} MB/s</span>
+                    <span className="text-shell">
                         core drop {throughput.dropped_frames} · collapsed {throughput.collapsed_mb} MB
                     </span>
-                    <span className="text-[#7b8d94]" title={gpu.renderer}>
+                    <span className="text-shell" title={gpu.renderer}>
                         gpu {gpu.webgl2 ? "webgl2" : gpu.renderer === "none" ? "none" : "webgl1"} · {gpu.max_contexts} ctx
                     </span>
 
                     <button
-                        className="border border-[#26343a] px-2 py-1 text-[#a4b5bb] hover:border-[#45bcc4] hover:text-[#45bcc4]"
+                        className="border border-reef px-2 py-1 text-driftwood hover:border-turquoise hover:text-turquoise rounded-lg"
                         title="Settings"
                         aria-label="Settings"
                         onClick={() => set_settings_open(true)}
@@ -359,7 +361,7 @@ export default function App() {
             </header>
 
             {error ? (
-                <div className="border-b border-[#d46969] bg-[#1b1113] px-4 py-2 font-mono text-xs text-[#d46969]">
+                <div className="border-b border-coral bg-lagoon px-4 py-2 font-mono text-xs text-coral">
                     {error}
                 </div>
             ) : null}
@@ -370,7 +372,7 @@ export default function App() {
             {view === "island" ? (
                 <Suspense
                     fallback={
-                        <div className="flex min-h-0 flex-1 items-center justify-center font-mono text-xs text-[#7b8d94]">
+                        <div className="flex min-h-0 flex-1 items-center justify-center font-mono text-xs text-shell">
                             loading the island…
                         </div>
                     }

@@ -15,10 +15,10 @@ import {
 } from "@/lib/core";
 
 const STATE_COLOR: Record<Service["state"], string> = {
-    starting: "text-[#c99a2e]",
-    ready: "text-[#5aa87c]",
-    unreachable: "text-[#d46969]",
-    stopped: "text-[#7b8d94]",
+    starting: "text-sun",
+    ready: "text-palm",
+    unreachable: "text-coral",
+    stopped: "text-shell",
 };
 
 export function RepoPanel() {
@@ -73,13 +73,13 @@ export function RepoPanel() {
             <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
                 <div className="flex flex-wrap items-center gap-2">
                     <input
-                        className="w-96 border border-[#26343a] bg-[#141c1f] px-2 py-1 font-mono text-xs"
+                        className="w-96 border border-reef bg-lagoon px-2 py-1 font-mono text-xs rounded-lg"
                         placeholder="/path/to/a/git/repository"
                         value={path}
                         onChange={(event) => set_path(event.target.value)}
                     />
                     <button
-                        className="border border-[#45bcc4] px-3 py-1 font-mono text-xs text-[#45bcc4] disabled:opacity-40"
+                        className="border border-turquoise px-3 py-1 font-mono text-xs text-turquoise disabled:opacity-40 rounded-lg"
                         disabled={busy || path.trim().length === 0}
                         onClick={() =>
                             run(async () => {
@@ -93,23 +93,23 @@ export function RepoPanel() {
                 </div>
 
                 {error ? (
-                    <div className="border border-[#d46969] bg-[#1b1113] px-3 py-2 font-mono text-xs text-[#d46969]">
+                    <div className="border border-coral bg-lagoon px-3 py-2 font-mono text-xs text-coral rounded-lg">
                         {error}
                     </div>
                 ) : null}
 
                 {repos.length === 0 ? (
-                    <p className="max-w-prose font-mono text-xs text-[#7b8d94]">
+                    <p className="max-w-prose font-mono text-xs text-shell">
                         No repositories yet. Worktrees are created outside your clone, so nothing here
                         rearranges your folders.
                     </p>
                 ) : null}
 
                 {repos.map((repo) => (
-                    <section key={repo.id} className="border border-[#26343a] bg-[#141c1f]">
-                        <header className="flex flex-wrap items-baseline justify-between gap-3 border-b border-[#26343a] px-3 py-2">
-                            <span className="font-mono text-sm text-[#e3ebee]">{repo.name}</span>
-                            <span className="font-mono text-[11px] text-[#7b8d94]">
+                    <section key={repo.id} className="border border-reef bg-lagoon rounded-lg">
+                        <header className="flex flex-wrap items-baseline justify-between gap-3 border-b border-reef px-3 py-2">
+                            <span className="font-mono text-sm text-linen">{repo.name}</span>
+                            <span className="font-mono text-[11px] text-shell">
                                 {repo.default_branch}
                                 {repo.remotes.length > 0
                                     ? ` · ${repo.remotes.map((remote) => `${remote.name}@${remote.provider}`).join(", ")}`
@@ -125,14 +125,14 @@ export function RepoPanel() {
                                 return (
                                     <div
                                         key={entry.name}
-                                        className="flex flex-wrap items-center gap-3 border border-[#26343a] px-3 py-2 font-mono text-xs"
+                                        className="flex flex-wrap items-center gap-3 border border-reef px-3 py-2 font-mono text-xs rounded-lg"
                                     >
-                                        <span className="text-[#e3ebee]">{entry.name}</span>
-                                        <span className="text-[#7b8d94]">{entry.branch}</span>
-                                        <span className="text-[#45bcc4]">:{entry.port}</span>
+                                        <span className="text-linen">{entry.name}</span>
+                                        <span className="text-shell">{entry.branch}</span>
+                                        <span className="text-turquoise">:{entry.port}</span>
                                         <span
                                             className={
-                                                entry.dirty_files > 0 ? "text-[#c99a2e]" : "text-[#5aa87c]"
+                                                entry.dirty_files > 0 ? "text-sun" : "text-palm"
                                             }
                                         >
                                             {entry.missing
@@ -152,7 +152,7 @@ export function RepoPanel() {
                                             {service ? (
                                                 <>
                                                     <button
-                                                        className="border border-[#3a4d55] px-2 py-1 text-[11px] disabled:opacity-40"
+                                                        className="border border-foam px-2 py-1 text-[11px] disabled:opacity-40 rounded-lg"
                                                         disabled={service.state !== "ready"}
                                                         onClick={() =>
                                                             set_preview(preview === service.url ? null : service.url)
@@ -161,7 +161,7 @@ export function RepoPanel() {
                                                         {preview === service.url ? "hide preview" : "preview"}
                                                     </button>
                                                     <button
-                                                        className="border border-[#3a4d55] px-2 py-1 text-[11px] disabled:opacity-40"
+                                                        className="border border-foam px-2 py-1 text-[11px] disabled:opacity-40 rounded-lg"
                                                         disabled={busy}
                                                         onClick={() => run(() => stop_service(repo.id, entry.name))}
                                                     >
@@ -170,7 +170,7 @@ export function RepoPanel() {
                                                 </>
                                             ) : (
                                                 <button
-                                                    className="border border-[#3a4d55] px-2 py-1 text-[11px] disabled:opacity-40"
+                                                    className="border border-foam px-2 py-1 text-[11px] disabled:opacity-40 rounded-lg"
                                                     disabled={busy || entry.missing}
                                                     onClick={() => run(() => start_service(repo.id, entry.name))}
                                                 >
@@ -178,14 +178,14 @@ export function RepoPanel() {
                                                 </button>
                                             )}
                                             <button
-                                                className="border border-[#3a4d55] px-2 py-1 text-[11px] disabled:opacity-40"
+                                                className="border border-foam px-2 py-1 text-[11px] disabled:opacity-40 rounded-lg"
                                                 disabled={busy}
                                                 onClick={() => run(() => remove_worktree(repo.id, entry.name, false))}
                                             >
                                                 remove
                                             </button>
                                             <button
-                                                className="border border-[#9e3535] px-2 py-1 text-[11px] text-[#d46969] disabled:opacity-40"
+                                                className="border border-coral px-2 py-1 text-[11px] text-coral disabled:opacity-40 rounded-lg"
                                                 disabled={busy}
                                                 onClick={() => run(() => remove_worktree(repo.id, entry.name, true))}
                                             >
@@ -198,7 +198,7 @@ export function RepoPanel() {
 
                             <div className="flex items-center gap-2">
                                 <input
-                                    className="w-48 border border-[#26343a] bg-[#0d1315] px-2 py-1 font-mono text-xs"
+                                    className="w-48 border border-reef bg-lagoon-deep px-2 py-1 font-mono text-xs rounded-lg"
                                     placeholder="work1"
                                     value={names[repo.id] ?? ""}
                                     onChange={(event) =>
@@ -206,7 +206,7 @@ export function RepoPanel() {
                                     }
                                 />
                                 <button
-                                    className="border border-[#3a4d55] px-3 py-1 font-mono text-xs disabled:opacity-40"
+                                    className="border border-foam px-3 py-1 font-mono text-xs disabled:opacity-40 rounded-lg"
                                     disabled={busy || !(names[repo.id] ?? "").trim()}
                                     onClick={() =>
                                         run(async () => {
@@ -224,11 +224,11 @@ export function RepoPanel() {
             </div>
 
             {preview ? (
-                <aside className="flex w-[46%] min-w-[420px] flex-col border-l border-[#26343a]">
-                    <div className="flex items-center justify-between border-b border-[#26343a] px-3 py-2 font-mono text-[11px] text-[#7b8d94]">
+                <aside className="flex w-[46%] min-w-[420px] flex-col border-l border-reef">
+                    <div className="flex items-center justify-between border-b border-reef px-3 py-2 font-mono text-[11px] text-shell">
                         <span>{preview}</span>
                         <button
-                            className="border border-[#3a4d55] px-2 py-1"
+                            className="border border-foam px-2 py-1 rounded-lg"
                             onClick={() => set_preview(null)}
                         >
                             close

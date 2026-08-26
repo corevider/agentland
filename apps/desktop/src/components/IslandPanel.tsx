@@ -98,14 +98,14 @@ export function IslandPanel({ active }: Props) {
 
     return (
         <div className="flex min-h-0 flex-1">
-            <aside className="flex w-72 shrink-0 flex-col border-r border-[#26343a]">
-                <header className="border-b border-[#26343a] px-3 py-2 font-mono text-[11px] uppercase tracking-[0.1em] text-[#7b8d94]">
+            <aside className="flex w-72 shrink-0 flex-col border-r border-reef">
+                <header className="border-b border-reef px-3 py-2 font-mono text-[11px] uppercase tracking-[0.1em] text-shell">
                     Unassigned · drag onto a station
                 </header>
 
                 <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
                     {tasks.length === 0 ? (
-                        <p className="font-mono text-[11px] text-[#5d6e75]">
+                        <p className="font-mono text-[11px] text-shade">
                             Nothing waiting. Cards created on the board appear here until they have an
                             owner.
                         </p>
@@ -116,29 +116,29 @@ export function IslandPanel({ active }: Props) {
                             key={task.id}
                             draggable
                             onDragStart={(event) => event.dataTransfer.setData("text/plain", task.id)}
-                            className="cursor-grab border border-[#26343a] bg-[#141c1f] p-2"
+                            className="cursor-grab border border-reef bg-lagoon p-2 rounded-lg"
                         >
-                            <div className="text-xs text-[#e3ebee]">{task.title}</div>
-                            <div className="mt-1 font-mono text-[10px] text-[#5d6e75]">
+                            <div className="text-xs text-linen">{task.title}</div>
+                            <div className="mt-1 font-mono text-[10px] text-shade">
                                 {task.id} · {task.repository_id}
                             </div>
                         </article>
                     ))}
                 </div>
 
-                <footer className="flex flex-col gap-2 border-t border-[#26343a] px-3 py-2 font-mono text-[10px] text-[#5d6e75]">
+                <footer className="flex flex-col gap-2 border-t border-reef px-3 py-2 font-mono text-[10px] text-shade">
                     <span>
                         {agents.length} crew · {tier.label}
                     </span>
 
                     {dispatch ? (
                         <div className="flex items-center justify-between gap-2">
-                            <span className={dispatch.paused ? "text-[#c99a2e]" : "text-[#5aa87c]"}>
+                            <span className={dispatch.paused ? "text-sun" : "text-palm"}>
                                 X {dispatch.paused ? "paused" : "on duty"}
                                 {dispatch.queue.length > 0 ? ` · ${dispatch.queue.length} queued` : ""}
                             </span>
                             <button
-                                className="border border-[#26343a] px-2 py-1"
+                                className="border border-reef px-2 py-1 rounded-lg"
                                 onClick={() =>
                                     pause_dispatch(!dispatch.paused)
                                         .then(set_dispatch)
@@ -205,7 +205,7 @@ export function IslandPanel({ active }: Props) {
                     />
                 ) : (
                     <div className="flex h-full flex-col items-center justify-center gap-3 p-6">
-                        <p className="max-w-sm text-center font-mono text-xs text-[#c99a2e]">
+                        <p className="max-w-sm text-center font-mono text-xs text-sun">
                             This webview grants no WebGL context, so the island falls back to a list. The
                             same states are shown.
                         </p>
@@ -213,7 +213,7 @@ export function IslandPanel({ active }: Props) {
                             {agents.map((agent) => (
                                 <span
                                     key={agent.id}
-                                    className="border border-[#26343a] px-2 py-1 font-mono text-[11px]"
+                                    className="border border-reef px-2 py-1 font-mono text-[11px] rounded-lg"
                                 >
                                     {agent.name} · {agent.role} · {agent.presence}
                                 </span>
@@ -223,13 +223,13 @@ export function IslandPanel({ active }: Props) {
                 )}
 
                 {message ? (
-                    <div className="absolute bottom-3 left-3 border border-[#26343a] bg-[#141c1f] px-3 py-2 font-mono text-[11px] text-[#a4b5bb]">
+                    <div className="absolute bottom-3 left-3 border border-reef bg-lagoon px-3 py-2 font-mono text-[11px] text-driftwood rounded-lg">
                         {message}
                     </div>
                 ) : null}
 
                 {hovered ? (
-                    <div className="absolute right-3 top-3 border border-[#45bcc4] bg-[#14343a] px-3 py-2 font-mono text-[11px] text-[#45bcc4]">
+                    <div className="absolute right-3 top-3 border border-turquoise bg-shallow px-3 py-2 font-mono text-[11px] text-turquoise rounded-lg">
                         {hovered === "__dispatch__" ? "drop to hand to X" : `drop to assign → ${hovered}`}
                     </div>
                 ) : null}

@@ -21,18 +21,18 @@ const COLUMNS: Column[] = ["backlog", "assigned", "working", "review", "done"];
 
 function patch_line_color(line: string): string {
     if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ")) {
-        return "text-[#7b8d94]";
+        return "text-shell";
     }
     if (line.startsWith("+")) {
-        return "text-[#5aa87c]";
+        return "text-palm";
     }
     if (line.startsWith("-")) {
-        return "text-[#d46969]";
+        return "text-coral";
     }
     if (line.startsWith("@@")) {
-        return "text-[#45bcc4]";
+        return "text-turquoise";
     }
-    return "text-[#a4b5bb]";
+    return "text-driftwood";
 }
 
 export function BoardPanel() {
@@ -98,19 +98,19 @@ export function BoardPanel() {
             <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
                 <div className="flex flex-wrap items-center gap-2">
                     <input
-                        className="w-72 border border-[#26343a] bg-[#141c1f] px-2 py-1 font-mono text-xs"
+                        className="w-72 border border-reef bg-lagoon px-2 py-1 font-mono text-xs rounded-lg"
                         placeholder="task title"
                         value={draft.title}
                         onChange={(event) => set_draft({ ...draft, title: event.target.value })}
                     />
                     <input
-                        className="w-96 border border-[#26343a] bg-[#141c1f] px-2 py-1 font-mono text-xs"
+                        className="w-96 border border-reef bg-lagoon px-2 py-1 font-mono text-xs rounded-lg"
                         placeholder="brief for the agent"
                         value={draft.body}
                         onChange={(event) => set_draft({ ...draft, body: event.target.value })}
                     />
                     <select
-                        className="border border-[#26343a] bg-[#141c1f] px-2 py-1 font-mono text-xs"
+                        className="border border-reef bg-lagoon px-2 py-1 font-mono text-xs rounded-lg"
                         value={draft.repository_id}
                         onChange={(event) => set_draft({ ...draft, repository_id: event.target.value })}
                     >
@@ -121,7 +121,7 @@ export function BoardPanel() {
                         ))}
                     </select>
                     <button
-                        className="border border-[#45bcc4] px-3 py-1 font-mono text-xs text-[#45bcc4] disabled:opacity-40"
+                        className="border border-turquoise px-3 py-1 font-mono text-xs text-turquoise disabled:opacity-40 rounded-lg"
                         disabled={busy || !draft.title.trim() || !draft.repository_id}
                         onClick={() =>
                             run(async () => {
@@ -135,7 +135,7 @@ export function BoardPanel() {
                 </div>
 
                 {error ? (
-                    <div className="border border-[#d46969] bg-[#1b1113] px-3 py-2 font-mono text-xs text-[#d46969]">
+                    <div className="border border-coral bg-lagoon px-3 py-2 font-mono text-xs text-coral rounded-lg">
                         {error}
                     </div>
                 ) : null}
@@ -144,7 +144,7 @@ export function BoardPanel() {
                     {COLUMNS.map((column) => (
                         <div
                             key={column}
-                            className="flex min-h-0 flex-col border border-[#26343a] bg-[#101719]"
+                            className="flex min-h-0 flex-col border border-reef bg-lagoon rounded-lg"
                             onDragOver={(event) => event.preventDefault()}
                             onDrop={(event) => {
                                 const id = event.dataTransfer.getData("text/plain");
@@ -153,7 +153,7 @@ export function BoardPanel() {
                                 }
                             }}
                         >
-                            <header className="border-b border-[#26343a] px-2 py-1 font-mono text-[11px] uppercase tracking-[0.1em] text-[#7b8d94]">
+                            <header className="border-b border-reef px-2 py-1 font-mono text-[11px] uppercase tracking-[0.1em] text-shell">
                                 {column} · {tasks.filter((task) => task.column === column).length}
                             </header>
 
@@ -167,35 +167,35 @@ export function BoardPanel() {
                                             onDragStart={(event) =>
                                                 event.dataTransfer.setData("text/plain", task.id)
                                             }
-                                            className="cursor-grab border border-[#26343a] bg-[#141c1f] p-2"
+                                            className="cursor-grab border border-reef bg-lagoon p-2 rounded-lg"
                                         >
                                             <div className="flex items-baseline justify-between gap-2">
-                                                <span className="text-xs text-[#e3ebee]">{task.title}</span>
-                                                <span className="font-mono text-[10px] text-[#5d6e75]">
+                                                <span className="text-xs text-linen">{task.title}</span>
+                                                <span className="font-mono text-[10px] text-shade">
                                                     {task.id}
                                                 </span>
                                             </div>
 
                                             {task.branch ? (
-                                                <div className="mt-1 font-mono text-[10px] text-[#45bcc4]">
+                                                <div className="mt-1 font-mono text-[10px] text-turquoise">
                                                     {task.branch}
                                                 </div>
                                             ) : null}
 
                                             {task.evidence.length > 0 ? (
-                                                <div className="mt-1 font-mono text-[10px] text-[#5aa87c]">
+                                                <div className="mt-1 font-mono text-[10px] text-palm">
                                                     {task.evidence.length} evidence
                                                 </div>
                                             ) : null}
 
                                             <div className="mt-2 flex flex-wrap gap-1">
                                                 {task.assignee ? (
-                                                    <span className="border border-[#26343a] px-1 font-mono text-[10px] text-[#a4b5bb]">
+                                                    <span className="border border-reef px-1 font-mono text-[10px] text-driftwood rounded-lg">
                                                         {task.assignee}
                                                     </span>
                                                 ) : (
                                                     <select
-                                                        className="border border-[#26343a] bg-[#0d1315] px-1 font-mono text-[10px]"
+                                                        className="border border-reef bg-lagoon-deep px-1 font-mono text-[10px] rounded-lg"
                                                         value=""
                                                         onChange={(event) =>
                                                             run(() => assign_task(task.id, event.target.value))
@@ -217,7 +217,7 @@ export function BoardPanel() {
 
                                                 {task.worktree ? (
                                                     <button
-                                                        className="border border-[#26343a] px-1 font-mono text-[10px] text-[#a4b5bb]"
+                                                        className="border border-reef px-1 font-mono text-[10px] text-driftwood rounded-lg"
                                                         onClick={() => void open_review(task)}
                                                     >
                                                         review
@@ -225,7 +225,7 @@ export function BoardPanel() {
                                                 ) : null}
 
                                                 <button
-                                                    className="border border-[#26343a] px-1 font-mono text-[10px] text-[#7b8d94]"
+                                                    className="border border-reef px-1 font-mono text-[10px] text-shell rounded-lg"
                                                     onClick={() => run(() => delete_task(task.id))}
                                                 >
                                                     delete
@@ -240,17 +240,17 @@ export function BoardPanel() {
             </div>
 
             {review ? (
-                <aside className="flex w-[46%] min-w-[440px] flex-col border-l border-[#26343a]">
-                    <header className="flex items-center justify-between gap-2 border-b border-[#26343a] px-3 py-2">
-                        <div className="font-mono text-[11px] text-[#7b8d94]">
+                <aside className="flex w-[46%] min-w-[440px] flex-col border-l border-reef">
+                    <header className="flex items-center justify-between gap-2 border-b border-reef px-3 py-2">
+                        <div className="font-mono text-[11px] text-shell">
                             {review.data.branch} vs {review.data.base} · {review.data.files} files ·{" "}
-                            <span className="text-[#5aa87c]">+{review.data.insertions}</span>{" "}
-                            <span className="text-[#d46969]">-{review.data.deletions}</span>
+                            <span className="text-palm">+{review.data.insertions}</span>{" "}
+                            <span className="text-coral">-{review.data.deletions}</span>
                             {review.data.uncommitted ? " · uncommitted work" : ""}
                         </div>
                         <div className="flex gap-2">
                             <button
-                                className="border border-[#45bcc4] px-2 py-1 font-mono text-[11px] text-[#45bcc4] disabled:opacity-40"
+                                className="border border-turquoise px-2 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40 rounded-lg"
                                 disabled={busy}
                                 onClick={() =>
                                     run(async () => {
@@ -268,7 +268,7 @@ export function BoardPanel() {
                                 open pull request
                             </button>
                             <button
-                                className="border border-[#3a4d55] px-2 py-1 font-mono text-[11px]"
+                                className="border border-foam px-2 py-1 font-mono text-[11px] rounded-lg"
                                 onClick={() => set_review(null)}
                             >
                                 close
@@ -277,10 +277,10 @@ export function BoardPanel() {
                     </header>
 
                     {review.data.commits.length > 0 ? (
-                        <div className="border-b border-[#26343a] px-3 py-2 font-mono text-[11px] text-[#a4b5bb]">
+                        <div className="border-b border-reef px-3 py-2 font-mono text-[11px] text-driftwood">
                             {review.data.commits.map((commit) => (
                                 <div key={commit.sha}>
-                                    <span className="text-[#45bcc4]">{commit.sha}</span> {commit.subject}
+                                    <span className="text-turquoise">{commit.sha}</span> {commit.subject}
                                 </div>
                             ))}
                         </div>

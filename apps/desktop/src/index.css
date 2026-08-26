@@ -1,5 +1,35 @@
 @import "tailwindcss";
 
+@import "@fontsource-variable/fraunces";
+@import "@fontsource-variable/figtree";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+
+@theme {
+    --color-lagoon-deep: #0d1c1f;
+    --color-lagoon: #12262a;
+    --color-shallow: #173237;
+    --color-reef: #24454d;
+    --color-foam: #35606a;
+
+    --color-linen: #eef0e6;
+    --color-driftwood: #b9c4bd;
+    --color-shell: #91a3a1;
+    --color-shade: #63797a;
+
+    --color-turquoise: #46bfb0;
+    --color-sun: #f0a95c;
+    --color-coral: #e5705f;
+    --color-palm: #6fbf73;
+    --color-teak: #a9764c;
+
+    --font-display: "Fraunces Variable", Georgia, serif;
+    --font-sans: "Figtree Variable", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+    --radius-shell: 10px;
+}
+
 :root {
     color-scheme: dark;
 }
@@ -11,19 +41,46 @@ body,
     margin: 0;
 }
 
+body {
+    background:
+        radial-gradient(120% 80% at 50% -10%, #17323740 0%, transparent 60%),
+        var(--color-lagoon-deep);
+    color: var(--color-linen);
+    font-family: var(--font-sans);
+}
+
 input,
 select,
 textarea,
 button {
-    color: #e3ebee;
+    color: var(--color-linen);
     font: inherit;
+    border-radius: 8px;
 }
 
 select option {
-    background-color: #0d1315;
-    color: #e3ebee;
+    background-color: var(--color-lagoon);
+    color: var(--color-linen);
 }
 
 input::placeholder {
-    color: #5d6e75;
+    color: var(--color-shade);
+}
+
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--color-reef);
+    border-radius: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.xterm .xterm-viewport {
+    border-radius: 8px;
 }

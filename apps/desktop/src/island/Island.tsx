@@ -36,7 +36,7 @@ function Terrain({ tier, seed }: { tier: Tier; seed: string }) {
             {layers.map((layer, index) => (
                 <mesh key={index} position={[0, layer.y, 0]} rotation={[0, layer.rotation, 0]} castShadow receiveShadow>
                     <cylinderGeometry args={[layer.radius * 0.86, layer.radius, layer.height, 7]} />
-                    <meshLambertMaterial color={index === 0 ? "#c8b184" : "#3f6b4a"} flatShading />
+                    <meshLambertMaterial color={index === 0 ? "#e3cfa4" : "#4d7d55"} flatShading />
                 </mesh>
             ))}
         </group>
@@ -64,11 +64,11 @@ function Palms({ tier, seed }: { tier: Tier; seed: string }) {
                 <group key={index} position={[palm.x, 0.2, palm.z]} rotation={[palm.tilt, 0, palm.tilt]}>
                     <mesh position={[0, palm.height / 2, 0]}>
                         <cylinderGeometry args={[0.04, 0.07, palm.height, 5]} />
-                        <meshLambertMaterial color="#6b4b2f" flatShading />
+                        <meshLambertMaterial color="#8a5f3c" flatShading />
                     </mesh>
                     <mesh position={[0, palm.height, 0]}>
                         <icosahedronGeometry args={[0.3, 0]} />
-                        <meshLambertMaterial color="#2f7d52" flatShading />
+                        <meshLambertMaterial color="#3f9c63" flatShading />
                     </mesh>
                 </group>
             ))}
@@ -95,7 +95,7 @@ function Station({
         <group position={position} rotation={[0, rotation, 0]} userData={{ agent_id: agent.id }}>
             <mesh position={[0, 0.02, 0]} receiveShadow userData={{ agent_id: agent.id }}>
                 <cylinderGeometry args={[0.44, 0.48, 0.06, 8]} />
-                <meshLambertMaterial color={highlighted ? "#1d5f66" : "#6b6257"} flatShading />
+                <meshLambertMaterial color={highlighted ? "#2b7f80" : "#c9b48c"} flatShading />
             </mesh>
 
             <Robot
@@ -129,7 +129,7 @@ function Station({
             {shape === "workbench" ? (
                 <mesh position={[0.5, 0.22, 0]} castShadow userData={{ agent_id: agent.id }}>
                     <boxGeometry args={[0.34, 0.1, 0.42]} />
-                    <meshLambertMaterial color="#6b4b2f" flatShading />
+                    <meshLambertMaterial color="#8a5f3c" flatShading />
                 </mesh>
             ) : null}
 
@@ -141,11 +141,20 @@ function Station({
     );
 }
 
+function Shallows({ radius }: { radius: number }) {
+    return (
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.3, 0]}>
+            <ringGeometry args={[radius * 0.94, radius * 1.9, 24]} />
+            <meshLambertMaterial color="#37a8a0" flatShading transparent opacity={0.75} />
+        </mesh>
+    );
+}
+
 function Sea() {
     return (
         <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.36, 0]} receiveShadow>
-            <circleGeometry args={[26, 9]} />
-            <meshLambertMaterial color="#123f4a" flatShading />
+            <circleGeometry args={[30, 10]} />
+            <meshLambertMaterial color="#15525c" flatShading />
         </mesh>
     );
 }
@@ -169,7 +178,7 @@ function Jetty({ radius }: { radius: number }) {
     return (
         <mesh position={[-radius * 0.95, 0.05, 0]} castShadow>
             <boxGeometry args={[1.4, 0.1, 0.5]} />
-            <meshLambertMaterial color="#7a5c3c" flatShading />
+            <meshLambertMaterial color="#a9764c" flatShading />
         </mesh>
     );
 }
@@ -280,15 +289,17 @@ export function Island({
             camera={{ position: [8, 8, 8], fov: 42 }}
             onCreated={({ scene, camera }) => on_scene(scene, camera)}
         >
-            <color attach="background" args={["#0b1113"]} />
-            <fog attach="fog" args={["#0b1113", 18, 34]} />
-            <ambientLight intensity={0.55} />
-            <directionalLight position={[6, 10, 4]} intensity={1.1} castShadow />
+            <color attach="background" args={["#0d1c1f"]} />
+            <fog attach="fog" args={["#123037", 16, 38]} />
+            <ambientLight intensity={0.6} color="#bfe4e0" />
+            <directionalLight position={[7, 9, 3]} intensity={1.15} color="#ffd9a8" castShadow />
+            <hemisphereLight args={["#8fd3d0", "#2a4a3c", 0.45]} />
 
             <Governor active={active} />
             <Orbit />
 
             <Sea />
+            <Shallows radius={tier.radius} />
             <Terrain tier={tier} seed={seed} />
             <Palms tier={tier} seed={seed} />
             {tier.has_jetty ? <Jetty radius={tier.radius} /> : null}

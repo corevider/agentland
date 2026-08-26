@@ -19,10 +19,10 @@ import {
 const ROLES = ["implementer", "reviewer", "tester", "researcher", "ops"];
 
 const PRESENCE_COLOR: Record<string, string> = {
-    done: "text-[#5aa87c]",
-    working: "text-[#c99a2e]",
-    attention: "text-[#d46969]",
-    idle: "text-[#7b8d94]",
+    done: "text-palm",
+    working: "text-sun",
+    attention: "text-coral",
+    idle: "text-shell",
 };
 
 const PRESENCE_LABEL: Record<string, string> = {
@@ -122,7 +122,7 @@ export function CrewPanel({ on_open_session }: Props) {
     return (
         <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-4">
             <section>
-                <h2 className="mb-2 font-mono text-xs uppercase tracking-[0.12em] text-[#7b8d94]">
+                <h2 className="mb-2 font-mono text-xs uppercase tracking-[0.12em] text-shell">
                     Engines on this machine
                 </h2>
                 <div className="flex flex-wrap gap-2">
@@ -131,8 +131,8 @@ export function CrewPanel({ on_open_session }: Props) {
                             key={engine.id}
                             className={`border px-2 py-1 font-mono text-[11px] ${
                                 engine.installed
-                                    ? "border-[#45bcc4] text-[#45bcc4]"
-                                    : "border-[#26343a] text-[#5d6e75]"
+                                    ? "border-turquoise text-turquoise"
+                                    : "border-reef text-shade"
                             }`}
                             title={engine.version ?? "not installed"}
                         >
@@ -142,26 +142,26 @@ export function CrewPanel({ on_open_session }: Props) {
                 </div>
             </section>
 
-            <section className="border border-[#26343a] bg-[#141c1f] p-3">
-                <h2 className="mb-3 font-mono text-xs uppercase tracking-[0.12em] text-[#7b8d94]">
+            <section className="border border-reef bg-lagoon p-3 rounded-lg">
+                <h2 className="mb-3 font-mono text-xs uppercase tracking-[0.12em] text-shell">
                     Hire
                 </h2>
 
                 {installed.length === 0 ? (
-                    <p className="font-mono text-xs text-[#c99a2e]">
+                    <p className="font-mono text-xs text-sun">
                         No agent CLI found on PATH. Install one — Claude Code, Codex, Gemini — and it
                         appears here.
                     </p>
                 ) : (
                     <div className="flex flex-wrap items-center gap-2">
                         <input
-                            className="w-40 border border-[#26343a] bg-[#0d1315] px-2 py-1 font-mono text-xs"
+                            className="w-40 border border-reef bg-lagoon-deep px-2 py-1 font-mono text-xs rounded-lg"
                             placeholder="name"
                             value={draft.name}
                             onChange={(event) => set_draft({ ...draft, name: event.target.value })}
                         />
                         <select
-                            className="border border-[#26343a] bg-[#0d1315] px-2 py-1 font-mono text-xs"
+                            className="border border-reef bg-lagoon-deep px-2 py-1 font-mono text-xs rounded-lg"
                             value={draft.role}
                             onChange={(event) => set_draft({ ...draft, role: event.target.value })}
                         >
@@ -172,7 +172,7 @@ export function CrewPanel({ on_open_session }: Props) {
                             ))}
                         </select>
                         <select
-                            className="border border-[#26343a] bg-[#0d1315] px-2 py-1 font-mono text-xs"
+                            className="border border-reef bg-lagoon-deep px-2 py-1 font-mono text-xs rounded-lg"
                             value={draft.engine_id}
                             onChange={(event) => set_draft({ ...draft, engine_id: event.target.value })}
                         >
@@ -183,7 +183,7 @@ export function CrewPanel({ on_open_session }: Props) {
                             ))}
                         </select>
                         <select
-                            className="border border-[#26343a] bg-[#0d1315] px-2 py-1 font-mono text-xs"
+                            className="border border-reef bg-lagoon-deep px-2 py-1 font-mono text-xs rounded-lg"
                             value={draft.target}
                             onChange={(event) => set_draft({ ...draft, target: event.target.value })}
                         >
@@ -197,7 +197,7 @@ export function CrewPanel({ on_open_session }: Props) {
                             })}
                         </select>
                         <button
-                            className="border border-[#45bcc4] px-3 py-1 font-mono text-xs text-[#45bcc4] disabled:opacity-40"
+                            className="border border-turquoise px-3 py-1 font-mono text-xs text-turquoise disabled:opacity-40 rounded-lg"
                             disabled={busy || !draft.name.trim() || !draft.target}
                             onClick={() =>
                                 run(async () => {
@@ -220,14 +220,14 @@ export function CrewPanel({ on_open_session }: Props) {
             </section>
 
             {error ? (
-                <div className="border border-[#d46969] bg-[#1b1113] px-3 py-2 font-mono text-xs text-[#d46969]">
+                <div className="border border-coral bg-lagoon px-3 py-2 font-mono text-xs text-coral rounded-lg">
                     {error}
                 </div>
             ) : null}
 
             <section className="flex flex-col gap-2">
                 {agents.length === 0 ? (
-                    <p className="font-mono text-xs text-[#7b8d94]">
+                    <p className="font-mono text-xs text-shell">
                         No crew yet. An agent is a name, a role, an engine and a worktree it owns.
                     </p>
                 ) : null}
@@ -235,12 +235,12 @@ export function CrewPanel({ on_open_session }: Props) {
                 {agents.map((agent) => (
                     <div
                         key={agent.id}
-                        className="flex flex-wrap items-center gap-3 border border-[#26343a] bg-[#141c1f] px-3 py-2 font-mono text-xs"
+                        className="flex flex-wrap items-center gap-3 border border-reef bg-lagoon px-3 py-2 font-mono text-xs rounded-lg"
                     >
-                        <span className="text-[#e3ebee]">{agent.name}</span>
-                        <span className="text-[#7b8d94]">{agent.role}</span>
-                        <span className="text-[#45bcc4]">{agent.engine_id}</span>
-                        <span className="text-[#7b8d94]">
+                        <span className="text-linen">{agent.name}</span>
+                        <span className="text-shell">{agent.role}</span>
+                        <span className="text-turquoise">{agent.engine_id}</span>
+                        <span className="text-shell">
                             {agent.repository_id}/{agent.worktree}
                         </span>
                         <span
@@ -257,13 +257,13 @@ export function CrewPanel({ on_open_session }: Props) {
                             {agent.session_id ? (
                                 <>
                                     <button
-                                        className="border border-[#3a4d55] px-2 py-1 text-[11px]"
+                                        className="border border-foam px-2 py-1 text-[11px] rounded-lg"
                                         onClick={() => on_open_session(agent.session_id as string)}
                                     >
                                         open pane
                                     </button>
                                     <button
-                                        className="border border-[#3a4d55] px-2 py-1 text-[11px] disabled:opacity-40"
+                                        className="border border-foam px-2 py-1 text-[11px] disabled:opacity-40 rounded-lg"
                                         disabled={busy}
                                         onClick={() => run(() => stop_agent(agent.id))}
                                     >
@@ -273,14 +273,14 @@ export function CrewPanel({ on_open_session }: Props) {
                             ) : (
                                 <>
                                     <button
-                                        className="border border-[#3a4d55] px-2 py-1 text-[11px] disabled:opacity-40"
+                                        className="border border-foam px-2 py-1 text-[11px] disabled:opacity-40 rounded-lg"
                                         disabled={busy}
                                         onClick={() => run(() => start_agent(agent.id, false))}
                                     >
                                         start
                                     </button>
                                     <button
-                                        className="border border-[#3a4d55] px-2 py-1 text-[11px] disabled:opacity-40"
+                                        className="border border-foam px-2 py-1 text-[11px] disabled:opacity-40 rounded-lg"
                                         disabled={busy}
                                         onClick={() => run(() => start_agent(agent.id, true))}
                                     >
@@ -289,7 +289,7 @@ export function CrewPanel({ on_open_session }: Props) {
                                 </>
                             )}
                             <button
-                                className="border border-[#9e3535] px-2 py-1 text-[11px] text-[#d46969] disabled:opacity-40"
+                                className="border border-coral px-2 py-1 text-[11px] text-coral disabled:opacity-40 rounded-lg"
                                 disabled={busy}
                                 onClick={() => run(() => dismiss_agent(agent.id))}
                             >
