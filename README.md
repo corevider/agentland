@@ -282,3 +282,25 @@ Verified: two agents hired, a card reading "review the auth changes" dropped on 
 `queue · X is paused; nothing new is being handed out`, card in the queue.
 
 On the island, the lighthouse is the drop target for X; its lamp goes dark when X is paused.
+
+
+## Pane telemetry
+
+Other tools put an activity line in every pane, and it is the cheapest way to tell a working
+agent from a stuck one. Each session now carries its own statistics — start time, time of last
+output, bytes and lines produced, and whether the child process is still alive — and the pane header
+reads:
+
+```
+pane-6a8e-2   working 3s   1.2 MB   live · canvas
+pane-6a8e-3   waiting 4m 12s   11 B   250ms · canvas
+```
+
+*working* means output arrived in the last two seconds; *waiting* is the time since it last said
+anything; *exited* means the process is gone. The byte figure carries the line count in its tooltip.
+
+**The context meter is deliberately empty.** Other tools show a token or context number per
+pane, and the field exists here — but it stays `null` until a parser is verified against a real
+engine session, because a meter that disagrees with the engine's own `/status` is worse than no
+meter. Claude Code reports context inside a redrawing TUI; guessing at that with a regex would
+produce a number that looks authoritative and is wrong.

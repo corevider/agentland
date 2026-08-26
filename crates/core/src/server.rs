@@ -21,7 +21,7 @@ use crate::dispatch::{decide, Decision, DispatchState};
 use crate::metrics::{MetricsStore, Sample};
 use crate::repo::{PullRequest, RepoRegistry, Repository, Review, Worktree, WorktreeStatus};
 use crate::services::{Service, ServiceRegistry};
-use crate::pty::{PtyManager, PtySpawnSpec, SessionInfo};
+use crate::pty::{PtyManager, PtySpawnSpec, SessionInfo, SessionStats};
 
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -102,6 +102,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/sessions/{id}/resize", post(resize_session))
         .route("/sessions/{id}/stream", get(stream_session))
         .route("/sessions/{id}/log", get(read_log))
+        .route("/sessions/{id}/stats", get(read_stats))
         .route("/bench", post(spawn_generator))
         .route("/metrics", get(read_metrics).post(record_metrics))
         .route("/repos", get(list_repos).post(add_repo))
@@ -179,8 +180,21 @@ async fn guard(
     next.run(request).await
 }
 
-async fn list_sessions(State(state): State<AppState>) -> Json<Vec<SessionInfo>> {
-    Json(state.manager.list())
+async fn list_sessions(State(state): State<AppState>) -> Json<Vec<SessionReport>> {
+    let reports = state
+        .manager
+        .list()
+        .into_iter()
+        .filter_map(|info| {
+            let session = state.manager.get(&info.id)?;
+            Some(SessionReport {
+                info,
+                stats: session.stats(),
+                alive: session.alive(),
+            })
+        })
+        .collect();
+    Json(reports)
 }
 
 async fn spawn_session(
@@ -201,6 +215,31 @@ async fn spawn_generator(
 struct LogQuery {
     #[serde(default)]
     bytes: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct SessionReport {
+    #[serde(flatten)]
+    info: SessionInfo,
+    #[serde(flatten)]
+    stats: SessionStats,
+    alive: bool,
+}
+
+async fn read_stats(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<SessionReport>, ApiError> {
+    let session = state
+        .manager
+        .get(&id)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("unknown session: {id}")))?;
+
+    Ok(Json(SessionReport {
+        info: session.info(),
+        stats: session.stats(),
+        alive: session.alive(),
+    }))
 }
 
 async fn read_log(

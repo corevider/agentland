@@ -10,6 +10,37 @@ export interface SessionInfo {
     command: string;
     cols: number;
     rows: number;
+    started_at: number;
+    last_output_at: number;
+    bytes: number;
+    lines: number;
+    context_percent: number | null;
+    alive: boolean;
+}
+
+export function format_elapsed(seconds: number): string {
+    if (seconds < 60) {
+        return `${Math.max(seconds, 0)}s`;
+    }
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) {
+        return `${minutes}m ${seconds % 60}s`;
+    }
+    return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+export function format_bytes(bytes: number): string {
+    if (bytes < 1024) {
+        return `${bytes} B`;
+    }
+    if (bytes < 1024 * 1024) {
+        return `${(bytes / 1024).toFixed(1)} KB`;
+    }
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function session_stats(id: string): Promise<SessionInfo> {
+    return request<SessionInfo>(`/sessions/${id}/stats`);
 }
 
 export interface GeneratorSpec {

@@ -45,21 +45,39 @@ impl Replay {
 pub struct Broadcaster {
     sender: broadcast::Sender<Bytes>,
     replay: Mutex<Replay>,
+    stats: Mutex<SessionStats>,
 }
 
 impl Broadcaster {
     fn new() -> Arc<Self> {
         let (sender, _) = broadcast::channel(CHANNEL_CAPACITY);
+        let started = now_secs();
         Arc::new(Self {
             sender,
             replay: Mutex::new(Replay::default()),
+            stats: Mutex::new(SessionStats {
+                started_at: started,
+                last_output_at: started,
+                ..SessionStats::default()
+            }),
         })
     }
 
     pub fn publish(&self, frame: Bytes) {
+        {
+            let mut stats = self.stats.lock();
+            stats.last_output_at = now_secs();
+            stats.bytes += frame.len() as u64;
+            stats.lines += frame.iter().filter(|byte| **byte == b'\n').count() as u64;
+        }
+
         let mut replay = self.replay.lock();
         replay.push(frame.clone());
         let _ = self.sender.send(frame);
+    }
+
+    pub fn stats(&self) -> SessionStats {
+        *self.stats.lock()
     }
 
     pub fn subscribe(&self) -> (Vec<Bytes>, broadcast::Receiver<Bytes>) {
@@ -92,6 +110,22 @@ pub struct PtySpawnSpec {
     pub rows: u16,
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+pub struct SessionStats {
+    pub started_at: u64,
+    pub last_output_at: u64,
+    pub bytes: u64,
+    pub lines: u64,
+    pub context_percent: Option<u8>,
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_secs())
+        .unwrap_or_default()
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct SessionInfo {
     pub id: String,
@@ -120,6 +154,22 @@ impl Session {
 
     pub fn info(&self) -> SessionInfo {
         self.info.lock().clone()
+    }
+
+    pub fn stats(&self) -> SessionStats {
+        self.broadcaster.stats()
+    }
+
+    pub fn alive(&self) -> bool {
+        match self.handles.as_ref() {
+            Some(handles) => handles
+                .child
+                .lock()
+                .try_wait()
+                .map(|status| status.is_none())
+                .unwrap_or(false),
+            None => true,
+        }
     }
 
     pub fn write_input(&self, data: &[u8]) -> Result<()> {

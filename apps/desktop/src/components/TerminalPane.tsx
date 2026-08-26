@@ -4,7 +4,15 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
-import { open_stream, resize_session, write_input, type SessionInfo } from "@/lib/core";
+import {
+    format_bytes,
+    format_elapsed,
+    open_stream,
+    resize_session,
+    session_stats,
+    write_input,
+    type SessionInfo,
+} from "@/lib/core";
 
 const TAIL_LIMIT_BYTES = 48 * 1024;
 const QUEUE_LIMIT_BYTES = TAIL_LIMIT_BYTES * 4;
@@ -50,8 +58,32 @@ export function TerminalPane({ session, focused, on_focus, on_metrics }: Props) 
     const host_ref = useRef<HTMLDivElement>(null);
     const focused_ref = useRef(focused);
     const [renderer, set_renderer] = useState("canvas");
+    const [stats, set_stats] = useState<SessionInfo | null>(null);
+    const [now, set_now] = useState(() => Math.floor(Date.now() / 1000));
 
     focused_ref.current = focused;
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const poll = () => {
+            session_stats(session.id)
+                .then((value) => {
+                    if (!cancelled) {
+                        set_stats(value);
+                    }
+                })
+                .catch(() => undefined);
+            set_now(Math.floor(Date.now() / 1000));
+        };
+
+        poll();
+        const handle = window.setInterval(poll, 1000);
+        return () => {
+            cancelled = true;
+            window.clearInterval(handle);
+        };
+    }, [session.id]);
 
     useEffect(() => {
         const host = host_ref.current;
@@ -203,8 +235,28 @@ export function TerminalPane({ session, focused, on_focus, on_metrics }: Props) 
             className={`flex min-h-0 flex-col border bg-[#0d1315] ${focused ? "border-[#45bcc4]" : "border-[#26343a]"}`}
             onMouseDown={() => on_focus(session.id)}
         >
-            <div className="flex items-center justify-between border-b border-[#26343a] px-2 py-1 font-mono text-[11px] text-[#7b8d94]">
-                <span>{session.id}</span>
+            <div className="flex items-center justify-between gap-2 border-b border-[#26343a] px-2 py-1 font-mono text-[11px] text-[#7b8d94]">
+                <span className="truncate">{session.id}</span>
+
+                {stats ? (
+                    <span className="flex items-center gap-2 tabular-nums">
+                        <span className={stats.alive ? "text-[#5aa87c]" : "text-[#7b8d94]"}>
+                            {stats.alive
+                                ? now - stats.last_output_at <= 2
+                                    ? "working"
+                                    : "waiting"
+                                : "exited"}{" "}
+                            {format_elapsed(now - stats.last_output_at)}
+                        </span>
+                        <span title={`${stats.lines.toLocaleString()} lines since start`}>
+                            {format_bytes(stats.bytes)}
+                        </span>
+                        {stats.context_percent !== null ? (
+                            <span className="text-[#45bcc4]">{stats.context_percent}% ctx</span>
+                        ) : null}
+                    </span>
+                ) : null}
+
                 <span>
                     {focused ? "live" : `${BACKGROUND_FLUSH_MS}ms`} · {renderer}
                 </span>

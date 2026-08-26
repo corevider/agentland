@@ -2,15 +2,18 @@ import { useCallback, useEffect, useState } from "react";
 
 import {
     dismiss_agent,
+    format_elapsed,
     hire_agent,
     list_agents,
     list_engines,
     list_repos,
     list_worktrees,
+    session_stats,
     start_agent,
     stop_agent,
     type Agent,
     type Engine,
+    type SessionInfo,
 } from "@/lib/core";
 
 const ROLES = ["implementer", "reviewer", "tester", "researcher", "ops"];
@@ -32,6 +35,8 @@ export function CrewPanel({ on_open_session }: Props) {
     const [draft, set_draft] = useState({ name: "", role: ROLES[0], engine_id: "", target: "" });
     const [error, set_error] = useState<string | null>(null);
     const [busy, set_busy] = useState(false);
+    const [activity, set_activity] = useState<Record<string, SessionInfo>>({});
+    const [now, set_now] = useState(() => Math.floor(Date.now() / 1000));
 
     const refresh = useCallback(async () => {
         const [available, crew, repos] = await Promise.all([
@@ -62,7 +67,13 @@ export function CrewPanel({ on_open_session }: Props) {
         const handle = window.setInterval(() => {
             list_agents().then(set_agents).catch(() => undefined);
         }, 3000);
-        return () => window.clearInterval(handle);
+
+        const ticker = window.setInterval(() => set_now(Math.floor(Date.now() / 1000)), 1000);
+
+        return () => {
+            window.clearInterval(handle);
+            window.clearInterval(ticker);
+        };
     }, [refresh]);
 
     const run = useCallback(
@@ -80,6 +91,23 @@ export function CrewPanel({ on_open_session }: Props) {
         },
         [refresh],
     );
+
+    useEffect(() => {
+        const running = agents.filter((agent) => agent.session_id);
+        if (running.length === 0) {
+            return;
+        }
+
+        Promise.all(
+            running.map((agent) =>
+                session_stats(agent.session_id as string)
+                    .then((value) => [agent.id, value] as const)
+                    .catch(() => null),
+            ),
+        ).then((entries) => {
+            set_activity(Object.fromEntries(entries.filter(Boolean) as Array<[string, SessionInfo]>));
+        });
+    }, [agents, now]);
 
     const installed = engines.filter((entry) => entry.installed);
 
@@ -207,7 +235,12 @@ export function CrewPanel({ on_open_session }: Props) {
                         <span className="text-[#7b8d94]">
                             {agent.repository_id}/{agent.worktree}
                         </span>
-                        <span className={STATE_COLOR[agent.state]}>{agent.state}</span>
+                        <span className={STATE_COLOR[agent.state]}>
+                            {agent.state}
+                            {activity[agent.id]
+                                ? ` ${format_elapsed(now - activity[agent.id].last_output_at)}`
+                                : ""}
+                        </span>
 
                         <div className="ml-auto flex items-center gap-2">
                             {agent.session_id ? (
