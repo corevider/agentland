@@ -32,7 +32,7 @@ export function IslandPanel({ active, on_open_session }: Props) {
     const [dispatch, set_dispatch] = useState<DispatchState | null>(null);
     const [shots, set_shots] = useState<Array<{ seq: number; agent_id: string }>>([]);
     const [selected, set_selected] = useState<string | null>(null);
-    const [labels, set_labels] = useState<Array<{ id: string; x: number; y: number }>>([]);
+    const label_nodes = useRef(new Map<string, HTMLDivElement>());
     const drag_origin = useRef<{ x: number; y: number } | null>(null);
     const seen_seq = useRef(0);
     const container_ref = useRef<HTMLDivElement>(null);
@@ -205,52 +205,20 @@ export function IslandPanel({ active, on_open_session }: Props) {
         };
     }, [capture, agent_at]);
 
-    useEffect(() => {
-        if (!webgl) {
-            return;
-        }
-
-        let handle = 0;
-        const projected = new THREE.Vector3();
-
-        const place = () => {
-            const context = scene_ref.current;
-            const container = container_ref.current;
-
-            if (context && container) {
-                const bounds = container.getBoundingClientRect();
-                const found: Array<{ id: string; x: number; y: number }> = [];
-
-                for (const node of context.scene.children) {
-                    const id = node.userData?.agent_id;
-                    if (typeof id !== "string") {
-                        continue;
-                    }
-
-                    node.getWorldPosition(projected);
-                    projected.y += 1.95;
-                    projected.project(context.camera);
-
-                    if (projected.z > 1) {
-                        continue;
-                    }
-
-                    found.push({
-                        id,
-                        x: ((projected.x + 1) / 2) * bounds.width,
-                        y: ((1 - projected.y) / 2) * bounds.height,
-                    });
+    const place_labels = useCallback(
+        (marks: Array<{ id: string; x: number; y: number; visible: boolean }>) => {
+            for (const mark of marks) {
+                const node = label_nodes.current.get(mark.id);
+                if (!node) {
+                    continue;
                 }
 
-                set_labels(found);
+                node.style.transform = `translate3d(${mark.x}px, ${mark.y}px, 0) translate(-50%, -100%)`;
+                node.style.opacity = mark.visible ? "1" : "0";
             }
-
-            handle = window.setTimeout(place, active ? 120 : 600);
-        };
-
-        place();
-        return () => window.clearTimeout(handle);
-    }, [webgl, active]);
+        },
+        [],
+    );
 
     const tier = tier_for(agents.length);
     const selected_agent = agents.find((agent) => agent.id === selected) ?? null;
@@ -373,6 +341,7 @@ export function IslandPanel({ active, on_open_session }: Props) {
                         highlighted={hovered}
                         paused={dispatch?.paused ?? false}
                         shots={shots}
+                        on_project={place_labels}
                         selected={selected}
                         on_select={(id) => set_selected(id)}
                         on_shot_done={(seq) =>
@@ -403,29 +372,28 @@ export function IslandPanel({ active, on_open_session }: Props) {
                 )}
 
                 {webgl
-                    ? labels.map((label) => {
-                          const agent = agents.find((entry) => entry.id === label.id);
-                          if (!agent) {
-                              return null;
-                          }
-
-                          return (
-                              <div
-                                  key={label.id}
-                                  className="pointer-events-none absolute -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-full border border-reef/80 bg-lagoon-deep/80 px-2 py-[2px] font-mono text-[10px] text-linen backdrop-blur-sm"
-                                  style={{ left: label.x, top: label.y }}
-                              >
-                                  <span
-                                      className="mr-1 inline-block h-[6px] w-[6px] rounded-full align-middle"
-                                      style={{
-                                          backgroundColor:
-                                              PRESENCE_COLOR[agent.presence] ?? PRESENCE_COLOR.idle,
-                                      }}
-                                  />
-                                  {agent.name}
-                              </div>
-                          );
-                      })
+                    ? agents.map((agent) => (
+                          <div
+                              key={agent.id}
+                              ref={(node) => {
+                                  if (node) {
+                                      label_nodes.current.set(agent.id, node);
+                                  } else {
+                                      label_nodes.current.delete(agent.id);
+                                  }
+                              }}
+                              className="pointer-events-none absolute left-0 top-0 whitespace-nowrap rounded-full border border-reef/80 bg-lagoon-deep/80 px-2 py-[2px] font-mono text-[10px] text-linen backdrop-blur-sm"
+                              style={{ opacity: 0, willChange: "transform" }}
+                          >
+                              <span
+                                  className="mr-1 inline-block h-[6px] w-[6px] rounded-full align-middle"
+                                  style={{
+                                      backgroundColor: PRESENCE_COLOR[agent.presence] ?? PRESENCE_COLOR.idle,
+                                  }}
+                              />
+                              {agent.name}
+                          </div>
+                      ))
                     : null}
 
                 {message ? (

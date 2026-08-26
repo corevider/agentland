@@ -280,6 +280,40 @@ function Jetty({ radius }: { radius: number }) {
     );
 }
 
+function LabelTracker({
+    on_project,
+}: {
+    on_project: (marks: Array<{ id: string; x: number; y: number; visible: boolean }>) => void;
+}) {
+    const point = useRef(new THREE.Vector3());
+
+    useFrame(({ scene, camera, size }) => {
+        const marks: Array<{ id: string; x: number; y: number; visible: boolean }> = [];
+
+        for (const node of scene.children) {
+            const id = node.userData?.agent_id;
+            if (typeof id !== "string") {
+                continue;
+            }
+
+            node.getWorldPosition(point.current);
+            point.current.y += 1.95;
+            point.current.project(camera);
+
+            marks.push({
+                id,
+                x: ((point.current.x + 1) / 2) * size.width,
+                y: ((1 - point.current.y) / 2) * size.height,
+                visible: point.current.z < 1,
+            });
+        }
+
+        on_project(marks);
+    });
+
+    return null;
+}
+
 function Governor({ active }: { active: boolean }) {
     const { invalidate } = useThree();
 
@@ -378,6 +412,7 @@ interface Props {
     highlighted: string | null;
     paused: boolean;
     shots: Array<{ seq: number; agent_id: string }>;
+    on_project: (marks: Array<{ id: string; x: number; y: number; visible: boolean }>) => void;
     selected: string | null;
     on_select: (id: string) => void;
     on_shot_done: (seq: number) => void;
@@ -391,6 +426,7 @@ export function Island({
     highlighted,
     paused,
     shots,
+    on_project,
     selected,
     on_select,
     on_shot_done,
@@ -416,6 +452,7 @@ export function Island({
             <hemisphereLight args={["#8fd3d0", "#2a4a3c", 0.45]} />
 
             <Governor active={active} />
+            <LabelTracker on_project={on_project} />
             <Orbit />
 
             <Sky />
