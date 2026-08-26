@@ -15,6 +15,8 @@ use tokio::sync::broadcast::error::RecvError;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::ServeDir;
 
+use crate::approvals::{AnswerApproval, Approval, Approvals, RequestApproval};
+use crate::auth::{permits as scope_permits, Scope as TokenScope, TokenStore};
 use crate::bench::GeneratorSpec;
 use crate::board::{Board, Column, CreateTask, Evidence, MoveTask, Task};
 use crate::crew::{Agent, Crew, Engine, HireRequest};
@@ -51,6 +53,8 @@ struct AppState {
     mail: Arc<Mailbox>,
     routines: Arc<Routines>,
     gateway: Arc<Gateway>,
+    approvals: Arc<Approvals>,
+    tokens: Arc<TokenStore>,
 }
 
 #[derive(Deserialize)]
@@ -80,6 +84,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
     let manager_for_crew = manager.clone();
     let port_for_crew = config.port;
     let token_for_crew = config.token.clone();
+    let token_for_store = config.token.clone();
     let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
 
     let origins: Vec<HeaderValue> = config
@@ -112,6 +117,8 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         mail: Arc::new(Mailbox::new(PathBuf::from("data"))),
         routines: Arc::new(Routines::new(PathBuf::from("data"))),
         gateway: Arc::new(Gateway::new(PathBuf::from("data"))),
+        approvals: Arc::new(Approvals::new(PathBuf::from("data"))),
+        tokens: Arc::new(TokenStore::new(token_for_store, PathBuf::from("data"))),
     };
 
     spawn_routine_ticker(state.clone());
@@ -154,6 +161,10 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/integrations", get(list_integrations).post(connect_integration))
         .route("/integrations/{id}", delete(disconnect_integration))
         .route("/integrations/call", post(call_integration))
+        .route("/approvals", get(list_approvals).post(request_approval))
+        .route("/approvals/{id}", post(answer_approval))
+        .route("/devices", get(list_devices).post(pair_device))
+        .route("/devices/{id}", delete(revoke_device))
         .route("/dispatch/tasks/{id}", post(dispatch_task))
         .route("/repos/{id}/worktrees/{name}/review", get(review_worktree))
         .route("/repos/{id}/worktrees/{name}/pr", post(open_pull_request))
@@ -161,9 +172,15 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
             "/repos/{id}/worktrees/{name}/service",
             post(start_service).delete(stop_service),
         )
-        .layer(middleware::from_fn_with_state(state.clone(), guard))
-        .layer(cors)
-        .with_state(state);
+        .with_state(state.clone());
+
+    let app = match std::env::var("AGENTLAND_MOBILE_DIR").ok().filter(|dir| !dir.is_empty()) {
+        Some(dir) => {
+            tracing::info!(%dir, "serving the phone companion at /mobile");
+            app.nest_service("/mobile", ServeDir::new(dir))
+        }
+        None => app,
+    };
 
     let app = match std::env::var("AGENTLAND_UI_DIR").ok().filter(|dir| !dir.is_empty()) {
         Some(dir) => {
@@ -172,6 +189,10 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         }
         None => app,
     };
+
+    let app = app
+        .layer(middleware::from_fn_with_state(state.clone(), guard))
+        .layer(cors);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, "core listening");
@@ -212,11 +233,21 @@ async fn guard(
         .map(str::to_owned);
     let token = header_token.or(query.token).unwrap_or_default();
 
-    if token != state.config.token {
+    let Some(scope) = state.tokens.resolve(&token) else {
         return (
             StatusCode::UNAUTHORIZED,
             Json(ErrorBody {
                 error: "invalid token".into(),
+            }),
+        )
+            .into_response();
+    };
+
+    if !scope_permits(scope, request.method().as_str(), request.uri().path()) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ErrorBody {
+                error: "this device is limited to reading and answering approvals".into(),
             }),
         )
             .into_response();
@@ -337,6 +368,7 @@ fn is_public_asset(path: &str) -> bool {
         || path == "/index.html"
         || path == "/favicon.ico"
         || path.starts_with("/assets/")
+        || path.starts_with("/mobile")
 }
 
 async fn list_sessions(State(state): State<AppState>) -> Json<Vec<SessionReport>> {
@@ -726,6 +758,68 @@ struct PullRequestBody {
     body: String,
     #[serde(default)]
     task_id: Option<String>,
+}
+
+async fn list_approvals(State(state): State<AppState>) -> Json<Vec<Approval>> {
+    Json(state.approvals.list())
+}
+
+async fn request_approval(
+    State(state): State<AppState>,
+    Json(request): Json<RequestApproval>,
+) -> Result<Json<Approval>, ApiError> {
+    Ok(Json(state.approvals.request(request)?))
+}
+
+async fn answer_approval(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(answer): Json<AnswerApproval>,
+) -> Result<Json<Approval>, ApiError> {
+    Ok(Json(state.approvals.answer(&id, answer)?))
+}
+
+#[derive(Deserialize)]
+struct PairBody {
+    #[serde(default = "default_device_label")]
+    label: String,
+}
+
+fn default_device_label() -> String {
+    "phone".to_owned()
+}
+
+#[derive(Serialize)]
+struct PairedDevice {
+    id: String,
+    label: String,
+    token: String,
+    scope: TokenScope,
+}
+
+async fn list_devices(State(state): State<AppState>) -> Json<Vec<crate::auth::TokenSummary>> {
+    Json(state.tokens.list())
+}
+
+async fn pair_device(
+    State(state): State<AppState>,
+    Json(body): Json<PairBody>,
+) -> Json<PairedDevice> {
+    let issued = state.tokens.issue(body.label, TokenScope::Approve);
+    Json(PairedDevice {
+        id: issued.id.clone(),
+        label: issued.label.clone(),
+        token: issued.secret().to_owned(),
+        scope: TokenScope::Approve,
+    })
+}
+
+async fn revoke_device(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.tokens.revoke(&id)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_memories(State(state): State<AppState>) -> Json<Vec<Memory>> {

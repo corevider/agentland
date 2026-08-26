@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <meta name="theme-color" content="#0b1113" />
+        <link rel="manifest" href="/mobile/manifest.webmanifest" />
+        <title>Agentland</title>
+        <style>
+            :root {
+                color-scheme: dark;
+                --ground: #0b1113;
+                --surface: #141c1f;
+                --line: #26343a;
+                --ink: #e3ebee;
+                --muted: #7b8d94;
+                --accent: #45bcc4;
+                --good: #5aa87c;
+                --warn: #c99a2e;
+                --bad: #d46969;
+            }
+
+            * {
+                box-sizing: border-box;
+            }
+
+            body {
+                margin: 0;
+                background: var(--ground);
+                color: var(--ink);
+                font: 16px/1.5 system-ui, -apple-system, sans-serif;
+                padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+            }
+
+            header {
+                display: flex;
+                align-items: baseline;
+                justify-content: space-between;
+                gap: 12px;
+                padding: 14px 16px;
+                border-bottom: 1px solid var(--line);
+            }
+
+            h1 {
+                margin: 0;
+                font-size: 15px;
+                letter-spacing: 0.14em;
+                text-transform: uppercase;
+                color: var(--accent);
+            }
+
+            main {
+                padding: 16px;
+                display: flex;
+                flex-direction: column;
+                gap: 22px;
+            }
+
+            h2 {
+                margin: 0 0 10px;
+                font-size: 12px;
+                letter-spacing: 0.12em;
+                text-transform: uppercase;
+                color: var(--muted);
+            }
+
+            .card {
+                border: 1px solid var(--line);
+                background: var(--surface);
+                padding: 12px 14px;
+                margin-bottom: 10px;
+            }
+
+            .row {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                flex-wrap: wrap;
+            }
+
+            .detail {
+                color: var(--muted);
+                font-size: 13px;
+                margin-top: 4px;
+                white-space: pre-wrap;
+            }
+
+            .actions {
+                display: flex;
+                gap: 10px;
+                margin-top: 12px;
+            }
+
+            button {
+                flex: 1;
+                padding: 12px;
+                font: inherit;
+                font-size: 15px;
+                background: transparent;
+                border: 1px solid var(--line);
+                color: var(--ink);
+            }
+
+            button.approve {
+                border-color: var(--good);
+                color: var(--good);
+            }
+
+            button.reject {
+                border-color: var(--bad);
+                color: var(--bad);
+            }
+
+            button:disabled {
+                opacity: 0.4;
+            }
+
+            .state {
+                font-size: 12px;
+                font-family: ui-monospace, monospace;
+            }
+
+            .working { color: var(--good); }
+            .idle { color: var(--warn); }
+            .offline { color: var(--muted); }
+
+            .empty {
+                color: var(--muted);
+                font-size: 14px;
+            }
+
+            .notice {
+                border: 1px solid var(--bad);
+                color: var(--bad);
+                padding: 10px 12px;
+                font-size: 14px;
+            }
+        </style>
+    </head>
+    <body>
+        <header>
+            <h1>Agentland</h1>
+            <span class="state" id="clock"></span>
+        </header>
+
+        <main>
+            <section>
+                <h2>Waiting for you</h2>
+                <div id="approvals"><p class="empty">Nothing to answer.</p></div>
+            </section>
+
+            <section>
+                <h2>Crew</h2>
+                <div id="crew"><p class="empty">No crew yet.</p></div>
+            </section>
+
+            <section>
+                <h2>Board</h2>
+                <div id="board"><p class="empty">No cards.</p></div>
+            </section>
+        </main>
+
+        <script type="module">
+            const params = new URLSearchParams(location.search);
+            const stored = localStorage.getItem("agentland-mobile-token");
+            const token = params.get("token") ?? stored ?? "";
+
+            if (params.get("token")) {
+                localStorage.setItem("agentland-mobile-token", params.get("token"));
+                history.replaceState({}, "", location.pathname);
+            }
+
+            async function api(path, options = {}) {
+                const response = await fetch(path, {
+                    ...options,
+                    headers: {
+                        "content-type": "application/json",
+                        "x-auth-token": token,
+                        ...(options.headers ?? {}),
+                    },
+                });
+
+                if (!response.ok) {
+                    throw new Error(`${response.status} ${await response.text()}`);
+                }
+
+                return response.status === 204 ? null : response.json();
+            }
+
+            function element(html) {
+                const holder = document.createElement("div");
+                holder.innerHTML = html.trim();
+                return holder.firstElementChild;
+            }
+
+            function escape(value) {
+                return String(value).replace(/[&<>"]/g, (character) => ({
+                    "&": "&amp;",
+                    "<": "&lt;",
+                    ">": "&gt;",
+                    '"': "&quot;",
+                })[character]);
+            }
+
+            async function answer(id, approved) {
+                await api(`/approvals/${id}`, {
+                    method: "POST",
+                    body: JSON.stringify({ approved }),
+                });
+                await refresh();
+            }
+
+            function render_approvals(items) {
+                const holder = document.getElementById("approvals");
+                const pending = items.filter((item) => item.verdict === "pending");
+
+                if (pending.length === 0) {
+                    holder.innerHTML = '<p class="empty">Nothing to answer.</p>';
+                    return;
+                }
+
+                holder.innerHTML = "";
+                for (const item of pending) {
+                    const card = element(`
+                        <div class="card">
+                            <div class="row"><strong>${escape(item.summary)}</strong></div>
+                            <div class="detail">asked by ${escape(item.requested_by)}${
+                                item.detail ? `\n${escape(item.detail)}` : ""
+                            }</div>
+                            <div class="actions">
+                                <button class="approve">Approve</button>
+                                <button class="reject">Reject</button>
+                            </div>
+                        </div>
+                    `);
+
+                    card.querySelector(".approve").addEventListener("click", () => answer(item.id, true));
+                    card.querySelector(".reject").addEventListener("click", () => answer(item.id, false));
+                    holder.append(card);
+                }
+            }
+
+            function render_crew(agents) {
+                const holder = document.getElementById("crew");
+                if (agents.length === 0) {
+                    holder.innerHTML = '<p class="empty">No crew yet.</p>';
+                    return;
+                }
+
+                holder.innerHTML = agents
+                    .map(
+                        (agent) => `
+                        <div class="card">
+                            <div class="row">
+                                <strong>${escape(agent.name)}</strong>
+                                <span class="state ${agent.state}">${agent.state}</span>
+                            </div>
+                            <div class="detail">${escape(agent.role)} · ${escape(agent.engine_id)} · ${escape(
+                                agent.repository_id,
+                            )}/${escape(agent.worktree)}</div>
+                        </div>`,
+                    )
+                    .join("");
+            }
+
+            function render_board(tasks) {
+                const holder = document.getElementById("board");
+                const live = tasks.filter((task) => task.column !== "done");
+
+                if (live.length === 0) {
+                    holder.innerHTML = '<p class="empty">No cards.</p>';
+                    return;
+                }
+
+                holder.innerHTML = live
+                    .map(
+                        (task) => `
+                        <div class="card">
+                            <div class="row">
+                                <strong>${escape(task.title)}</strong>
+                                <span class="state">${escape(task.column)}</span>
+                            </div>
+                            <div class="detail">${escape(task.assignee ?? "unassigned")}${
+                                task.branch ? ` · ${escape(task.branch)}` : ""
+                            }</div>
+                        </div>`,
+                    )
+                    .join("");
+            }
+
+            async function refresh() {
+                try {
+                    const [approvals, agents, tasks] = await Promise.all([
+                        api("/approvals"),
+                        api("/agents"),
+                        api("/tasks"),
+                    ]);
+
+                    render_approvals(approvals);
+                    render_crew(agents);
+                    render_board(tasks);
+                    document.getElementById("clock").textContent = new Date().toLocaleTimeString();
+                } catch (cause) {
+                    document.querySelector("main").prepend(
+                        element(`<div class="notice">${escape(cause.message)}</div>`),
+                    );
+                }
+            }
+
+            refresh();
+            setInterval(refresh, 5000);
+        </script>
+    </body>
+</html>

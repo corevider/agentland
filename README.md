@@ -5,7 +5,7 @@ real git worktrees — each agent with its own branch, its own running dev serve
 the diff.
 
 
-Status: **M6 — gateway, routines, mail and memory.** M0 passed and Tauri is confirmed by measurement; M1 shipped worktrees, ports and per-worktree dev servers; M2 hires agents and runs their engines; the board now carries a card from assignment to a diff.
+Status: **M7 — approvals reach the phone.** 29 tests. M0 passed and Tauri is confirmed by measurement; M1 shipped worktrees, ports and per-worktree dev servers; M2 hires agents and runs their engines; the board now carries a card from assignment to a diff.
 
 ## Why M0 comes first
 
@@ -464,3 +464,53 @@ The unapproved memory — the one holding a token — is absent, which is the wh
 
 MCP grows to twelve tools: `crew_message`, `memory_propose`, `integration_list` and
 `integration_call` join the eight from M5.
+
+
+## M7 — the phone companion
+
+### A phone cannot open a shell
+
+The security property comes first, because a device carried outside the house is the one most likely
+to be lost. Pairing issues a **second token with approve-only scope**, and the guard checks scope
+against method and path before the route ever runs:
+
+```
+phone token can:            phone token cannot:
+  read approvals    200       open a shell        403
+  read the crew     200       list sessions       403
+  approve / reject  200       remove a worktree   403
+                              start an agent      403
+                              call an integration 403
+```
+
+Four unit tests pin that matrix, including the case that matters most — an approve-only token must
+never reach `/sessions`. Devices are listed and revoked from the desktop; revocation is immediate.
+
+### Approvals
+
+An agent asks with `request_approval` and carries on; a human answers from anywhere on the tailnet.
+An approval is answered exactly once — a second answer is refused rather than flipping a decision
+someone already acted on.
+
+### The page
+
+`apps/mobile` is a single HTML file with no build step, no framework and no three.js: pending
+approvals with Approve and Reject, the crew with live states, and the board minus finished cards. It
+installs as a PWA and stores its token locally after the first open, so the token leaves the URL.
+
+### Reaching it
+
+```bash
+./scripts/pair-phone.sh "ege's phone"
+```
+
+The script refuses to continue without a tailnet address, because this is not a thing to expose to
+the public internet. It prints the exact command to restart the core bound to the tailnet — with the
+Host allowlist extended to that address and nothing else — and the URL to open on the phone.
+
+### A regression this caught
+
+The mobile and desktop static files were mounted **after** the guard layer, so neither carried the
+Host check — a forged `Host` header fetched the app bundle. Routes are now assembled first and the
+guard wraps the finished router, so `/mobile` answers 403 to a forged host exactly like every data
+route does.

@@ -1,3 +1,5 @@
+pub mod approvals;
+pub mod auth;
 pub mod bench;
 pub mod board;
 pub mod crew;
@@ -13,6 +15,8 @@ pub mod services;
 pub mod pty;
 pub mod server;
 
+pub use approvals::{AnswerApproval, Approval, Approvals, RequestApproval};
+pub use auth::{Scope as TokenScope, ScopedToken, TokenStore};
 pub use bench::GeneratorSpec;
 pub use board::{Board, Column, Task};
 pub use crew::{Agent, Crew, Engine, HireRequest};

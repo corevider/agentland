@@ -1,0 +1,11 @@
+{
+  "name": "Agentland",
+  "short_name": "Agentland",
+  "start_url": "/mobile/",
+  "display": "standalone",
+  "background_color": "#0b1113",
+  "theme_color": "#0b1113",
+  "icons": [
+    { "src": "/mobile/icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

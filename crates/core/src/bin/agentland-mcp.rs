@@ -153,6 +153,23 @@ fn tools() -> Value {
             }
         },
         {
+            "name": "request_approval",
+            "description": "Ask the human to approve something before you do it. Returns an approval id; poll approval_status for the answer.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "summary": { "type": "string" },
+                    "detail": { "type": "string" }
+                },
+                "required": ["summary"]
+            }
+        },
+        {
+            "name": "approval_status",
+            "description": "Read every approval and its verdict: pending, approved or rejected.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
             "name": "repo_review",
             "description": "Read the diff for a worktree: committed range, working tree and untracked files.",
             "inputSchema": {
@@ -215,6 +232,16 @@ fn call_tool(core: &Core, name: &str, arguments: &Value) -> Result<Value, String
             })),
         ),
         "integration_list" => core.call("GET", "/integrations", None),
+        "request_approval" => core.call(
+            "POST",
+            "/approvals",
+            Some(json!({
+                "summary": text("summary")?,
+                "detail": arguments.get("detail").and_then(Value::as_str).unwrap_or_default(),
+                "requested_by": std::env::var("AGENTLAND_AGENT").unwrap_or_else(|_| "unknown".to_owned()),
+            })),
+        ),
+        "approval_status" => core.call("GET", "/approvals", None),
         "integration_call" => core.call(
             "POST",
             "/integrations/call",
