@@ -16,6 +16,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::bench::GeneratorSpec;
 use crate::metrics::{MetricsStore, Sample};
+use crate::repo::{RepoRegistry, Repository, Worktree, WorktreeStatus};
 use crate::pty::{PtyManager, PtySpawnSpec, SessionInfo};
 
 #[derive(Clone)]
@@ -32,6 +33,7 @@ struct AppState {
     manager: Arc<PtyManager>,
     config: Arc<ServerConfig>,
     metrics: Arc<MetricsStore>,
+    repos: Arc<RepoRegistry>,
 }
 
 #[derive(Deserialize)]
@@ -76,6 +78,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         manager,
         config: Arc::new(config),
         metrics: Arc::new(MetricsStore::new(PathBuf::from("bench-results.jsonl"))),
+        repos: Arc::new(RepoRegistry::new(PathBuf::from("data"))),
     };
 
     let app = Router::new()
@@ -87,6 +90,10 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/sessions/{id}/log", get(read_log))
         .route("/bench", post(spawn_generator))
         .route("/metrics", get(read_metrics).post(record_metrics))
+        .route("/repos", get(list_repos).post(add_repo))
+        .route("/repos/{id}/worktrees", get(list_worktrees).post(create_worktree))
+        .route("/repos/{id}/worktrees/{name}", delete(remove_worktree))
+        .route("/ports", get(list_ports))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .layer(cors)
         .with_state(state);
@@ -171,6 +178,80 @@ async fn read_log(
     let bytes = query.bytes.unwrap_or(256 * 1024);
     let data = state.manager.read_log(&id, bytes)?;
     Ok(String::from_utf8_lossy(&data).into_owned())
+}
+
+#[derive(Deserialize)]
+struct AddRepoBody {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    into: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CreateWorktreeBody {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct RemoveQuery {
+    #[serde(default)]
+    force: bool,
+}
+
+async fn list_repos(State(state): State<AppState>) -> Json<Vec<Repository>> {
+    Json(state.repos.repositories())
+}
+
+async fn add_repo(
+    State(state): State<AppState>,
+    Json(body): Json<AddRepoBody>,
+) -> Result<Json<Repository>, ApiError> {
+    if let Some(url) = body.url {
+        let into = PathBuf::from(body.into.unwrap_or_else(|| "data/clones".to_owned()));
+        return Ok(Json(state.repos.clone_repository(&url, &into)?));
+    }
+
+    let path = body
+        .path
+        .ok_or_else(|| ApiError(anyhow::anyhow!("path or url is required")))?;
+    Ok(Json(state.repos.register(&PathBuf::from(path))?))
+}
+
+async fn list_worktrees(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Json<Vec<WorktreeStatus>> {
+    let entries = state
+        .repos
+        .worktrees()
+        .into_iter()
+        .filter(|entry| entry.worktree.repository_id == id)
+        .collect();
+    Json(entries)
+}
+
+async fn create_worktree(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<CreateWorktreeBody>,
+) -> Result<Json<Worktree>, ApiError> {
+    Ok(Json(state.repos.create_worktree(&id, &body.name)?))
+}
+
+async fn remove_worktree(
+    State(state): State<AppState>,
+    Path((id, name)): Path<(String, String)>,
+    Query(query): Query<RemoveQuery>,
+) -> Result<StatusCode, ApiError> {
+    state.repos.remove_worktree(&id, &name, query.force)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_ports(State(state): State<AppState>) -> Json<crate::ports::PortRegistry> {
+    Json(state.repos.ports())
 }
 
 async fn record_metrics(

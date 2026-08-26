@@ -138,3 +138,49 @@ export async function open_stream(id: string): Promise<WebSocket> {
     socket.binaryType = "arraybuffer";
     return socket;
 }
+
+export interface Repository {
+    id: string;
+    name: string;
+    primary_path: string;
+    default_branch: string;
+    remote: string | null;
+}
+
+export interface WorktreeStatus {
+    name: string;
+    repository_id: string;
+    path: string;
+    branch: string;
+    port: number;
+    dirty_files: number;
+    ahead: number;
+    missing: boolean;
+}
+
+export function list_repos(): Promise<Repository[]> {
+    return request<Repository[]>("/repos");
+}
+
+export function add_repo(path: string): Promise<Repository> {
+    return request<Repository>("/repos", {
+        method: "POST",
+        body: JSON.stringify({ path }),
+    });
+}
+
+export function list_worktrees(repository_id: string): Promise<WorktreeStatus[]> {
+    return request<WorktreeStatus[]>(`/repos/${repository_id}/worktrees`);
+}
+
+export function create_worktree(repository_id: string, name: string): Promise<WorktreeStatus> {
+    return request<WorktreeStatus>(`/repos/${repository_id}/worktrees`, {
+        method: "POST",
+        body: JSON.stringify({ name }),
+    });
+}
+
+export function remove_worktree(repository_id: string, name: string, force: boolean): Promise<void> {
+    const suffix = force ? "?force=true" : "";
+    return request<void>(`/repos/${repository_id}/worktrees/${name}${suffix}`, { method: "DELETE" });
+}

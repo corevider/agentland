@@ -5,7 +5,7 @@ real git worktrees — each agent with its own branch, its own running dev serve
 the diff.
 
 
-Status: **M0 passed.** Tauri is confirmed by measurement; M1 (worktrees and ports) is next.
+Status: **M1 in progress.** M0 passed and Tauri is confirmed by measurement; the repository layer now creates worktrees and allocates ports.
 
 ## Why M0 comes first
 
@@ -62,15 +62,41 @@ answers it.
 ## Layout
 
 ```
-crates/core/            Rust core: pty runtime, framing, local API — no UI dependency
-  src/pty.rs            pty spawn, output coalescing, replay buffer, broadcast
+crates/core/            Rust core: pty runtime, repositories, local API — no UI dependency
+  src/pty.rs            pty spawn, output coalescing, replay buffer, session logs
+  src/repo.rs           repository registry, worktree lifecycle, git via argument arrays
+  src/ports.rs          port allocation from a workspace range
   src/bench.rs          synthetic load generator for the gate
   src/server.rs         axum HTTP + WebSocket on 127.0.0.1, token and Host guard
   src/bin/              standalone core, so the benchmark runs without Tauri
+  tests/                worktree lifecycle against a real git repository
 apps/desktop/
   src-tauri/            Tauri v2 shell; starts the core in-process
-  src/                  Vite + React UI, xterm panes, benchmark HUD
+  src/                  Vite + React UI: xterm panes, benchmark HUD, repository panel
 ```
+
+## M1 — the repository layer
+
+**Worktrees never touch your clone's directory.** Point Agentland at any plain checkout; it registers
+the path as-is and creates worktrees under `data/worktrees/<repo>/<name>`. No `main/` subdirectory to
+prepare, no folders rearranged — the lesson taken from a tool that demands the
+layout up front.
+
+Each worktree gets a branch (`agent/<name>`) and a port from the 4100–4999 range, allocated by
+probing for a free socket, recorded in `data/repositories.json`, and released on teardown. Two
+agents cannot land on the same port, and the port belongs to the worktree rather than to whoever
+started first.
+
+**Removal refuses to lose work.** A worktree with uncommitted changes returns
+`400 … has 1 uncommitted file(s); pass force to discard them`. Only an explicit force discards it.
+
+```bash
+cargo test -p agentland-core --test repo_lifecycle
+```
+
+The test builds a real git repository in a temp directory, creates two worktrees, checks that they
+get different ports, dirties one, asserts the removal is refused, forces it, and confirms the port is
+released and the state survives a reload.
 
 ## Running it
 

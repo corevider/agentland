@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { RepoPanel } from "@/components/RepoPanel";
 import { TerminalPane, type PaneMetrics } from "@/components/TerminalPane";
 import {
     is_tauri,
@@ -80,6 +81,7 @@ export default function App() {
     const run_ref = useRef<{ id: string; started: number; panes: number; rate: number } | null>(null);
     const frame_ref = useRef({ fps: 0, worst_frame_ms: 0 });
     const [focused_id, set_focused_id] = useState<string | null>(null);
+    const [view, set_view] = useState<"panes" | "repos">("panes");
     const [throughput, set_throughput] = useState({ mb_per_second: 0, dropped_frames: 0, collapsed_mb: 0 });
     const frame_stats = use_frame_stats();
     frame_ref.current = frame_stats;
@@ -208,9 +210,23 @@ export default function App() {
     return (
         <div className="flex h-screen flex-col bg-[#0b1113] text-[#d6e2e6]">
             <header className="flex flex-wrap items-center gap-4 border-b border-[#26343a] px-4 py-3">
-                <span className="font-mono text-xs uppercase tracking-[0.14em] text-[#45bcc4]">
-                    Agentland · M0 throughput gate
-                </span>
+                <span className="font-mono text-xs uppercase tracking-[0.14em] text-[#45bcc4]">Agentland</span>
+
+                <div className="flex">
+                    {(["panes", "repos"] as const).map((choice) => (
+                        <button
+                            key={choice}
+                            className={`border px-3 py-1 font-mono text-xs ${
+                                view === choice
+                                    ? "border-[#45bcc4] text-[#45bcc4]"
+                                    : "border-[#26343a] text-[#7b8d94]"
+                            }`}
+                            onClick={() => set_view(choice)}
+                        >
+                            {choice}
+                        </button>
+                    ))}
+                </div>
 
                 <label className="flex items-center gap-2 text-xs">
                     panes
@@ -283,7 +299,10 @@ export default function App() {
                 </div>
             ) : null}
 
+            {view === "repos" ? <RepoPanel /> : null}
+
             <main
+                hidden={view !== "panes"}
                 className="grid min-h-0 flex-1 gap-2 p-2"
                 style={{
                     gridTemplateColumns: `repeat(${grid_columns}, minmax(0, 1fr))`,

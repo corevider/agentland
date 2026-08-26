@@ -1,0 +1,15 @@
+{
+  "repositories": {
+    "agentland-api-demo": {
+      "id": "agentland-api-demo",
+      "name": "agentland-api-demo",
+      "primary_path": "/tmp/agentland-api-demo",
+      "default_branch": "main",
+      "remote": null
+    }
+  },
+  "worktrees": {},
+  "ports": {
+    "assignments": {}
+  }
+}
