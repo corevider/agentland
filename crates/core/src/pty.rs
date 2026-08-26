@@ -84,6 +84,8 @@ pub struct PtySpawnSpec {
     pub args: Vec<String>,
     #[serde(default)]
     pub cwd: Option<String>,
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
     #[serde(default = "default_cols")]
     pub cols: u16,
     #[serde(default = "default_rows")]
@@ -217,6 +219,9 @@ impl PtyManager {
             command.cwd(cwd);
         }
         command.env("TERM", "xterm-256color");
+        for (name, value) in &spec.env {
+            command.env(name, value);
+        }
 
         let child = pair.slave.spawn_command(command)?;
         drop(pair.slave);

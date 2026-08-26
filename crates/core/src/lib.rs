@@ -2,6 +2,7 @@ pub mod bench;
 pub mod metrics;
 pub mod ports;
 pub mod repo;
+pub mod services;
 pub mod pty;
 pub mod server;
 
@@ -9,6 +10,7 @@ pub use bench::GeneratorSpec;
 pub use metrics::{MetricsStore, Sample};
 pub use ports::PortRegistry;
 pub use repo::{RepoRegistry, Repository, Worktree, WorktreeStatus};
+pub use services::{Service, ServiceRegistry, ServiceState};
 pub use pty::{PtyManager, PtySpawnSpec, Session, SessionInfo};
 pub use server::{serve, ServerConfig};
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { RepoPanel } from "@/components/RepoPanel";
+import { SettingsPage } from "@/components/SettingsPage";
 import { TerminalPane, type PaneMetrics } from "@/components/TerminalPane";
 import {
     is_tauri,
@@ -12,9 +13,7 @@ import {
     type SessionInfo,
 } from "@/lib/core";
 import { probe_gpu, type GpuReport } from "@/lib/gpu";
-
-const PANE_CHOICES = [1, 4, 8];
-const RATE_CHOICES = [1_000, 5_000, 10_000, 20_000];
+import { load_settings, save_settings, type Settings } from "@/lib/settings";
 
 function detect_surface(): string {
     const agent = navigator.userAgent;
@@ -73,8 +72,8 @@ function use_frame_stats(): FrameStats {
 
 export default function App() {
     const [sessions, set_sessions] = useState<SessionInfo[]>([]);
-    const [pane_count, set_pane_count] = useState(8);
-    const [rate, set_rate] = useState(10_000);
+    const [settings, set_settings] = useState<Settings>(() => load_settings());
+    const [settings_open, set_settings_open] = useState(false);
     const [busy, set_busy] = useState(false);
     const [error, set_error] = useState<string | null>(null);
     const metrics_ref = useRef(new Map<string, PaneMetrics>());
@@ -82,6 +81,8 @@ export default function App() {
     const frame_ref = useRef({ fps: 0, worst_frame_ms: 0 });
     const [focused_id, set_focused_id] = useState<string | null>(null);
     const [view, set_view] = useState<"panes" | "repos">("panes");
+    const pane_count = settings.panes;
+    const rate = settings.lines_per_second;
     const [throughput, set_throughput] = useState({ mb_per_second: 0, dropped_frames: 0, collapsed_mb: 0 });
     const frame_stats = use_frame_stats();
     frame_ref.current = frame_stats;
@@ -186,7 +187,7 @@ export default function App() {
         } finally {
             set_busy(false);
         }
-    }, [clear, pane_count, rate]);
+    }, [clear, pane_count, rate, settings.duration_ms]);
 
     const open_shells = useCallback(async () => {
         set_busy(true);
@@ -207,8 +208,23 @@ export default function App() {
     const grid_columns = useMemo(() => (sessions.length > 4 ? 4 : Math.max(sessions.length, 1)), [sessions.length]);
     const verdict = frame_stats.fps >= 55 ? "pass" : frame_stats.fps >= 30 ? "marginal" : "fail";
 
+    const update_settings = useCallback((next: Settings) => {
+        set_settings(next);
+        save_settings(next);
+    }, []);
+
     return (
-        <div className="flex h-screen flex-col bg-[#0b1113] text-[#d6e2e6]">
+        <div className="relative flex h-screen flex-col bg-[#0b1113] text-[#d6e2e6]">
+            {settings_open ? (
+                <SettingsPage
+                    settings={settings}
+                    on_change={update_settings}
+                    on_close={() => set_settings_open(false)}
+                    gpu={gpu}
+                    surface={detect_surface()}
+                />
+            ) : null}
+
             <header className="flex flex-wrap items-center gap-4 border-b border-[#26343a] px-4 py-3">
                 <span className="font-mono text-xs uppercase tracking-[0.14em] text-[#45bcc4]">Agentland</span>
 
@@ -227,36 +243,6 @@ export default function App() {
                         </button>
                     ))}
                 </div>
-
-                <label className="flex items-center gap-2 text-xs">
-                    panes
-                    <select
-                        className="border border-[#26343a] bg-[#141c1f] px-2 py-1 font-mono"
-                        value={pane_count}
-                        onChange={(event) => set_pane_count(Number(event.target.value))}
-                    >
-                        {PANE_CHOICES.map((choice) => (
-                            <option key={choice} value={choice}>
-                                {choice}
-                            </option>
-                        ))}
-                    </select>
-                </label>
-
-                <label className="flex items-center gap-2 text-xs">
-                    lines/sec each
-                    <select
-                        className="border border-[#26343a] bg-[#141c1f] px-2 py-1 font-mono"
-                        value={rate}
-                        onChange={(event) => set_rate(Number(event.target.value))}
-                    >
-                        {RATE_CHOICES.map((choice) => (
-                            <option key={choice} value={choice}>
-                                {choice.toLocaleString()}
-                            </option>
-                        ))}
-                    </select>
-                </label>
 
                 <button
                     className="border border-[#45bcc4] px-3 py-1 font-mono text-xs text-[#45bcc4] disabled:opacity-40"
@@ -278,6 +264,10 @@ export default function App() {
                     clear
                 </button>
 
+                <span className="font-mono text-[11px] text-[#7b8d94]">
+                    {pane_count} × {rate.toLocaleString()} lps
+                </span>
+
                 <div className="ml-auto flex items-center gap-5 font-mono text-xs tabular-nums">
                     <span className={verdict === "pass" ? "text-[#5aa87c]" : verdict === "marginal" ? "text-[#c99a2e]" : "text-[#d46969]"}>
                         {frame_stats.fps} fps
@@ -290,6 +280,18 @@ export default function App() {
                     <span className="text-[#7b8d94]" title={gpu.renderer}>
                         gpu {gpu.webgl2 ? "webgl2" : gpu.renderer === "none" ? "none" : "webgl1"} · {gpu.max_contexts} ctx
                     </span>
+
+                    <button
+                        className="border border-[#26343a] px-2 py-1 text-[#a4b5bb] hover:border-[#45bcc4] hover:text-[#45bcc4]"
+                        title="Settings"
+                        aria-label="Settings"
+                        onClick={() => set_settings_open(true)}
+                    >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <circle cx="12" cy="12" r="3" />
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                        </svg>
+                    </button>
                 </div>
             </header>
 

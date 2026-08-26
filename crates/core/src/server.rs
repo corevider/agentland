@@ -17,6 +17,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use crate::bench::GeneratorSpec;
 use crate::metrics::{MetricsStore, Sample};
 use crate::repo::{RepoRegistry, Repository, Worktree, WorktreeStatus};
+use crate::services::{Service, ServiceRegistry};
 use crate::pty::{PtyManager, PtySpawnSpec, SessionInfo};
 
 #[derive(Clone)]
@@ -34,6 +35,7 @@ struct AppState {
     config: Arc<ServerConfig>,
     metrics: Arc<MetricsStore>,
     repos: Arc<RepoRegistry>,
+    services: Arc<ServiceRegistry>,
 }
 
 #[derive(Deserialize)]
@@ -59,6 +61,7 @@ struct ErrorBody {
 }
 
 pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()> {
+    let manager_for_services = manager.clone();
     let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
 
     let origins: Vec<HeaderValue> = config
@@ -79,6 +82,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         config: Arc::new(config),
         metrics: Arc::new(MetricsStore::new(PathBuf::from("bench-results.jsonl"))),
         repos: Arc::new(RepoRegistry::new(PathBuf::from("data"))),
+        services: ServiceRegistry::new(manager_for_services),
     };
 
     let app = Router::new()
@@ -94,6 +98,11 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/repos/{id}/worktrees", get(list_worktrees).post(create_worktree))
         .route("/repos/{id}/worktrees/{name}", delete(remove_worktree))
         .route("/ports", get(list_ports))
+        .route("/services", get(list_services))
+        .route(
+            "/repos/{id}/worktrees/{name}/service",
+            post(start_service).delete(stop_service),
+        )
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .layer(cors)
         .with_state(state);
@@ -247,6 +256,38 @@ async fn remove_worktree(
     Query(query): Query<RemoveQuery>,
 ) -> Result<StatusCode, ApiError> {
     state.repos.remove_worktree(&id, &name, query.force)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_services(State(state): State<AppState>) -> Json<Vec<Service>> {
+    Json(state.services.list())
+}
+
+async fn start_service(
+    State(state): State<AppState>,
+    Path((id, name)): Path<(String, String)>,
+) -> Result<Json<Service>, ApiError> {
+    let worktree = state
+        .repos
+        .worktrees()
+        .into_iter()
+        .find(|entry| entry.worktree.repository_id == id && entry.worktree.name == name)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("unknown worktree: {id}/{name}")))?
+        .worktree;
+
+    Ok(Json(state.services.start(
+        &id,
+        &name,
+        &worktree.path,
+        worktree.port,
+    )?))
+}
+
+async fn stop_service(
+    State(state): State<AppState>,
+    Path((id, name)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    state.services.stop(&id, &name)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

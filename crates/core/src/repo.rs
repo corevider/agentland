@@ -9,13 +9,82 @@ use serde::{Deserialize, Serialize};
 
 use crate::ports::{PortRegistry, SharedPorts};
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct Remote {
+    pub name: String,
+    pub url: String,
+    pub host: Option<String>,
+    pub owner: Option<String>,
+    pub repo: Option<String>,
+    pub provider: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Repository {
     pub id: String,
     pub name: String,
     pub primary_path: PathBuf,
     pub default_branch: String,
-    pub remote: Option<String>,
+    #[serde(default)]
+    pub remotes: Vec<Remote>,
+    #[serde(default)]
+    pub origin: Option<String>,
+}
+
+pub fn parse_remote(name: &str, url: &str) -> Remote {
+    let trimmed = url.trim();
+    let (host, path) = if let Some(rest) = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"))
+        .or_else(|| trimmed.strip_prefix("ssh://"))
+        .or_else(|| trimmed.strip_prefix("git://"))
+    {
+        let rest = rest.split_once('@').map_or(rest, |(_, tail)| tail);
+        match rest.split_once('/') {
+            Some((authority, tail)) => (
+                Some(authority.split_once(':').map_or(authority, |(h, _)| h).to_owned()),
+                Some(tail.to_owned()),
+            ),
+            None => (Some(rest.to_owned()), None),
+        }
+    } else if let Some((authority, tail)) = trimmed.split_once(':') {
+        if trimmed.starts_with('/') || trimmed.starts_with('.') || trimmed.starts_with("file") {
+            (None, None)
+        } else {
+            let host = authority.split_once('@').map_or(authority, |(_, h)| h);
+            (Some(host.to_owned()), Some(tail.to_owned()))
+        }
+    } else {
+        (None, None)
+    };
+
+    let path = path.map(|value| value.trim_end_matches('/').trim_end_matches(".git").to_owned());
+    let (owner, repo) = match path.as_deref() {
+        Some(value) => match value.rsplit_once('/') {
+            Some((owner, repo)) => (Some(owner.to_owned()), Some(repo.to_owned())),
+            None => (None, Some(value.to_owned())),
+        },
+        None => (None, None),
+    };
+
+    let provider = match host.as_deref() {
+        Some(value) if value.contains("github") => "github",
+        Some(value) if value.contains("gitlab") => "gitlab",
+        Some(value) if value.contains("bitbucket") => "bitbucket",
+        Some(value) if value.contains("codeberg") => "codeberg",
+        Some(_) => "git",
+        None => "local",
+    }
+    .to_owned();
+
+    Remote {
+        name: name.to_owned(),
+        url: trimmed.to_owned(),
+        host,
+        owner,
+        repo,
+        provider,
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -133,6 +202,17 @@ impl RepoRegistry {
             .context("not a git repository")?;
         let primary_path = PathBuf::from(top_level);
 
+        let git_dir = git(&["rev-parse", "--absolute-git-dir"], Some(&primary_path))?;
+        let common_dir = git(&["rev-parse", "--path-format=absolute", "--git-common-dir"], Some(&primary_path))
+            .unwrap_or_else(|_| git_dir.clone());
+        if git_dir != common_dir {
+            bail!(
+                "{} is a worktree of {}; register the main checkout instead",
+                primary_path.display(),
+                PathBuf::from(&common_dir).parent().unwrap_or(Path::new(&common_dir)).display()
+            );
+        }
+
         let name = primary_path
             .file_name()
             .map(|value| value.to_string_lossy().to_string())
@@ -141,14 +221,34 @@ impl RepoRegistry {
 
         let default_branch = git(&["rev-parse", "--abbrev-ref", "HEAD"], Some(&primary_path))
             .unwrap_or_else(|_| "main".to_owned());
-        let remote = git(&["remote", "get-url", "origin"], Some(&primary_path)).ok();
+
+        let remotes: Vec<Remote> = git(&["remote"], Some(&primary_path))
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .filter_map(|remote_name| {
+                let url = git(
+                    &["remote", "get-url", remote_name.trim()],
+                    Some(&primary_path),
+                )
+                .ok()?;
+                Some(parse_remote(remote_name.trim(), &url))
+            })
+            .collect();
+
+        let origin = remotes
+            .iter()
+            .find(|remote| remote.name == "origin")
+            .or_else(|| remotes.first())
+            .map(|remote| remote.url.clone());
 
         let repository = Repository {
             id: id.clone(),
             name,
             primary_path,
             default_branch,
-            remote,
+            remotes,
+            origin,
         };
 
         let mut state = self.state.lock();
