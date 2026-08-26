@@ -21,7 +21,7 @@ const STATE_COLOR: Record<Service["state"], string> = {
     stopped: "text-shell",
 };
 
-export function RepoPanel() {
+export function RepoPanel({ active }: { active: boolean }) {
     const [repos, set_repos] = useState<Repository[]>([]);
     const [worktrees, set_worktrees] = useState<Record<string, WorktreeStatus[]>>({});
     const [services, set_services] = useState<Record<string, Service>>({});
@@ -45,12 +45,16 @@ export function RepoPanel() {
     }, []);
 
     useEffect(() => {
+        if (!active) {
+            return;
+        }
+
         refresh().catch((cause) => set_error(String(cause)));
         const handle = window.setInterval(() => {
             refresh().catch(() => undefined);
         }, 3000);
         return () => window.clearInterval(handle);
-    }, [refresh]);
+    }, [refresh, active]);
 
     const run = useCallback(
         async (action: () => Promise<unknown>) => {

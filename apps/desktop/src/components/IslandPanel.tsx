@@ -15,6 +15,7 @@ import {
     type Task,
 } from "@/lib/core";
 import { probe_gpu } from "@/lib/gpu";
+import { is_tauri, take_ui_commands } from "@/lib/core";
 
 interface Props {
     active: boolean;
@@ -55,11 +56,14 @@ export function IslandPanel({ active }: Props) {
 
     useEffect(() => {
         refresh().catch((cause) => set_message(String(cause)));
-        const handle = window.setInterval(() => {
-            refresh().catch(() => undefined);
-        }, 4000);
+        const handle = window.setInterval(
+            () => {
+                refresh().catch(() => undefined);
+            },
+            active ? 4000 : 15000,
+        );
         return () => window.clearInterval(handle);
-    }, [refresh]);
+    }, [refresh, active]);
 
     const agent_at = useCallback((event: React.DragEvent<HTMLDivElement>) => {
         const container = container_ref.current;
@@ -93,6 +97,52 @@ export function IslandPanel({ active }: Props) {
 
         return null;
     }, []);
+
+    const capture = useCallback(async () => {
+        const canvas = container_ref.current?.querySelector("canvas");
+        if (!canvas) {
+            set_message("No island to capture.");
+            return;
+        }
+
+        const data = canvas.toDataURL("image/png");
+
+        if (!is_tauri()) {
+            const anchor = document.createElement("a");
+            anchor.href = data;
+            anchor.download = "island.png";
+            anchor.click();
+            return;
+        }
+
+        try {
+            const { invoke } = await import("@tauri-apps/api/core");
+            const path = await invoke<string>("save_capture", { name: "island", data });
+            set_message(`Saved ${path}`);
+        } catch (cause) {
+            set_message(cause instanceof Error ? cause.message : String(cause));
+        }
+    }, []);
+
+    useEffect(() => {
+        const listener = () => void capture();
+        window.addEventListener("agentland:capture-island", listener);
+
+        const handle = window.setInterval(() => {
+            take_ui_commands()
+                .then((commands) => {
+                    if (commands.includes("capture-island")) {
+                        void capture();
+                    }
+                })
+                .catch(() => undefined);
+        }, 2000);
+
+        return () => {
+            window.removeEventListener("agentland:capture-island", listener);
+            window.clearInterval(handle);
+        };
+    }, [capture]);
 
     const tier = tier_for(agents.length);
 

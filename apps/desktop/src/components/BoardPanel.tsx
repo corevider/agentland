@@ -35,7 +35,7 @@ function patch_line_color(line: string): string {
     return "text-driftwood";
 }
 
-export function BoardPanel() {
+export function BoardPanel({ active }: { active: boolean }) {
     const [tasks, set_tasks] = useState<Task[]>([]);
     const [agents, set_agents] = useState<Agent[]>([]);
     const [repos, set_repos] = useState<Repository[]>([]);
@@ -60,12 +60,16 @@ export function BoardPanel() {
     }, []);
 
     useEffect(() => {
+        if (!active) {
+            return;
+        }
+
         refresh().catch((cause) => set_error(String(cause)));
         const handle = window.setInterval(() => {
             list_tasks().then(set_tasks).catch(() => undefined);
         }, 4000);
         return () => window.clearInterval(handle);
-    }, [refresh]);
+    }, [refresh, active]);
 
     const run = useCallback(
         async (action: () => Promise<unknown>) => {

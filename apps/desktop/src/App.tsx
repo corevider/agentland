@@ -95,10 +95,17 @@ export default function App() {
     frame_ref.current = frame_stats;
     const [gpu] = useState<GpuReport>(() => probe_gpu());
     const menu = useContextMenu();
+    const [island_opened, set_island_opened] = useState(view === "island");
 
     useEffect(() => {
         list_sessions().then(set_sessions).catch((cause) => set_error(String(cause)));
     }, []);
+
+    useEffect(() => {
+        if (view === "island") {
+            set_island_opened(true);
+        }
+    }, [view]);
 
     useEffect(() => {
         const handle = window.setInterval(() => {
@@ -244,6 +251,14 @@ export default function App() {
                 { label: "Board", hint: "view", run: () => set_view("board") },
                 { label: "Repositories", hint: "view", run: () => set_view("repos") },
                 { label: "Crew", hint: "view", run: () => set_view("crew") },
+                {
+                    label: "Capture the island",
+                    hint: "png",
+                    disabled: view !== "island",
+                    run: () => {
+                        window.dispatchEvent(new CustomEvent("agentland:capture-island"));
+                    },
+                },
                 { label: "Settings", run: () => set_settings_open(true) },
                 {
                     label: "Reload the interface",
@@ -269,7 +284,7 @@ export default function App() {
                     : []),
             ]);
         },
-        [menu],
+        [menu, view],
     );
 
     return (
@@ -366,19 +381,30 @@ export default function App() {
                 </div>
             ) : null}
 
-            {view === "repos" ? <RepoPanel /> : null}
-            {view === "crew" ? <CrewPanel on_open_session={open_session} /> : null}
-            {view === "board" ? <BoardPanel /> : null}
-            {view === "island" ? (
-                <Suspense
-                    fallback={
-                        <div className="flex min-h-0 flex-1 items-center justify-center font-mono text-xs text-shell">
-                            loading the island…
-                        </div>
-                    }
-                >
-                    <IslandPanel active={view === "island"} />
-                </Suspense>
+            <div className="flex min-h-0 flex-1" hidden={view !== "repos"}>
+                <RepoPanel active={view === "repos"} />
+            </div>
+
+            <div className="flex min-h-0 flex-1" hidden={view !== "crew"}>
+                <CrewPanel active={view === "crew"} on_open_session={open_session} />
+            </div>
+
+            <div className="flex min-h-0 flex-1" hidden={view !== "board"}>
+                <BoardPanel active={view === "board"} />
+            </div>
+
+            {island_opened ? (
+                <div className="flex min-h-0 flex-1" hidden={view !== "island"}>
+                    <Suspense
+                        fallback={
+                            <div className="flex min-h-0 flex-1 items-center justify-center font-mono text-xs text-shell">
+                                loading the island…
+                            </div>
+                        }
+                    >
+                        <IslandPanel active={view === "island"} />
+                    </Suspense>
+                </div>
             ) : null}
 
             <main

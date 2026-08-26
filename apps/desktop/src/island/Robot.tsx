@@ -50,24 +50,30 @@ export function Robot({ agent_id, presence, accent, highlighted }: Props) {
         }
 
         if (presence === "attention") {
-            const turn = Math.sin(time * 1.1) * 0.5;
             if (head.current) {
-                head.current.rotation.y = turn;
-            }
-            if (left_arm.current) {
-                left_arm.current.rotation.x = -0.9;
+                head.current.rotation.y = Math.sin(time * 1.1) * 0.45;
             }
             if (right_arm.current) {
                 right_arm.current.rotation.x = 0;
+                right_arm.current.rotation.z = 2.5 + Math.sin(time * 4.6) * 0.22;
+            }
+            if (left_arm.current) {
+                left_arm.current.rotation.x = 0;
+                left_arm.current.rotation.z = 0;
+            }
+            if (body.current) {
+                body.current.position.y = Math.abs(Math.sin(time * 2.1)) * 0.03;
             }
             return;
         }
 
         if (left_arm.current) {
             left_arm.current.rotation.x = 0;
+            left_arm.current.rotation.z = 0;
         }
         if (right_arm.current) {
             right_arm.current.rotation.x = 0;
+            right_arm.current.rotation.z = 0;
         }
         if (head.current) {
             head.current.rotation.y = 0;
@@ -80,7 +86,7 @@ export function Robot({ agent_id, presence, accent, highlighted }: Props) {
     const panel = highlighted ? "#8fe0d5" : PANEL;
 
     return (
-        <group ref={body} userData={{ agent_id }} scale={0.44}>
+        <group ref={body} userData={{ agent_id }} scale={0.78}>
             <group position={[0, 2.12, 0]} userData={{ agent_id }}>
                 <mesh position={[0, -0.14, 0]} userData={{ agent_id }}>
                     <cylinderGeometry args={[0.015, 0.015, 0.16, 4]} />
@@ -90,11 +96,15 @@ export function Robot({ agent_id, presence, accent, highlighted }: Props) {
                     <cylinderGeometry args={[0.07, 0.05, 0.05, 6]} />
                     <meshLambertMaterial color={JOINT} flatShading />
                 </mesh>
-                <mesh ref={bulb} position={[0, 0.08, 0]} userData={{ agent_id }}>
-                    <icosahedronGeometry args={[0.12, 0]} />
-                    <meshBasicMaterial color={accent} transparent opacity={0.8} />
+                <mesh ref={bulb} position={[0, 0.1, 0]} userData={{ agent_id }}>
+                    <icosahedronGeometry args={[0.17, 0]} />
+                    <meshBasicMaterial color={accent} transparent opacity={0.85} />
                 </mesh>
-                <pointLight color={accent} intensity={presence === "idle" ? 0.15 : 0.6} distance={2.4} />
+                <mesh position={[0, 0.1, 0]}>
+                    <icosahedronGeometry args={[0.3, 0]} />
+                    <meshBasicMaterial color={accent} transparent opacity={0.18} />
+                </mesh>
+                <pointLight color={accent} intensity={presence === "idle" ? 0.3 : 1.1} distance={3.4} />
             </group>
 
             <group ref={head} position={[0, 1.62, 0]} userData={{ agent_id }}>

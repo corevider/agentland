@@ -30,6 +30,40 @@ fn updater_endpoints() -> Vec<String> {
 }
 
 #[tauri::command]
+fn save_capture(name: String, data: String) -> Result<String, String> {
+    use base64::Engine;
+
+    let payload = data
+        .split_once(",")
+        .map(|(_, tail)| tail)
+        .unwrap_or(&data);
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .map_err(|error| format!("the capture was not valid base64: {error}"))?;
+
+    let safe: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    let file = if safe.is_empty() {
+        "capture".to_owned()
+    } else {
+        safe
+    };
+
+    let directory = std::env::var("AGENTLAND_CAPTURE_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir());
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+
+    let path = directory.join(format!("{file}.png"));
+    std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
+
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 fn updater_status() -> String {
     let endpoints = updater_endpoints();
     if endpoints.is_empty() {
@@ -70,7 +104,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(endpoint)
-        .invoke_handler(tauri::generate_handler![core_endpoint, updater_status])
+        .invoke_handler(tauri::generate_handler![core_endpoint, updater_status, save_capture])
         .setup(move |app| {
             let manager = Arc::new(PtyManager::new());
             app.manage(manager.clone());

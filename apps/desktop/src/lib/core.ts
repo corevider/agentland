@@ -434,3 +434,7 @@ export function pause_dispatch(paused: boolean): Promise<DispatchState> {
 export function dispatch_task(id: string): Promise<DispatchReport> {
     return request<DispatchReport>(`/dispatch/tasks/${id}`, { method: "POST" });
 }
+
+export function take_ui_commands(): Promise<string[]> {
+    return request<string[]>("/ui/commands");
+}

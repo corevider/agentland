@@ -33,10 +33,11 @@ const PRESENCE_LABEL: Record<string, string> = {
 };
 
 interface Props {
+    active: boolean;
     on_open_session: (session_id: string) => void;
 }
 
-export function CrewPanel({ on_open_session }: Props) {
+export function CrewPanel({ active, on_open_session }: Props) {
     const [engines, set_engines] = useState<Engine[]>([]);
     const [agents, set_agents] = useState<Agent[]>([]);
     const [targets, set_targets] = useState<Array<{ repository_id: string; worktree: string }>>([]);
@@ -71,6 +72,10 @@ export function CrewPanel({ on_open_session }: Props) {
     }, []);
 
     useEffect(() => {
+        if (!active) {
+            return;
+        }
+
         refresh().catch((cause) => set_error(String(cause)));
         const handle = window.setInterval(() => {
             list_agents().then(set_agents).catch(() => undefined);
@@ -82,7 +87,7 @@ export function CrewPanel({ on_open_session }: Props) {
             window.clearInterval(handle);
             window.clearInterval(ticker);
         };
-    }, [refresh]);
+    }, [refresh, active]);
 
     const run = useCallback(
         async (action: () => Promise<unknown>) => {

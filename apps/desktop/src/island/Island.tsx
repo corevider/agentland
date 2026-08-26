@@ -6,11 +6,16 @@ import type { Agent } from "@/lib/core";
 import { Projectile } from "@/island/Projectile";
 import { Robot } from "@/island/Robot";
 import {
+    JETTY_ANGLE,
+    LIGHTHOUSE_ANGLE,
     PRESENCE_COLOR,
     ROLE_SHAPE,
-    seeded_random,
+    palm_positions,
     station_placements,
+    surface_height,
+    terrace_layers,
     tier_for,
+    type StationPlacement,
     type Tier,
 } from "@/island/geometry";
 
@@ -18,18 +23,7 @@ const FOCUSED_FPS = 30;
 const BACKGROUND_FPS = 5;
 
 function Terrain({ tier, seed }: { tier: Tier; seed: string }) {
-    const layers = useMemo(() => {
-        const random = seeded_random(seed);
-        return Array.from({ length: tier.terraces }, (_, index) => {
-            const shrink = index / (tier.terraces + 1);
-            return {
-                radius: tier.radius * (1 - shrink * 0.55),
-                height: 0.34 + random() * 0.2,
-                y: index * 0.3,
-                rotation: random() * Math.PI,
-            };
-        });
-    }, [tier, seed]);
+    const layers = useMemo(() => terrace_layers(tier, seed), [tier, seed]);
 
     return (
         <group>
@@ -43,25 +37,26 @@ function Terrain({ tier, seed }: { tier: Tier; seed: string }) {
     );
 }
 
-function Palms({ tier, seed }: { tier: Tier; seed: string }) {
-    const palms = useMemo(() => {
-        const random = seeded_random(`${seed}-palms`);
-        return Array.from({ length: tier.palms }, () => {
-            const angle = random() * Math.PI * 2;
-            const distance = tier.radius * (0.62 + random() * 0.3);
-            return {
-                x: Math.cos(angle) * distance,
-                z: Math.sin(angle) * distance,
-                height: 0.7 + random() * 0.5,
-                tilt: (random() - 0.5) * 0.3,
-            };
-        });
-    }, [tier, seed]);
+function Palms({
+    tier,
+    seed,
+    stations,
+}: {
+    tier: Tier;
+    seed: string;
+    stations: StationPlacement[];
+}) {
+    const layers = useMemo(() => terrace_layers(tier, seed), [tier, seed]);
+    const palms = useMemo(() => palm_positions(tier, seed, stations), [tier, seed, stations]);
 
     return (
         <group>
             {palms.map((palm, index) => (
-                <group key={index} position={[palm.x, 0.2, palm.z]} rotation={[palm.tilt, 0, palm.tilt]}>
+                <group
+                    key={index}
+                    position={[palm.x, surface_height(layers, Math.hypot(palm.x, palm.z)), palm.z]}
+                    rotation={[palm.tilt, 0, palm.tilt]}
+                >
                     <mesh position={[0, palm.height / 2, 0]}>
                         <cylinderGeometry args={[0.04, 0.07, palm.height, 5]} />
                         <meshLambertMaterial color="#8a5f3c" flatShading />
@@ -106,28 +101,28 @@ function Station({
             />
 
             {shape === "watchtower" ? (
-                <mesh position={[0.52, 0.5, -0.1]} castShadow userData={{ agent_id: agent.id }}>
+                <mesh position={[0.78, 0.5, -0.34]} castShadow userData={{ agent_id: agent.id }}>
                     <cylinderGeometry args={[0.1, 0.14, 1.0, 6]} />
                     <meshLambertMaterial color="#9a7d5c" flatShading />
                 </mesh>
             ) : null}
 
             {shape === "crane" ? (
-                <mesh position={[0.55, 0.7, 0]} rotation={[0, 0, -0.5]} castShadow userData={{ agent_id: agent.id }}>
+                <mesh position={[0.86, 0.55, -0.3]} rotation={[0, 0.4, -0.5]} castShadow userData={{ agent_id: agent.id }}>
                     <boxGeometry args={[0.8, 0.07, 0.07]} />
                     <meshLambertMaterial color="#b4541e" flatShading />
                 </mesh>
             ) : null}
 
             {shape === "radio" ? (
-                <mesh position={[0.5, 0.62, -0.05]} castShadow userData={{ agent_id: agent.id }}>
+                <mesh position={[0.76, 0.62, -0.3]} castShadow userData={{ agent_id: agent.id }}>
                     <coneGeometry args={[0.12, 0.7, 5]} />
                     <meshLambertMaterial color="#9aa7ad" flatShading />
                 </mesh>
             ) : null}
 
             {shape === "workbench" ? (
-                <mesh position={[0.5, 0.22, 0]} castShadow userData={{ agent_id: agent.id }}>
+                <mesh position={[0.74, 0.22, -0.28]} castShadow userData={{ agent_id: agent.id }}>
                     <boxGeometry args={[0.34, 0.1, 0.42]} />
                     <meshLambertMaterial color="#8a5f3c" flatShading />
                 </mesh>
@@ -141,27 +136,118 @@ function Station({
     );
 }
 
-function Shallows({ radius }: { radius: number }) {
+function Water({ radius }: { radius: number }) {
     return (
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.3, 0]}>
-            <ringGeometry args={[radius * 0.94, radius * 1.9, 24]} />
-            <meshLambertMaterial color="#37a8a0" flatShading transparent opacity={0.75} />
+        <group>
+            <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.42, 0]} receiveShadow>
+                <circleGeometry args={[220, 64]} />
+                <meshLambertMaterial color="#0f3f4c" flatShading />
+            </mesh>
+
+            <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.34, 0]}>
+                <ringGeometry args={[radius * 0.92, radius * 2.4, 28]} />
+                <meshLambertMaterial color="#1d7f84" flatShading transparent opacity={0.9} />
+            </mesh>
+
+            <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.28, 0]}>
+                <ringGeometry args={[radius * 0.9, radius * 1.35, 28]} />
+                <meshLambertMaterial color="#3fb8ac" flatShading transparent opacity={0.85} />
+            </mesh>
+
+            <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.22, 0]}>
+                <ringGeometry args={[radius * 0.88, radius * 1.02, 28]} />
+                <meshBasicMaterial color="#bfeee4" transparent opacity={0.55} />
+            </mesh>
+        </group>
+    );
+}
+
+const SKY_VERTEX = `
+varying vec3 world_direction;
+
+void main() {
+    vec4 world = modelMatrix * vec4(position, 1.0);
+    world_direction = world.xyz;
+    gl_Position = projectionMatrix * viewMatrix * world;
+}
+`;
+
+const SKY_FRAGMENT = `
+varying vec3 world_direction;
+
+uniform vec3 zenith;
+uniform vec3 upper;
+uniform vec3 haze;
+uniform vec3 band;
+uniform vec3 below;
+
+void main() {
+    float height = normalize(world_direction).y;
+
+    vec3 color;
+    if (height >= 0.0) {
+        vec3 low = mix(band, haze, smoothstep(0.0, 0.06, height));
+        vec3 mid = mix(low, upper, smoothstep(0.03, 0.28, height));
+        color = mix(mid, zenith, smoothstep(0.25, 0.75, height));
+    } else {
+        color = mix(band, below, smoothstep(0.0, 0.18, -height));
+    }
+
+    gl_FragColor = vec4(color, 1.0);
+}
+`;
+
+function Sky() {
+    const uniforms = useMemo(
+        () => ({
+            zenith: { value: new THREE.Color("#0a2634") },
+            upper: { value: new THREE.Color("#1d5468") },
+            haze: { value: new THREE.Color("#7fa79c") },
+            band: { value: new THREE.Color("#f6c98d") },
+            below: { value: new THREE.Color("#123a44") },
+        }),
+        [],
+    );
+
+    return (
+        <mesh scale={[-1, 1, 1]}>
+            <sphereGeometry args={[120, 32, 24]} />
+            <shaderMaterial
+                vertexShader={SKY_VERTEX}
+                fragmentShader={SKY_FRAGMENT}
+                uniforms={uniforms}
+                side={THREE.BackSide}
+                depthWrite={false}
+                fog={false}
+            />
         </mesh>
     );
 }
 
-function Sea() {
+function Lighthouse({
+    radius,
+    ground,
+    paused,
+    highlighted,
+}: {
+    radius: number;
+    ground: number;
+    paused: boolean;
+    highlighted: boolean;
+}) {
     return (
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.36, 0]} receiveShadow>
-            <circleGeometry args={[30, 10]} />
-            <meshLambertMaterial color="#15525c" flatShading />
-        </mesh>
-    );
-}
-
-function Lighthouse({ radius, paused, highlighted }: { radius: number; paused: boolean; highlighted: boolean }) {
-    return (
-        <group position={[radius * 0.8, 0.2, -radius * 0.35]} userData={{ dispatch: true }}>
+        <group
+            position={[
+                Math.cos(LIGHTHOUSE_ANGLE) * radius * 0.78,
+                ground,
+                Math.sin(LIGHTHOUSE_ANGLE) * radius * 0.78,
+            ]}
+            userData={{ dispatch: true }}
+        >
+            <mesh position={[0, 0.06, 0]} receiveShadow userData={{ dispatch: true }}>
+                <cylinderGeometry args={[0.36, 0.44, 0.18, 7]} />
+                <meshLambertMaterial color="#8c8375" flatShading />
+            </mesh>
             <mesh position={[0, 0.7, 0]} castShadow userData={{ dispatch: true }}>
                 <cylinderGeometry args={[0.16, 0.26, 1.4, 6]} />
                 <meshLambertMaterial color={highlighted ? "#45bcc4" : "#d8e2e6"} flatShading />
@@ -176,7 +262,14 @@ function Lighthouse({ radius, paused, highlighted }: { radius: number; paused: b
 
 function Jetty({ radius }: { radius: number }) {
     return (
-        <mesh position={[-radius * 0.95, 0.05, 0]} castShadow>
+        <mesh
+            position={[
+                Math.cos(JETTY_ANGLE) * radius * 0.95,
+                0.05,
+                Math.sin(JETTY_ANGLE) * radius * 0.95,
+            ]}
+            castShadow
+        >
             <boxGeometry args={[1.4, 0.1, 0.5]} />
             <meshLambertMaterial color="#a9764c" flatShading />
         </mesh>
@@ -209,20 +302,20 @@ function Governor({ active }: { active: boolean }) {
 
 function Orbit() {
     const { camera, gl, invalidate } = useThree();
-    const state = useRef({ dragging: false, x: 0, angle: 0.9, pitch: 0.75 });
+    const state = useRef({ dragging: false, x: 0, angle: 0.9, pitch: 0.42 });
 
     useEffect(() => {
         const element = gl.domElement;
         const current = state.current;
 
         const place = () => {
-            const distance = 14;
+            const distance = 10.5;
             camera.position.set(
                 Math.cos(current.angle) * distance * Math.cos(current.pitch),
                 Math.sin(current.pitch) * distance,
                 Math.sin(current.angle) * distance * Math.cos(current.pitch),
             );
-            camera.lookAt(0, 0.5, 0);
+            camera.lookAt(0, 0.9, 0);
             invalidate();
         };
 
@@ -280,17 +373,19 @@ export function Island({
 }: Props) {
     const tier = tier_for(agents.length);
     const placements = station_placements(agents.length, tier.radius);
-    const lighthouse: [number, number, number] = [tier.radius * 0.8, 1.9, -tier.radius * 0.35];
+    const layers = terrace_layers(tier, seed);
+    const ground = surface_height(layers, tier.radius * 0.64);
+    const lighthouse: [number, number, number] = [tier.radius * 0.78, ground + 1.7, -tier.radius * 0.3];
 
     return (
         <Canvas
             frameloop="demand"
             shadows
-            camera={{ position: [8, 8, 8], fov: 42 }}
+            gl={{ preserveDrawingBuffer: true }}
+            camera={{ position: [8, 5, 8], fov: 46 }}
             onCreated={({ scene, camera }) => on_scene(scene, camera)}
         >
-            <color attach="background" args={["#0d1c1f"]} />
-            <fog attach="fog" args={["#123037", 16, 38]} />
+            <fog attach="fog" args={["#6f9b93", 30, 130]} />
             <ambientLight intensity={0.6} color="#bfe4e0" />
             <directionalLight position={[7, 9, 3]} intensity={1.15} color="#ffd9a8" castShadow />
             <hemisphereLight args={["#8fd3d0", "#2a4a3c", 0.45]} />
@@ -298,13 +393,14 @@ export function Island({
             <Governor active={active} />
             <Orbit />
 
-            <Sea />
-            <Shallows radius={tier.radius} />
+            <Sky />
+            <Water radius={tier.radius} />
             <Terrain tier={tier} seed={seed} />
-            <Palms tier={tier} seed={seed} />
+            <Palms tier={tier} seed={seed} stations={placements} />
             {tier.has_jetty ? <Jetty radius={tier.radius} /> : null}
             <Lighthouse
                 radius={tier.radius}
+                ground={ground}
                 paused={paused}
                 highlighted={highlighted === "__dispatch__"}
             />
@@ -319,7 +415,7 @@ export function Island({
                     <Projectile
                         key={shot.seq}
                         from={lighthouse}
-                        to={[placements[index].x, 0.9, placements[index].z]}
+                        to={[placements[index].x, ground + 0.9, placements[index].z]}
                         color="#e0c05a"
                         on_done={() => on_shot_done(shot.seq)}
                     />
@@ -330,7 +426,7 @@ export function Island({
                 <Station
                     key={agent.id}
                     agent={agent}
-                    position={[placements[index].x, 0.3, placements[index].z]}
+                    position={[placements[index].x, ground, placements[index].z]}
                     rotation={placements[index].rotation}
                     highlighted={highlighted === agent.id}
                 />

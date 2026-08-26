@@ -55,6 +55,7 @@ struct AppState {
     gateway: Arc<Gateway>,
     approvals: Arc<Approvals>,
     tokens: Arc<TokenStore>,
+    ui_commands: Arc<parking_lot::Mutex<Vec<String>>>,
 }
 
 #[derive(Deserialize)]
@@ -119,6 +120,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         gateway: Arc::new(Gateway::new(PathBuf::from("data"))),
         approvals: Arc::new(Approvals::new(PathBuf::from("data"))),
         tokens: Arc::new(TokenStore::new(token_for_store, PathBuf::from("data"))),
+        ui_commands: Arc::new(parking_lot::Mutex::new(Vec::new())),
     };
 
     spawn_routine_ticker(state.clone());
@@ -165,6 +167,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/approvals/{id}", post(answer_approval))
         .route("/devices", get(list_devices).post(pair_device))
         .route("/devices/{id}", delete(revoke_device))
+        .route("/ui/commands", get(take_ui_commands).post(queue_ui_command))
         .route("/dispatch/tasks/{id}", post(dispatch_task))
         .route("/repos/{id}/worktrees/{name}/review", get(review_worktree))
         .route("/repos/{id}/worktrees/{name}/pr", post(open_pull_request))
@@ -762,6 +765,24 @@ struct PullRequestBody {
     body: String,
     #[serde(default)]
     task_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UiCommandBody {
+    name: String,
+}
+
+async fn queue_ui_command(
+    State(state): State<AppState>,
+    Json(body): Json<UiCommandBody>,
+) -> StatusCode {
+    state.ui_commands.lock().push(body.name);
+    StatusCode::ACCEPTED
+}
+
+async fn take_ui_commands(State(state): State<AppState>) -> Json<Vec<String>> {
+    let mut queue = state.ui_commands.lock();
+    Json(std::mem::take(&mut queue))
 }
 
 async fn list_approvals(State(state): State<AppState>) -> Json<Vec<Approval>> {
