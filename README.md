@@ -29,17 +29,29 @@ So the first thing in the repository is a benchmark, not a feature.
 Anything below 30 fps fails the gate. Between 30 and 55 is marginal and needs a second look at the
 frame budget before Tauri is confirmed.
 
-### Measured so far
+### Result — the gate passed, Tauri is confirmed
 
-The transport is already verified end to end, outside any webview:
+Measured on this machine (GTX 1050 Ti, Ubuntu), 8 panes at 10,000 lines/sec each, steady state:
 
-```
-1 generator @ 10k lines/s → 377 frames / 3s, 1.03 MB/s, avg frame 8.4 KB, 0 dropped
-```
+| Surface | Renderer | fps median | fps min | Worst frame | MB/s | Core drops |
+| --- | --- | --- | --- | --- | --- | --- |
+| **Tauri / WebKitGTK** | canvas | **62** | 57 | 20 ms median, 38 ms max | 8.07 | 0 |
+| Firefox | canvas | 60 | 57 | 17 ms median, 40 ms max | ~8 | 0 |
+| Firefox, before the render fix | webgl | 23 | 12 | 84 ms median, 116 ms max | 8.36 | 0 |
 
-That is the 8 ms coalescing window working as designed: ~125 frames per second per pane instead of
-one message per read. Eight panes is therefore ~8 MB/s and ~1,000 frames/sec at the webview boundary
-— the number the gate exists to test.
+WebKitGTK did not lag the browser — it edged ahead of it. **The decision is Tauri.**
+
+The third row is the same machine before the rendering strategy changed, and it is the more
+interesting number: the first attempt managed 23 fps while the core dropped nothing and the UI
+dropped 4,577 frames. The bottleneck was never the transport. It was asking xterm to parse 80,000
+lines per second across eight panes — work no human can read and no renderer should attempt. Once
+panes batched to one write per animation frame, unfocused panes throttled to 250 ms, and overloaded
+panes collapsed to their last 48 KB, the same hardware tripled its frame rate.
+
+Both passing runs fell back to the canvas renderer rather than WebGL, so 62 fps is what this costs
+*without* GPU acceleration. That leaves one open question, and it belongs to the island rather than
+the terminals: react-three-fiber needs a WebGL context. The app now probes for one at startup and
+reports it in the HUD and in every sample.
 
 ## Layout
 

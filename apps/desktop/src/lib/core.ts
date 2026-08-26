@@ -121,6 +121,7 @@ export interface Sample {
     dropped_local: number;
     renderer: string;
     surface: string;
+    gpu: string;
 }
 
 export function report_sample(sample: Sample): Promise<void> {

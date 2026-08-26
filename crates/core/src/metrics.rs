@@ -20,6 +20,8 @@ pub struct Sample {
     pub dropped_local: u64,
     pub renderer: String,
     pub surface: String,
+    #[serde(default)]
+    pub gpu: String,
 }
 
 pub struct MetricsStore {

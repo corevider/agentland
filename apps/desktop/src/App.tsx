@@ -10,6 +10,7 @@ import {
     spawn_shell,
     type SessionInfo,
 } from "@/lib/core";
+import { probe_gpu, type GpuReport } from "@/lib/gpu";
 
 const PANE_CHOICES = [1, 4, 8];
 const RATE_CHOICES = [1_000, 5_000, 10_000, 20_000];
@@ -82,6 +83,7 @@ export default function App() {
     const [throughput, set_throughput] = useState({ mb_per_second: 0, dropped_frames: 0, collapsed_mb: 0 });
     const frame_stats = use_frame_stats();
     frame_ref.current = frame_stats;
+    const [gpu] = useState<GpuReport>(() => probe_gpu());
 
     useEffect(() => {
         list_sessions().then(set_sessions).catch((cause) => set_error(String(cause)));
@@ -144,11 +146,12 @@ export default function App() {
                 dropped_local: collapsed_bytes,
                 renderer,
                 surface: detect_surface(),
+                gpu: `${gpu.webgl2 ? "webgl2" : gpu.renderer === "none" ? "none" : "webgl1"} · ${gpu.renderer} · ${gpu.max_contexts} ctx`,
             }).catch(() => undefined);
         }, 2000);
 
         return () => window.clearInterval(handle);
-    }, []);
+    }, [gpu]);
 
     const clear = useCallback(async () => {
         const current = await list_sessions();
@@ -267,6 +270,9 @@ export default function App() {
                     <span className="text-[#7b8d94]">{throughput.mb_per_second} MB/s</span>
                     <span className="text-[#7b8d94]">
                         core drop {throughput.dropped_frames} · collapsed {throughput.collapsed_mb} MB
+                    </span>
+                    <span className="text-[#7b8d94]" title={gpu.renderer}>
+                        gpu {gpu.webgl2 ? "webgl2" : gpu.renderer === "none" ? "none" : "webgl1"} · {gpu.max_contexts} ctx
                     </span>
                 </div>
             </header>
