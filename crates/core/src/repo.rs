@@ -172,21 +172,12 @@ impl RepoRegistry {
         }
     }
 
-    fn state_path(data_dir: &Path) -> PathBuf {
-        data_dir.join("repositories.json")
-    }
-
     fn load(data_dir: &Path) -> State {
-        fs::read_to_string(Self::state_path(data_dir))
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_default()
+        crate::db::load_state(data_dir, "repositories")
     }
 
     fn persist(&self, state: &State) {
-        if let Ok(raw) = serde_json::to_string_pretty(state) {
-            let _ = fs::write(Self::state_path(&self.data_dir), raw);
-        }
+        crate::db::save_state(&self.data_dir, "repositories", state);
     }
 
     fn worktree_root(&self, repository_id: &str) -> PathBuf {

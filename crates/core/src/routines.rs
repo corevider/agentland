@@ -72,10 +72,7 @@ impl Routines {
     pub fn new(data_dir: PathBuf) -> Self {
         let _ = fs::create_dir_all(&data_dir);
         let data_dir = fs::canonicalize(&data_dir).unwrap_or(data_dir);
-        let state = fs::read_to_string(data_dir.join("routines.json"))
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_default();
+        let state = crate::db::load_state(&data_dir, "routines");
 
         Self {
             state: Mutex::new(state),
@@ -84,9 +81,7 @@ impl Routines {
     }
 
     fn persist(&self, state: &State) {
-        if let Ok(raw) = serde_json::to_string_pretty(state) {
-            let _ = fs::write(self.data_dir.join("routines.json"), raw);
-        }
+        crate::db::save_state(&self.data_dir, "routines", state);
     }
 
     pub fn list(&self) -> Vec<Routine> {

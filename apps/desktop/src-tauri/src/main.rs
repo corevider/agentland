@@ -99,6 +99,7 @@ fn main() {
             "http://tauri.localhost".into(),
             "https://tauri.localhost".into(),
         ],
+        data_dir: ServerConfig::data_dir_from_env(),
     };
 
     tauri::Builder::default()

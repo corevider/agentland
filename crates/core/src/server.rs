@@ -37,6 +37,15 @@ pub struct ServerConfig {
     pub token: String,
     pub allowed_hosts: Vec<String>,
     pub allowed_origins: Vec<String>,
+    pub data_dir: PathBuf,
+}
+
+impl ServerConfig {
+    pub fn data_dir_from_env() -> PathBuf {
+        std::env::var("AGENTLAND_DATA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("data"))
+    }
 }
 
 #[derive(Clone)]
@@ -101,25 +110,26 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
             HeaderName::from_static("x-auth-token"),
         ]);
 
+    let data_dir = config.data_dir.clone();
     let state = AppState {
         manager,
         config: Arc::new(config),
-        metrics: Arc::new(MetricsStore::new(PathBuf::from("bench-results.jsonl"))),
-        repos: Arc::new(RepoRegistry::new(PathBuf::from("data"))),
+        metrics: Arc::new(MetricsStore::new(data_dir.join("bench-results.jsonl"))),
+        repos: Arc::new(RepoRegistry::new(data_dir.clone())),
         services: ServiceRegistry::new(manager_for_services),
         crew: {
-            let crew = Crew::new(manager_for_crew, PathBuf::from("data"));
+            let crew = Crew::new(manager_for_crew, data_dir.clone());
             crew.set_endpoint(port_for_crew, token_for_crew);
             crew
         },
-        board: Arc::new(Board::new(PathBuf::from("data"))),
+        board: Arc::new(Board::new(data_dir.clone())),
         dispatch: Arc::new(parking_lot::Mutex::new(DispatchState::default())),
-        memories: Arc::new(MemoryStore::new(PathBuf::from("data"))),
-        mail: Arc::new(Mailbox::new(PathBuf::from("data"))),
-        routines: Arc::new(Routines::new(PathBuf::from("data"))),
-        gateway: Arc::new(Gateway::new(PathBuf::from("data"))),
-        approvals: Arc::new(Approvals::new(PathBuf::from("data"))),
-        tokens: Arc::new(TokenStore::new(token_for_store, PathBuf::from("data"))),
+        memories: Arc::new(MemoryStore::new(data_dir.clone())),
+        mail: Arc::new(Mailbox::new(data_dir.clone())),
+        routines: Arc::new(Routines::new(data_dir.clone())),
+        gateway: Arc::new(Gateway::new(data_dir.clone())),
+        approvals: Arc::new(Approvals::new(data_dir.clone())),
+        tokens: Arc::new(TokenStore::new(token_for_store, data_dir.clone())),
         ui_commands: Arc::new(parking_lot::Mutex::new(Vec::new())),
     };
 
@@ -476,7 +486,10 @@ async fn add_repo(
     Json(body): Json<AddRepoBody>,
 ) -> Result<Json<Repository>, ApiError> {
     if let Some(url) = body.url {
-        let into = PathBuf::from(body.into.unwrap_or_else(|| "data/clones".to_owned()));
+        let into = body
+            .into
+            .map(PathBuf::from)
+            .unwrap_or_else(|| state.config.data_dir.join("clones"));
         return Ok(Json(state.repos.clone_repository(&url, &into)?));
     }
 

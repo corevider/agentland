@@ -6,3 +6,5 @@ dist/
 node_modules/
 sessions/
 target/
+data/agentland.db*
+data/*.json.imported

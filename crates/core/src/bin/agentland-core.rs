@@ -55,6 +55,7 @@ async fn main() -> anyhow::Result<()> {
             token,
             allowed_hosts,
             allowed_origins,
+            data_dir: ServerConfig::data_dir_from_env(),
         },
     )
     .await

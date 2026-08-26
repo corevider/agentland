@@ -99,10 +99,7 @@ impl Gateway {
     pub fn new(data_dir: PathBuf) -> Self {
         let _ = fs::create_dir_all(&data_dir);
         let data_dir = fs::canonicalize(&data_dir).unwrap_or(data_dir);
-        let state = fs::read_to_string(data_dir.join("integrations.json"))
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_default();
+        let state = crate::db::load_state(&data_dir, "integrations");
 
         Self {
             state: Mutex::new(state),
@@ -112,9 +109,7 @@ impl Gateway {
     }
 
     fn persist(&self, state: &State) {
-        if let Ok(raw) = serde_json::to_string_pretty(state) {
-            let _ = fs::write(self.data_dir.join("integrations.json"), raw);
-        }
+        crate::db::save_state(&self.data_dir, "integrations", state);
     }
 
     pub fn list(&self) -> Vec<Integration> {
