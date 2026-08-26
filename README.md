@@ -5,7 +5,7 @@ real git worktrees — each agent with its own branch, its own running dev serve
 the diff.
 
 
-Status: **M3.5 in progress.** M0 passed and Tauri is confirmed by measurement; M1 shipped worktrees, ports and per-worktree dev servers; M2 hires agents and runs their engines; the board now carries a card from assignment to a diff.
+Status: **v0.1 builds.** M0 passed and Tauri is confirmed by measurement; M1 shipped worktrees, ports and per-worktree dev servers; M2 hires agents and runs their engines; the board now carries a card from assignment to a diff.
 
 ## Why M0 comes first
 
@@ -304,3 +304,54 @@ pane, and the field exists here — but it stays `null` until a parser is verifi
 engine session, because a meter that disagrees with the engine's own `/status` is worse than no
 meter. Claude Code reports context inside a redrawing TUI; guessing at that with a regex would
 produce a number that looks authoritative and is wrong.
+
+
+## M4 — v0.1
+
+`npm run tauri build` produces both Linux bundles:
+
+| Artefact | Size |   |
+| --- | --- | --- |
+| `Agentland_0.0.1_amd64.deb` | **4.2 MB** | — |
+| `Agentland_0.0.1_amd64.AppImage` | **80 MB** | the whole runtime, in one file |
+| `agentland-desktop` binary | 11 MB | — |
+
+The `.deb` carries `Depends: libwebkit2gtk-4.1-0, libgtk-3-0`, generated into the package metadata,
+which is the promise made earlier in this file: users install nothing by hand.
+
+### Container mode
+
+```bash
+./scripts/container.sh
+```
+
+Builds an image with the core and the interface, runs it as uid 1000 with `cap_drop: ALL` and
+`no-new-privileges`, publishes the port on loopback only, and mounts nothing but the projects
+directory you name. The core serves the interface itself, so there is one process and one port.
+
+Verified inside the container:
+
+```
+UI without a token        200   (the app bundle is not secret)
+data route without token  401
+data route with token     200
+forged Host header        403
+```
+
+Only the bundle paths — `/`, `/index.html`, `/assets/*`, `/favicon.ico` — skip the token. Every route
+that touches a repository, a session or an agent still requires it, and the Host allowlist applies to
+all of them.
+
+### Updates
+
+The updater ships **off**. It refuses to check without both a configured endpoint
+(`AGENTLAND_UPDATER_ENDPOINTS`) and a public key in `tauri.conf.json`, so an unsigned or
+unverifiable update cannot install — it is refused rather than warned about.
+
+```bash
+./scripts/release/generate-updater-key.sh    # writes the private key outside the repository
+```
+
+CI (`.github/workflows/ci.yml`) checks that `Cargo.toml` and `tauri.conf.json` agree on the version,
+runs the Rust tests and the interface build, then bundles for Linux and macOS with the signing key
+read from repository secrets.
