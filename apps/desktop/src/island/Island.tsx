@@ -76,11 +76,15 @@ function Station({
     position,
     rotation,
     highlighted,
+    selected,
+    on_select,
 }: {
     agent: Agent;
     position: [number, number, number];
     rotation: number;
     highlighted: boolean;
+    selected: boolean;
+    on_select: (id: string) => void;
 }) {
     const shape = ROLE_SHAPE[agent.role] ?? "hut";
     const presence = agent.presence ?? "idle";
@@ -357,6 +361,8 @@ interface Props {
     highlighted: string | null;
     paused: boolean;
     shots: Array<{ seq: number; agent_id: string }>;
+    selected: string | null;
+    on_select: (id: string) => void;
     on_shot_done: (seq: number) => void;
     on_scene: (scene: THREE.Scene, camera: THREE.Camera) => void;
 }
@@ -368,6 +374,8 @@ export function Island({
     highlighted,
     paused,
     shots,
+    selected,
+    on_select,
     on_shot_done,
     on_scene,
 }: Props) {
@@ -429,6 +437,8 @@ export function Island({
                     position={[placements[index].x, ground, placements[index].z]}
                     rotation={placements[index].rotation}
                     highlighted={highlighted === agent.id}
+                    selected={selected === agent.id}
+                    on_select={on_select}
                 />
             ))}
         </Canvas>

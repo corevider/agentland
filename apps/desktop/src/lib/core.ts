@@ -438,3 +438,27 @@ export function dispatch_task(id: string): Promise<DispatchReport> {
 export function take_ui_commands(): Promise<string[]> {
     return request<string[]>("/ui/commands");
 }
+
+export function read_log(session_id: string, bytes = 2400): Promise<string> {
+    return request<string>(`/sessions/${session_id}/log?bytes=${bytes}`);
+}
+
+export function answer_approval(id: string, approved: boolean, note?: string): Promise<Approval> {
+    return request<Approval>(`/approvals/${id}`, {
+        method: "POST",
+        body: JSON.stringify({ approved, note }),
+    });
+}
+
+export interface Approval {
+    id: string;
+    summary: string;
+    detail: string;
+    requested_by: string;
+    verdict: "pending" | "approved" | "rejected";
+    answered_note: string | null;
+}
+
+export function list_approvals(): Promise<Approval[]> {
+    return request<Approval[]>("/approvals");
+}

@@ -402,7 +402,7 @@ export default function App() {
                             </div>
                         }
                     >
-                        <IslandPanel active={view === "island"} />
+                        <IslandPanel active={view === "island"} on_open_session={open_session} />
                     </Suspense>
                 </div>
             ) : null}

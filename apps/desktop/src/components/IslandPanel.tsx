@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 
+import { AgentSheet } from "@/components/AgentSheet";
 import { Island } from "@/island/Island";
 import { tier_for } from "@/island/geometry";
 import {
@@ -19,9 +20,10 @@ import { is_tauri, take_ui_commands } from "@/lib/core";
 
 interface Props {
     active: boolean;
+    on_open_session: (session_id: string) => void;
 }
 
-export function IslandPanel({ active }: Props) {
+export function IslandPanel({ active, on_open_session }: Props) {
     const [agents, set_agents] = useState<Agent[]>([]);
     const [tasks, set_tasks] = useState<Task[]>([]);
     const [hovered, set_hovered] = useState<string | null>(null);
@@ -29,6 +31,8 @@ export function IslandPanel({ active }: Props) {
     const [webgl] = useState(() => probe_gpu(1).renderer !== "none");
     const [dispatch, set_dispatch] = useState<DispatchState | null>(null);
     const [shots, set_shots] = useState<Array<{ seq: number; agent_id: string }>>([]);
+    const [selected, set_selected] = useState<string | null>(null);
+    const drag_origin = useRef<{ x: number; y: number } | null>(null);
     const seen_seq = useRef(0);
     const container_ref = useRef<HTMLDivElement>(null);
     const scene_ref = useRef<{ scene: THREE.Scene; camera: THREE.Camera } | null>(null);
@@ -145,6 +149,7 @@ export function IslandPanel({ active }: Props) {
     }, [capture]);
 
     const tier = tier_for(agents.length);
+    const selected_agent = agents.find((agent) => agent.id === selected) ?? null;
 
     return (
         <div className="flex min-h-0 flex-1">
@@ -204,6 +209,16 @@ export function IslandPanel({ active }: Props) {
 
             <div
                 ref={container_ref}
+                onPointerDown={(event) => {
+                    drag_origin.current = { x: event.clientX, y: event.clientY };
+                }}
+                onPointerUpCapture={(event) => {
+                    const origin = drag_origin.current;
+                    drag_origin.current = null;
+                    if (origin && Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 6) {
+                        event.stopPropagation();
+                    }
+                }}
                 className="relative min-h-0 flex-1"
                 onDragOver={(event) => {
                     event.preventDefault();
@@ -246,6 +261,8 @@ export function IslandPanel({ active }: Props) {
                         highlighted={hovered}
                         paused={dispatch?.paused ?? false}
                         shots={shots}
+                        selected={selected}
+                        on_select={(id) => set_selected(id)}
                         on_shot_done={(seq) =>
                             set_shots((current) => current.filter((shot) => shot.seq !== seq))
                         }
@@ -284,6 +301,18 @@ export function IslandPanel({ active }: Props) {
                     </div>
                 ) : null}
             </div>
+
+            {selected_agent ? (
+                <AgentSheet
+                    agent={selected_agent}
+                    on_close={() => set_selected(null)}
+                    on_open_pane={(session_id) => {
+                        set_selected(null);
+                        on_open_session(session_id);
+                    }}
+                    on_changed={() => void refresh()}
+                />
+            ) : null}
         </div>
     );
 }

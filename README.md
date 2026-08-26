@@ -238,29 +238,110 @@ appears in the review with its patch → commit → the review switches to the c
 commit listed.
 
 
-## M3.5 — the island
+## The island
 
-The app opens on a low-poly island built from primitives, not model files: terraces, palms, a jetty
-and a lighthouse, all generated from the roster. **Island form is a pure function of the crew** — no
-progression state to save or lose. One to three agents make a sandbar; four to six a beach and palm
-grove; seven to ten a forest and ridge; eleven or more a settlement with a harbour and the lighthouse
-that will be X's post.
+![The island at dusk, four humanoid agents on their platforms](docs/island.png)
 
-Each agent occupies a station whose *shape* carries its role — a workbench for an implementer, a
-watchtower for a reviewer, an antenna for a researcher, a crane for ops — and a lamp whose colour
-carries its state. A working agent's chimney smokes; nothing else animates, because **nothing on the
-island moves unless a real process is doing something**.
+The app opens here. The island is built from primitives — no model files, no asset pipeline — and its
+**form is a pure function of the crew**, so there is no progression state to save or lose. One to
+three agents make a sandbar; four to six a beach and palm grove; seven to ten a forest and ridge;
+eleven or more a settlement with a harbour.
 
-**Cards are dropped onto stations.** The unassigned column sits on the left; dragging a card over the
-island raycasts through the scene to find the station under the pointer, highlights it, and on drop
-assigns the task — the same call the board makes, so the agent starts with the card as its brief.
+Each agent is a low-poly humanoid: panelled body, dark visor, and a **bulb above its head** carrying
+its state. The tool beside it carries its role — a workbench for an implementer, a watchtower for a
+reviewer, an antenna for a researcher, a crane for ops.
 
-**The island yields to the terminals.** The scene renders on demand rather than in a loop: 30 fps
-while it is the active view, 5 fps in the background, and nothing at all while the window is hidden.
-Its bundle is code-split, so the 900 KB of three.js loads when the island is opened rather than at
-startup. If a webview grants no WebGL context, the island degrades to a list carrying the same
-states instead of a blank canvas.
+### Colour means one thing each
 
+| Bulb | Meaning | The signal behind it |
+| --- | --- | --- |
+| 🟢 green | finished | its process exited after a run |
+| 🟡 yellow | working | output arrived in the last ninety seconds |
+| 🔴 red | **needs you** | it asked for approval, or it has been silent at a prompt |
+| ⚪ grey | idle | never started |
+
+Presence is computed from session statistics and the approval queue, never stored, and the reason
+travels with it — the interface can always say *why* a light is red.
+
+**Nothing moves unless a real process is doing something.** A working agent swings its arms; an agent
+that needs you **raises its hand and waves**; a finished one stands still. That rule is what keeps the
+island a status display rather than a screensaver.
+
+### Clicking a robot opens it
+
+A click on any agent opens a sheet beside the island: what it is, what state it is in and *why*, any
+approval it is waiting on — answerable right there — a box that turns a sentence into a card and
+hands it to that agent, buttons to start, resume, stop or open its terminal, and the last fourteen
+lines it actually said, with the escape codes stripped.
+
+Dragging to orbit does not select: a pointer that travelled more than six pixels is treated as a
+drag, not a click.
+
+### Cards are thrown, not filed
+
+Dragging a card over the island raycasts to the station under the pointer and assigns on drop — the
+same call the board makes. Drop it on the lighthouse instead and **X** takes it: the core records the
+handoff as an event, and a lit shell arcs from the lighthouse to the chosen agent and flashes on
+landing. The decision is visible, not just its result.
+
+### Two things computed rather than guessed
+
+The sky is a shader that colours by `normalize(worldPosition).y`, so the sunset band sits exactly on
+the horizon from any camera angle. It replaced a canvas gradient on a sphere that took three failed
+attempts, because the mapping from texture rows to world height was assumed rather than derived.
+
+The raised hand failed the same way: rotating the arm about X lifted it *behind* the body, where the
+camera never saw it. Rotating about Z sends the arm's `-Y` axis to `(sin θ, -cos θ)`, so 2.5 radians
+lifts it up and outward.
+
+Placement follows the same rule. Stations keep even spacing and the whole ring rotates to the offset
+with the most clearance from the lighthouse and the jetty; palms are rejected within 1.15 units of
+anything already placed; everything stands on the terrain height computed for its own distance from
+the centre, rather than a fixed y that buried the robots' feet.
+
+### It yields to the terminals
+
+The scene renders on demand rather than in a loop: 30 fps while it is the active view, 5 fps in the
+background, nothing while the window is hidden. Its bundle is code-split, so three.js loads when the
+island opens rather than at startup. Without a WebGL context the island degrades to a list carrying
+the same states, never a blank canvas.
+
+**Capturing it:** GNOME refuses external screenshot calls on Wayland, so the app takes its own — the
+context menu's *Capture the island*, or `POST /ui/commands {"name":"capture-island"}`, writes a PNG
+from the canvas.
+
+## The look
+
+Warm dusk on the water, chosen against one constraint: people stare at this for hours next to a
+terminal, so the summer feeling lives in colour and texture, never in contrast.
+
+| Token | Where it lives |
+| --- | --- |
+| `lagoon-deep` · `lagoon` · `shallow` | grounds and surfaces |
+| `reef` · `foam` | borders |
+| `linen` · `driftwood` · `shell` · `shade` | text, four steps of it |
+| `turquoise` | anything interactive |
+| `sun` · `coral` · `palm` | working · needs you · finished |
+| `teak` | wood on the island |
+
+No hex codes remain in the components; the eight panels read from these tokens. Three typefaces do
+three jobs: **Fraunces** for display, **Figtree** for the interface, **IBM Plex Mono** for data and
+terminals — the terminal keeps its own typographic world rather than being dressed up as chat.
+
+Fonts ship inside the bundle. The security section says nothing loads from a CDN, and a design
+change is not a reason to break it.
+
+### Right-click is ours
+
+The webview's reload-and-inspect menu is suppressed and replaced with the app's own: the five views,
+settings, capture, reload — and developer tools only in dev builds. The hook is context-aware, so a
+robot or a card can carry its own commands later.
+
+### Views stay mounted
+
+Switching tabs used to unmount the previous view, which meant rebuilding the whole WebGL scene on
+every visit to the island. Views are now hidden rather than destroyed, and each pauses its own
+polling while hidden.
 
 ## X — the manager
 
