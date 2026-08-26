@@ -98,8 +98,8 @@ export function BoardPanel({ active }: { active: boolean }) {
     }, []);
 
     return (
-        <div className="flex min-h-0 flex-1">
-            <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
+        <div className="flex h-full min-h-0 min-w-0 flex-1">
+            <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-3 p-4">
                 <div className="flex flex-wrap items-center gap-2">
                     <input
                         className="w-72 border border-reef bg-lagoon px-2 py-1 font-mono text-xs rounded-lg"

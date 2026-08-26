@@ -364,7 +364,7 @@ interface Props {
     selected: string | null;
     on_select: (id: string) => void;
     on_shot_done: (seq: number) => void;
-    on_scene: (scene: THREE.Scene, camera: THREE.Camera) => void;
+    on_scene: (scene: THREE.Scene, camera: THREE.Camera, invalidate: () => void) => void;
 }
 
 export function Island({
@@ -391,7 +391,7 @@ export function Island({
             shadows
             gl={{ preserveDrawingBuffer: true }}
             camera={{ position: [8, 5, 8], fov: 46 }}
-            onCreated={({ scene, camera }) => on_scene(scene, camera)}
+            onCreated={({ scene, camera, invalidate }) => on_scene(scene, camera, invalidate)}
         >
             <fog attach="fog" args={["#6f9b93", 30, 130]} />
             <ambientLight intensity={0.6} color="#bfe4e0" />

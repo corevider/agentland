@@ -16,7 +16,7 @@ import {
     type Task,
 } from "@/lib/core";
 import { probe_gpu } from "@/lib/gpu";
-import { is_tauri, take_ui_commands } from "@/lib/core";
+import { is_tauri } from "@/lib/core";
 
 interface Props {
     active: boolean;
@@ -36,6 +36,7 @@ export function IslandPanel({ active, on_open_session }: Props) {
     const seen_seq = useRef(0);
     const container_ref = useRef<HTMLDivElement>(null);
     const scene_ref = useRef<{ scene: THREE.Scene; camera: THREE.Camera } | null>(null);
+    const invalidate_ref = useRef<(() => void) | null>(null);
     const raycaster = useRef(new THREE.Raycaster());
 
     const refresh = useCallback(async () => {
@@ -102,14 +103,26 @@ export function IslandPanel({ active, on_open_session }: Props) {
         return null;
     }, []);
 
-    const capture = useCallback(async () => {
-        const canvas = container_ref.current?.querySelector("canvas");
-        if (!canvas) {
-            set_message("No island to capture.");
-            return;
-        }
+    const capture = useCallback(async (whole_window = false) => {
+        let data: string;
 
-        const data = canvas.toDataURL("image/png");
+        if (whole_window) {
+            invalidate_ref.current?.();
+            await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+            const { toPng } = await import("html-to-image");
+            data = await toPng(document.getElementById("root") as HTMLElement, {
+                pixelRatio: 1,
+                backgroundColor: "#0d1c1f",
+            });
+        } else {
+            const canvas = container_ref.current?.querySelector("canvas");
+            if (!canvas) {
+                set_message("No island to capture.");
+                return;
+            }
+            data = canvas.toDataURL("image/png");
+        }
 
         if (!is_tauri()) {
             const anchor = document.createElement("a");
@@ -121,7 +134,10 @@ export function IslandPanel({ active, on_open_session }: Props) {
 
         try {
             const { invoke } = await import("@tauri-apps/api/core");
-            const path = await invoke<string>("save_capture", { name: "island", data });
+            const path = await invoke<string>("save_capture", {
+                name: whole_window ? "window" : "island",
+                data,
+            });
             set_message(`Saved ${path}`);
         } catch (cause) {
             set_message(cause instanceof Error ? cause.message : String(cause));
@@ -129,22 +145,26 @@ export function IslandPanel({ active, on_open_session }: Props) {
     }, []);
 
     useEffect(() => {
-        const listener = () => void capture();
-        window.addEventListener("agentland:capture-island", listener);
+        const shortcut = () => void capture(false);
+        window.addEventListener("agentland:capture-island", shortcut);
 
-        const handle = window.setInterval(() => {
-            take_ui_commands()
-                .then((commands) => {
-                    if (commands.includes("capture-island")) {
-                        void capture();
-                    }
-                })
-                .catch(() => undefined);
-        }, 2000);
+        const commands = (event: Event) => {
+            const command = (event as CustomEvent<string>).detail;
+
+            if (command === "capture-island") {
+                void capture(false);
+            } else if (command === "capture-window") {
+                void capture(true);
+            } else if (command.startsWith("select-agent:")) {
+                set_selected(command.slice("select-agent:".length));
+            }
+        };
+
+        window.addEventListener("agentland:command", commands);
 
         return () => {
-            window.removeEventListener("agentland:capture-island", listener);
-            window.clearInterval(handle);
+            window.removeEventListener("agentland:capture-island", shortcut);
+            window.removeEventListener("agentland:command", commands);
         };
     }, [capture]);
 
@@ -152,13 +172,13 @@ export function IslandPanel({ active, on_open_session }: Props) {
     const selected_agent = agents.find((agent) => agent.id === selected) ?? null;
 
     return (
-        <div className="flex min-h-0 flex-1">
+        <div className="flex h-full min-h-0 min-w-0 flex-1">
             <aside className="flex w-72 shrink-0 flex-col border-r border-reef">
                 <header className="border-b border-reef px-3 py-2 font-mono text-[11px] uppercase tracking-[0.1em] text-shell">
                     Unassigned · drag onto a station
                 </header>
 
-                <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
+                <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
                     {tasks.length === 0 ? (
                         <p className="font-mono text-[11px] text-shade">
                             Nothing waiting. Cards created on the board appear here until they have an
@@ -219,7 +239,7 @@ export function IslandPanel({ active, on_open_session }: Props) {
                         event.stopPropagation();
                     }
                 }}
-                className="relative min-h-0 flex-1"
+                className="relative min-h-0 min-w-0 flex-1"
                 onDragOver={(event) => {
                     event.preventDefault();
                     set_hovered(agent_at(event));
@@ -266,8 +286,9 @@ export function IslandPanel({ active, on_open_session }: Props) {
                         on_shot_done={(seq) =>
                             set_shots((current) => current.filter((shot) => shot.seq !== seq))
                         }
-                        on_scene={(scene, camera) => {
+                        on_scene={(scene, camera, invalidate) => {
                             scene_ref.current = { scene, camera };
+                            invalidate_ref.current = invalidate;
                         }}
                     />
                 ) : (

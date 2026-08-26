@@ -125,7 +125,7 @@ export function CrewPanel({ active, on_open_session }: Props) {
     const installed = engines.filter((entry) => entry.installed);
 
     return (
-        <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-4">
+        <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-5 overflow-y-auto p-4">
             <section>
                 <h2 className="mb-2 font-mono text-xs uppercase tracking-[0.12em] text-shell">
                     Engines on this machine

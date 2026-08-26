@@ -2,6 +2,14 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 
 import { BoardPanel } from "@/components/BoardPanel";
 import { ContextMenu, useContextMenu } from "@/components/ContextMenu";
+import { Workspace } from "@/workspace/Workspace";
+import {
+    PANELS,
+    load_layout,
+    save_layout,
+    type Layout,
+    type PanelId,
+} from "@/workspace/layout";
 import { CrewPanel } from "@/components/CrewPanel";
 import { RepoPanel } from "@/components/RepoPanel";
 import { SettingsPage } from "@/components/SettingsPage";
@@ -10,6 +18,7 @@ import {
     is_tauri,
     kill_session,
     list_sessions,
+    take_ui_commands,
     report_sample,
     spawn_generator,
     spawn_shell,
@@ -87,7 +96,7 @@ export default function App() {
     const run_ref = useRef<{ id: string; started: number; panes: number; rate: number } | null>(null);
     const frame_ref = useRef({ fps: 0, worst_frame_ms: 0 });
     const [focused_id, set_focused_id] = useState<string | null>(null);
-    const [view, set_view] = useState<"island" | "panes" | "board" | "repos" | "crew">("island");
+    const [layout, set_layout_state] = useState<Layout>(() => load_layout());
     const pane_count = settings.panes;
     const rate = settings.lines_per_second;
     const [throughput, set_throughput] = useState({ mb_per_second: 0, dropped_frames: 0, collapsed_mb: 0 });
@@ -95,17 +104,54 @@ export default function App() {
     frame_ref.current = frame_stats;
     const [gpu] = useState<GpuReport>(() => probe_gpu());
     const menu = useContextMenu();
-    const [island_opened, set_island_opened] = useState(view === "island");
+
 
     useEffect(() => {
         list_sessions().then(set_sessions).catch((cause) => set_error(String(cause)));
     }, []);
 
+    const set_layout = useCallback((next: Layout) => {
+        set_layout_state(next);
+        save_layout(next);
+    }, []);
+
+    const focus_panel = useCallback(
+        (panel: PanelId) => {
+            set_layout_state((current) => {
+                if (current.left === panel || current.right === panel || current.bottom === panel) {
+                    return current;
+                }
+                const next = { ...current, right: panel };
+                save_layout(next);
+                return next;
+            });
+        },
+        [],
+    );
+
     useEffect(() => {
-        if (view === "island") {
-            set_island_opened(true);
-        }
-    }, [view]);
+        const handle = window.setInterval(() => {
+            take_ui_commands()
+                .then((commands) => {
+                    for (const command of commands) {
+                        if (command.startsWith("view:")) {
+                            const target = command.slice("view:".length);
+                            if (["island", "panes", "board", "repos", "crew"].includes(target)) {
+                                focus_panel(target as PanelId);
+                            }
+                            continue;
+                        }
+
+                        window.dispatchEvent(
+                            new CustomEvent("agentland:command", { detail: command }),
+                        );
+                    }
+                })
+                .catch(() => undefined);
+        }, 1500);
+
+        return () => window.clearInterval(handle);
+    }, []);
 
     useEffect(() => {
         const handle = window.setInterval(() => {
@@ -183,8 +229,8 @@ export default function App() {
             existing.some((entry) => entry.id === session_id) ? existing : [...existing, session],
         );
         set_focused_id(session_id);
-        set_view("panes");
-    }, []);
+        focus_panel("panes");
+    }, [focus_panel]);
 
     const clear = useCallback(async () => {
         const current = await list_sessions();
@@ -246,15 +292,15 @@ export default function App() {
     const open_window_menu = useCallback(
         (event: React.MouseEvent) => {
             menu.open(event, "Agentland", [
-                { label: "Island", hint: "view", run: () => set_view("island") },
-                { label: "Panes", hint: "view", run: () => set_view("panes") },
-                { label: "Board", hint: "view", run: () => set_view("board") },
-                { label: "Repositories", hint: "view", run: () => set_view("repos") },
-                { label: "Crew", hint: "view", run: () => set_view("crew") },
+                { label: "Island", hint: "panel", run: () => focus_panel("island") },
+                { label: "Terminals", hint: "panel", run: () => focus_panel("panes") },
+                { label: "Board", hint: "panel", run: () => focus_panel("board") },
+                { label: "Repositories", hint: "panel", run: () => focus_panel("repos") },
+                { label: "Crew", hint: "panel", run: () => focus_panel("crew") },
                 {
                     label: "Capture the island",
                     hint: "png",
-                    disabled: view !== "island",
+                    disabled: layout.left !== "island" && layout.right !== "island" && layout.bottom !== "island",
                     run: () => {
                         window.dispatchEvent(new CustomEvent("agentland:capture-island"));
                     },
@@ -284,7 +330,7 @@ export default function App() {
                     : []),
             ]);
         },
-        [menu, view],
+        [menu, layout, focus_panel],
     );
 
     return (
@@ -308,20 +354,26 @@ export default function App() {
                     Agentland
                 </span>
 
-                <div className="flex">
-                    {(["island", "panes", "board", "repos", "crew"] as const).map((choice) => (
-                        <button
-                            key={choice}
-                            className={`border px-3 py-1 font-mono text-xs ${
-                                view === choice
-                                    ? "border-turquoise text-turquoise"
-                                    : "border-reef text-shell"
-                            }`}
-                            onClick={() => set_view(choice)}
-                        >
-                            {choice}
-                        </button>
-                    ))}
+                <div className="flex gap-1">
+                    {PANELS.map((panel) => {
+                        const shown =
+                            layout.left === panel.id ||
+                            layout.right === panel.id ||
+                            layout.bottom === panel.id;
+
+                        return (
+                            <button
+                                key={panel.id}
+                                title={panel.hint}
+                                className={`rounded-lg border px-3 py-1 font-mono text-xs ${
+                                    shown ? "border-turquoise text-turquoise" : "border-reef text-shell"
+                                }`}
+                                onClick={() => focus_panel(panel.id)}
+                            >
+                                {panel.label.toLowerCase()}
+                            </button>
+                        );
+                    })}
                 </div>
 
                 <button
@@ -381,50 +433,66 @@ export default function App() {
                 </div>
             ) : null}
 
-            <div className="flex min-h-0 flex-1" hidden={view !== "repos"}>
-                <RepoPanel active={view === "repos"} />
-            </div>
+            <Workspace
+                layout={layout}
+                on_layout={set_layout}
+                render_panel={(panel: PanelId) => {
+                    if (panel === "repos") {
+                        return <RepoPanel active />;
+                    }
+                    if (panel === "crew") {
+                        return <CrewPanel active on_open_session={open_session} />;
+                    }
+                    if (panel === "board") {
+                        return <BoardPanel active />;
+                    }
+                    if (panel === "island") {
+                        return (
+                            <Suspense
+                                fallback={
+                                    <div className="flex min-h-0 flex-1 items-center justify-center font-mono text-xs text-shell">
+                                        loading the island…
+                                    </div>
+                                }
+                            >
+                                <IslandPanel active on_open_session={open_session} />
+                            </Suspense>
+                        );
+                    }
 
-            <div className="flex min-h-0 flex-1" hidden={view !== "crew"}>
-                <CrewPanel active={view === "crew"} on_open_session={open_session} />
-            </div>
-
-            <div className="flex min-h-0 flex-1" hidden={view !== "board"}>
-                <BoardPanel active={view === "board"} />
-            </div>
-
-            {island_opened ? (
-                <div className="flex min-h-0 flex-1" hidden={view !== "island"}>
-                    <Suspense
-                        fallback={
-                            <div className="flex min-h-0 flex-1 items-center justify-center font-mono text-xs text-shell">
-                                loading the island…
-                            </div>
-                        }
-                    >
-                        <IslandPanel active={view === "island"} on_open_session={open_session} />
-                    </Suspense>
-                </div>
-            ) : null}
-
-            <main
-                hidden={view !== "panes"}
-                className="grid min-h-0 flex-1 gap-2 p-2"
-                style={{
-                    gridTemplateColumns: `repeat(${grid_columns}, minmax(0, 1fr))`,
-                    gridAutoRows: "minmax(0, 1fr)",
+                    return (
+                        <main
+                            className="grid min-h-0 min-w-0 flex-1 gap-2 p-2"
+                            style={{
+                                gridTemplateColumns: `repeat(${grid_columns}, minmax(0, 1fr))`,
+                                gridAutoRows: "minmax(0, 1fr)",
+                            }}
+                        >
+                            {sessions.map((session) => (
+                                <TerminalPane
+                                    key={session.id}
+                                    session={session}
+                                    focused={
+                                        focused_id ? focused_id === session.id : session.id === sessions[0]?.id
+                                    }
+                                    on_focus={set_focused_id}
+                                    on_metrics={on_metrics}
+                                />
+                            ))}
+                        </main>
+                    );
                 }}
-            >
-                {sessions.map((session) => (
-                    <TerminalPane
-                        key={session.id}
-                        session={session}
-                        focused={focused_id ? focused_id === session.id : session.id === sessions[0]?.id}
-                        on_focus={set_focused_id}
-                        on_metrics={on_metrics}
-                    />
-                ))}
-            </main>
+                subtitle_for={(panel: PanelId) => {
+                    if (panel === "panes") {
+                        return `${sessions.length} open`;
+                    }
+                    if (panel === "island") {
+                        return `${pane_count} × ${rate.toLocaleString()} lps`;
+                    }
+                    return undefined;
+                }}
+            />
+
         </div>
     );
 }

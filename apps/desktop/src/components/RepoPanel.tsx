@@ -73,8 +73,8 @@ export function RepoPanel({ active }: { active: boolean }) {
     );
 
     return (
-        <div className="flex min-h-0 flex-1">
-            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
+        <div className="flex h-full min-h-0 min-w-0 flex-1">
+            <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
                 <div className="flex flex-wrap items-center gap-2">
                     <input
                         className="w-96 border border-reef bg-lagoon px-2 py-1 font-mono text-xs rounded-lg"
