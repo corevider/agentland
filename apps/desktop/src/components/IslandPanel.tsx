@@ -270,6 +270,8 @@ export function IslandPanel({ active, on_open_session }: Props) {
                 }}
                 onClick={(event) => {
                     const origin = drag_origin.current;
+                    drag_origin.current = null;
+
                     if (origin && Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 6) {
                         return;
                     }
@@ -279,13 +281,6 @@ export function IslandPanel({ active, on_open_session }: Props) {
                         set_selected(hit);
                     } else if (hit === "__dispatch__") {
                         set_message("That is X's lighthouse — drop a card on it to hand work over.");
-                    }
-                }}
-                onPointerUpCapture={(event) => {
-                    const origin = drag_origin.current;
-                    drag_origin.current = null;
-                    if (origin && Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 6) {
-                        event.stopPropagation();
                     }
                 }}
                 className="relative min-h-0 min-w-0 flex-1"

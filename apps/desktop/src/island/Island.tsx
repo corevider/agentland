@@ -326,28 +326,45 @@ function Orbit() {
         const down = (event: PointerEvent) => {
             current.dragging = true;
             current.x = event.clientX;
+            element.setPointerCapture?.(event.pointerId);
         };
+
         const move = (event: PointerEvent) => {
             if (!current.dragging) {
                 return;
             }
+
+            if (event.buttons === 0) {
+                current.dragging = false;
+                return;
+            }
+
             current.angle += (event.clientX - current.x) * 0.008;
             current.x = event.clientX;
             place();
         };
-        const up = () => {
+
+        const release = (event?: PointerEvent) => {
             current.dragging = false;
+            if (event && element.hasPointerCapture?.(event.pointerId)) {
+                element.releasePointerCapture(event.pointerId);
+            }
         };
 
         place();
         element.addEventListener("pointerdown", down);
+        element.addEventListener("pointerup", release);
+        element.addEventListener("pointercancel", release);
         window.addEventListener("pointermove", move);
-        window.addEventListener("pointerup", up);
+        window.addEventListener("pointerup", release);
+        window.addEventListener("blur", () => release());
 
         return () => {
             element.removeEventListener("pointerdown", down);
+            element.removeEventListener("pointerup", release);
+            element.removeEventListener("pointercancel", release);
             window.removeEventListener("pointermove", move);
-            window.removeEventListener("pointerup", up);
+            window.removeEventListener("pointerup", release);
         };
     }, [camera, gl, invalidate]);
 
