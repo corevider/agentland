@@ -1,8 +1,29 @@
 @import "tailwindcss";
 
+:root {
+    color-scheme: dark;
+}
+
 html,
 body,
 #root {
     height: 100%;
     margin: 0;
+}
+
+input,
+select,
+textarea,
+button {
+    color: #e3ebee;
+    font: inherit;
+}
+
+select option {
+    background-color: #0d1315;
+    color: #e3ebee;
+}
+
+input::placeholder {
+    color: #5d6e75;
 }
