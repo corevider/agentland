@@ -4,13 +4,14 @@ use std::sync::Arc;
 use anyhow::Result;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::bench::GeneratorSpec;
 use crate::pty::{PtyManager, PtySpawnSpec, SessionInfo};
@@ -21,6 +22,7 @@ pub struct ServerConfig {
     pub port: u16,
     pub token: String,
     pub allowed_hosts: Vec<String>,
+    pub allowed_origins: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -53,6 +55,20 @@ struct ErrorBody {
 
 pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()> {
     let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
+
+    let origins: Vec<HeaderValue> = config
+        .allowed_origins
+        .iter()
+        .filter_map(|origin| origin.parse().ok())
+        .collect();
+    let cors = CorsLayer::new()
+        .allow_origin(AllowOrigin::list(origins))
+        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
+        .allow_headers([
+            header::CONTENT_TYPE,
+            HeaderName::from_static("x-auth-token"),
+        ]);
+
     let state = AppState {
         manager,
         config: Arc::new(config),
@@ -66,6 +82,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/sessions/{id}/stream", get(stream_session))
         .route("/bench", post(spawn_generator))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
+        .layer(cors)
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

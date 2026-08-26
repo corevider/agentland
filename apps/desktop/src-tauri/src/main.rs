@@ -39,6 +39,12 @@ fn main() {
         port,
         token: endpoint.token.clone(),
         allowed_hosts: vec![format!("127.0.0.1:{port}"), format!("localhost:{port}")],
+        allowed_origins: vec![
+            "http://localhost:5273".into(),
+            "http://127.0.0.1:5273".into(),
+            "tauri://localhost".into(),
+            "http://tauri.localhost".into(),
+        ],
     };
 
     tauri::Builder::default()

@@ -70,20 +70,29 @@ press **run benchmark**, and read the HUD: fps, worst frame, MB/s, dropped frame
 
 ### Tauri window (the actual gate)
 
-Needs the WebKitGTK development libraries once:
+Needs the WebKitGTK development libraries once, on this machine only:
 
 ```bash
-sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
-```
-
-Then:
-
-```bash
+./scripts/setup-linux.sh     # installs what is missing, then the Rust toolchain if absent
 cd apps/desktop && npm run tauri dev
 ```
 
 Same benchmark, same HUD, now inside the webview that ships to users. The difference between the two
 runs is the decision.
+
+### What users install (nothing)
+
+The `-dev` packages above are build-time only. Nobody who downloads Agentland installs them:
+
+- **`.deb` / `.rpm`** — Tauri generates the runtime `Depends:` list (`libwebkit2gtk-4.1-0`,
+  `libgtk-3-0`, and friends) into the package metadata, so `apt install ./agentland.deb` pulls them
+  automatically. On a normal desktop they are already present.
+- **AppImage** — the required libraries are bundled inside the image. Download, `chmod +x`, run.
+- **macOS and Windows** — WKWebView and WebView2 ship with the OS; WebView2 has a bootstrapper for
+  the rare machine without it.
+
+CI installs the same list as `setup-linux.sh` before building, so release artifacts never depend on
+a hand-prepared machine.
 
 ## Design decisions already made
 
