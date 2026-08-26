@@ -110,6 +110,49 @@ fn tools() -> Value {
             }
         },
         {
+            "name": "crew_message",
+            "description": "Send a message to another agent by id. Refused when messaging is paused or the grant is missing.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "to": { "type": "string" },
+                    "text": { "type": "string" }
+                },
+                "required": ["to", "text"]
+            }
+        },
+        {
+            "name": "memory_propose",
+            "description": "Propose something the crew should remember. It is masked for secrets and stays unused until a human approves it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "text": { "type": "string" },
+                    "scope": { "type": "string", "enum": ["workspace", "repository", "agent"] },
+                    "scope_id": { "type": "string" }
+                },
+                "required": ["text"]
+            }
+        },
+        {
+            "name": "integration_list",
+            "description": "List connected services. Their credentials stay on the app's side and never reach you.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "integration_call",
+            "description": "Ask a connected service for data. Agentland makes the call and returns the result; you never handle the token.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "integration_id": { "type": "string" },
+                    "operation": { "type": "string" },
+                    "params": { "type": "object" }
+                },
+                "required": ["integration_id", "operation"]
+            }
+        },
+        {
             "name": "repo_review",
             "description": "Read the diff for a worktree: committed range, working tree and untracked files.",
             "inputSchema": {
@@ -152,6 +195,35 @@ fn call_tool(core: &Core, name: &str, arguments: &Value) -> Result<Value, String
         "crew_list" => core.call("GET", "/agents", None),
         "crew_delegate" => core.call("POST", &format!("/dispatch/tasks/{}", text("task_id")?), None),
         "repo_list" => core.call("GET", "/repos", None),
+        "crew_message" => core.call(
+            "POST",
+            "/mail",
+            Some(json!({
+                "from": std::env::var("AGENTLAND_AGENT").unwrap_or_else(|_| "unknown".to_owned()),
+                "to": text("to")?,
+                "text": text("text")?,
+            })),
+        ),
+        "memory_propose" => core.call(
+            "POST",
+            "/memories",
+            Some(json!({
+                "text": text("text")?,
+                "scope": arguments.get("scope").and_then(Value::as_str).unwrap_or("workspace"),
+                "scope_id": arguments.get("scope_id").and_then(Value::as_str).unwrap_or_default(),
+                "proposed_by": std::env::var("AGENTLAND_AGENT").unwrap_or_else(|_| "unknown".to_owned()),
+            })),
+        ),
+        "integration_list" => core.call("GET", "/integrations", None),
+        "integration_call" => core.call(
+            "POST",
+            "/integrations/call",
+            Some(json!({
+                "integration_id": text("integration_id")?,
+                "operation": text("operation")?,
+                "params": arguments.get("params").cloned().unwrap_or_else(|| json!({})),
+            })),
+        ),
         "repo_worktrees" => core.call(
             "GET",
             &format!("/repos/{}/worktrees", text("repository_id")?),

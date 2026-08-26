@@ -5,7 +5,7 @@ real git worktrees — each agent with its own branch, its own running dev serve
 the diff.
 
 
-Status: **M5 — agents can reach the product.** M0 passed and Tauri is confirmed by measurement; M1 shipped worktrees, ports and per-worktree dev servers; M2 hires agents and runs their engines; the board now carries a card from assignment to a diff.
+Status: **M6 — gateway, routines, mail and memory.** M0 passed and Tauri is confirmed by measurement; M1 shipped worktrees, ports and per-worktree dev servers; M2 hires agents and runs their engines; the board now carries a card from assignment to a diff.
 
 ## Why M0 comes first
 
@@ -398,3 +398,69 @@ runtime through `POST /dispatch/caps`.
 
 Stopping an agent now also reaps it — the first version killed the process without waiting, leaving
 zombies behind in a program whose whole purpose is spawning processes.
+
+
+## M6 — gateway, routines, mail, memory
+
+### Memory, gated by approval
+
+An agent proposes; a human approves; only then does it reach another agent's brief.
+
+**Secrets are masked before the text is ever stored**, not before it is displayed. Nineteen unit
+tests cover the credential shapes that actually leak — `sk-`, `ghp_`, `github_pat_`, `AKIA`,
+`xoxb-`, `glpat-`, `AIza`, JWTs, and long mixed-case tokens — plus assignments, where the variable
+name survives and the value does not:
+
+```
+proposed : Deploy icin GITHUB_TOKEN=ghp_EXAMPLE_NOT_REAL kullaniyoruz
+stored   : Deploy icin GITHUB_TOKEN=[redacted] kullaniyoruz
+```
+
+Ordinary prose is left alone — a masker that mangles normal sentences would be turned off within a
+day.
+
+### Agent mail
+
+Messages between agents, with per-agent grants and one switch that stops all of it:
+
+```
+send while running   -> msg1 delivered
+send while paused    -> {"error":"agent-to-agent messaging is paused"}
+```
+
+An inbox is delivered exactly once, and it arrives in the recipient's next brief rather than
+interrupting a running session.
+
+### Routines
+
+A named agent, a brief, an interval. The ticker creates a card, hands it to the agent, and records
+the outcome. **Two failures in a row disable the routine** instead of burning tokens nightly against
+a broken assumption; a success clears the streak. `draft_only` appends *"Prepare the work and stop
+before anything leaves this machine."*
+
+Verified from a live run: `r1 last_result="card t9 handed to Ada"`, and the agent's command line
+carried the draft-only sentence.
+
+### The gateway
+
+Credentials live in the OS keychain, or in an environment variable named after the integration when
+no keychain is available — and **never in the engine's hands**. The agent calls `integration_call`;
+Agentland makes the HTTP request and returns the result. The stored record carries service,
+environment and *where the secret lives*, never the secret. Unsupported services are refused by name.
+
+### Composing a brief
+
+All three sources meet in one place, and every start path goes through it — assignment, X's dispatch,
+and routines. The first version only wired the routine path, so an assigned agent silently got
+neither its mail nor the crew's memory:
+
+```
+ikinci inceleme · diff'i oku
+What this crew has learned: - Migration dosyalari db/migrations altinda
+Messages waiting for you: - from ada: auth dali incelemeye hazir
+```
+
+The unapproved memory — the one holding a token — is absent, which is the whole point.
+
+MCP grows to twelve tools: `crew_message`, `memory_propose`, `integration_list` and
+`integration_call` join the eight from M5.

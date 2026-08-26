@@ -19,6 +19,10 @@ use crate::bench::GeneratorSpec;
 use crate::board::{Board, Column, CreateTask, Evidence, MoveTask, Task};
 use crate::crew::{Agent, Crew, Engine, HireRequest};
 use crate::dispatch::{decide, Decision, DispatchState};
+use crate::gateway::{CallRequest, ConnectRequest, Gateway, Integration};
+use crate::mail::{MailPolicy, Mailbox, Message as MailMessage, SendMessage};
+use crate::memory::{Memory, MemoryStore, ProposeMemory, Scope};
+use crate::routines::{CreateRoutine, Routine, Routines};
 use crate::metrics::{MetricsStore, Sample};
 use crate::repo::{PullRequest, RepoRegistry, Repository, Review, Worktree, WorktreeStatus};
 use crate::services::{Service, ServiceRegistry};
@@ -43,6 +47,10 @@ struct AppState {
     crew: Arc<Crew>,
     board: Arc<Board>,
     dispatch: Arc<parking_lot::Mutex<DispatchState>>,
+    memories: Arc<MemoryStore>,
+    mail: Arc<Mailbox>,
+    routines: Arc<Routines>,
+    gateway: Arc<Gateway>,
 }
 
 #[derive(Deserialize)]
@@ -100,7 +108,13 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         },
         board: Arc::new(Board::new(PathBuf::from("data"))),
         dispatch: Arc::new(parking_lot::Mutex::new(DispatchState::default())),
+        memories: Arc::new(MemoryStore::new(PathBuf::from("data"))),
+        mail: Arc::new(Mailbox::new(PathBuf::from("data"))),
+        routines: Arc::new(Routines::new(PathBuf::from("data"))),
+        gateway: Arc::new(Gateway::new(PathBuf::from("data"))),
     };
+
+    spawn_routine_ticker(state.clone());
 
     let app = Router::new()
         .route("/sessions", get(list_sessions).post(spawn_session))
@@ -129,6 +143,17 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/dispatch", get(dispatch_status))
         .route("/dispatch/pause", post(pause_dispatch))
         .route("/dispatch/caps", post(set_caps))
+        .route("/memories", get(list_memories).post(propose_memory))
+        .route("/memories/{id}", delete(forget_memory))
+        .route("/memories/{id}/approve", post(approve_memory))
+        .route("/mail", get(list_mail).post(send_mail))
+        .route("/mail/policy", get(mail_policy).post(set_mail_policy))
+        .route("/routines", get(list_routines).post(create_routine))
+        .route("/routines/{id}", delete(delete_routine))
+        .route("/routines/{id}/enabled", post(set_routine_enabled))
+        .route("/integrations", get(list_integrations).post(connect_integration))
+        .route("/integrations/{id}", delete(disconnect_integration))
+        .route("/integrations/call", post(call_integration))
         .route("/dispatch/tasks/{id}", post(dispatch_task))
         .route("/repos/{id}/worktrees/{name}/review", get(review_worktree))
         .route("/repos/{id}/worktrees/{name}/pr", post(open_pull_request))
@@ -198,6 +223,113 @@ async fn guard(
     }
 
     next.run(request).await
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_secs())
+        .unwrap_or_default()
+}
+
+fn compose_brief(state: &AppState, agent: &Agent, base: &str) -> String {
+    let mut brief = base.trim().to_owned();
+
+    let memories = state
+        .memories
+        .approved_for(Scope::Repository, &agent.repository_id);
+    if !memories.is_empty() {
+        brief.push_str("\n\nWhat this crew has learned:");
+        for memory in memories {
+            brief.push_str(&format!("\n- {}", memory.text));
+        }
+    }
+
+    let inbox = state.mail.take_inbox(&agent.id);
+    if !inbox.is_empty() {
+        brief.push_str("\n\nMessages waiting for you:");
+        for message in inbox {
+            brief.push_str(&format!("\n- from {}: {}", message.from, message.text));
+        }
+    }
+
+    brief
+}
+
+fn start_agent_with_brief(state: &AppState, agent: &Agent, base: &str) -> Result<(), ApiError> {
+    let worktree = state
+        .repos
+        .worktrees()
+        .into_iter()
+        .find(|entry| {
+            entry.worktree.repository_id == agent.repository_id
+                && entry.worktree.name == agent.worktree
+        })
+        .ok_or_else(|| ApiError(anyhow::anyhow!("{}'s worktree is gone", agent.name)))?
+        .worktree;
+
+    let brief = compose_brief(state, agent, base);
+    state
+        .crew
+        .start(&agent.id, &worktree.path, false, Some(&brief))?;
+    Ok(())
+}
+
+fn spawn_routine_ticker(state: AppState) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+
+        loop {
+            interval.tick().await;
+            let now = now_secs();
+
+            for routine in state.routines.due(now) {
+                let agent = state
+                    .crew
+                    .list()
+                    .into_iter()
+                    .find(|entry| entry.id == routine.agent_id);
+
+                let outcome = match agent {
+                    None => Err(format!("no agent called {}", routine.agent_id)),
+                    Some(agent) => {
+                        let card = state.board.create(CreateTask {
+                            title: routine.name.clone(),
+                            body: routine.brief.clone(),
+                            repository_id: agent.repository_id.clone(),
+                        });
+
+                        match card {
+                            Err(error) => Err(error.to_string()),
+                            Ok(task) => {
+                                let mut base = routine.brief.clone();
+                                if routine.draft_only {
+                                    base.push_str(
+                                        "\n\nPrepare the work and stop before anything leaves this machine.",
+                                    );
+                                }
+
+                                match start_agent_with_brief(&state, &agent, &base) {
+                                    Ok(()) => {
+                                        let _ = state.board.record_assignment(
+                                            &task.id,
+                                            &agent.id,
+                                            &agent.worktree,
+                                            &agent.worktree,
+                                        );
+                                        Ok(format!("card {} handed to {}", task.id, agent.name))
+                                    }
+                                    Err(error) => Err(error.0.to_string()),
+                                }
+                            }
+                        }
+                    }
+                };
+
+                state.routines.record(&routine.id, now, outcome);
+            }
+        }
+    });
 }
 
 fn is_public_asset(path: &str) -> bool {
@@ -424,7 +556,7 @@ async fn assign_task(
         .ok_or_else(|| ApiError(anyhow::anyhow!("the agent's worktree is gone")))?
         .worktree;
 
-    let brief = format!("{}\n\n{}", task.title, task.body);
+    let brief = compose_brief(&state, &agent, &format!("{}\n\n{}", task.title, task.body));
     state
         .crew
         .start(&agent.id, &worktree.path, false, Some(&brief))?;
@@ -504,7 +636,7 @@ async fn dispatch_task(
                 .ok_or_else(|| ApiError(anyhow::anyhow!("{}'s worktree is gone", agent.name)))?
                 .worktree;
 
-            let brief = format!("{}\n\n{}", task.title, task.body);
+            let brief = compose_brief(&state, &agent, &format!("{}\n\n{}", task.title, task.body));
             state
                 .crew
                 .start(&agent.id, &worktree.path, false, Some(&brief))?;
@@ -594,6 +726,119 @@ struct PullRequestBody {
     body: String,
     #[serde(default)]
     task_id: Option<String>,
+}
+
+async fn list_memories(State(state): State<AppState>) -> Json<Vec<Memory>> {
+    Json(state.memories.list())
+}
+
+async fn propose_memory(
+    State(state): State<AppState>,
+    Json(request): Json<ProposeMemory>,
+) -> Result<Json<Memory>, ApiError> {
+    Ok(Json(state.memories.propose(request)?))
+}
+
+#[derive(Deserialize)]
+struct ApproveBody {
+    #[serde(default)]
+    approved: bool,
+}
+
+async fn approve_memory(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<ApproveBody>,
+) -> Result<Json<Memory>, ApiError> {
+    Ok(Json(state.memories.approve(&id, body.approved)?))
+}
+
+async fn forget_memory(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.memories.forget(&id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_mail(State(state): State<AppState>) -> Json<Vec<MailMessage>> {
+    Json(state.mail.messages())
+}
+
+async fn send_mail(
+    State(state): State<AppState>,
+    Json(request): Json<SendMessage>,
+) -> Result<Json<MailMessage>, ApiError> {
+    Ok(Json(state.mail.send(request)?))
+}
+
+async fn mail_policy(State(state): State<AppState>) -> Json<MailPolicy> {
+    Json(state.mail.policy())
+}
+
+async fn set_mail_policy(
+    State(state): State<AppState>,
+    Json(policy): Json<MailPolicy>,
+) -> Json<MailPolicy> {
+    Json(state.mail.set_policy(policy))
+}
+
+async fn list_routines(State(state): State<AppState>) -> Json<Vec<Routine>> {
+    Json(state.routines.list())
+}
+
+async fn create_routine(
+    State(state): State<AppState>,
+    Json(request): Json<CreateRoutine>,
+) -> Result<Json<Routine>, ApiError> {
+    Ok(Json(state.routines.create(request)?))
+}
+
+#[derive(Deserialize)]
+struct EnabledBody {
+    enabled: bool,
+}
+
+async fn set_routine_enabled(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<EnabledBody>,
+) -> Result<Json<Routine>, ApiError> {
+    Ok(Json(state.routines.set_enabled(&id, body.enabled)?))
+}
+
+async fn delete_routine(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.routines.delete(&id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_integrations(State(state): State<AppState>) -> Json<Vec<Integration>> {
+    Json(state.gateway.list())
+}
+
+async fn connect_integration(
+    State(state): State<AppState>,
+    Json(request): Json<ConnectRequest>,
+) -> Result<Json<Integration>, ApiError> {
+    Ok(Json(state.gateway.connect(request)?))
+}
+
+async fn disconnect_integration(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.gateway.disconnect(&id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn call_integration(
+    State(state): State<AppState>,
+    Json(request): Json<CallRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(state.gateway.call(request).await?))
 }
 
 async fn list_engines() -> Json<Vec<Engine>> {
