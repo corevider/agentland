@@ -29,6 +29,7 @@ async fn main() -> anyhow::Result<()> {
                 "http://127.0.0.1:5273".into(),
                 "tauri://localhost".into(),
                 "http://tauri.localhost".into(),
+            "https://tauri.localhost".into(),
             ],
         },
     )

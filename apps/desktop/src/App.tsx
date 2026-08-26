@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { TerminalPane, type PaneMetrics } from "@/components/TerminalPane";
 import {
+    is_tauri,
     kill_session,
     list_sessions,
     report_sample,
@@ -15,8 +16,8 @@ const RATE_CHOICES = [1_000, 5_000, 10_000, 20_000];
 
 function detect_surface(): string {
     const agent = navigator.userAgent;
-    if ((window as unknown as { __TAURI__?: unknown }).__TAURI__) {
-        return "tauri-webview";
+    if (is_tauri()) {
+        return agent.includes("WebKit") && !agent.includes("Chrome") ? "tauri-webkitgtk" : "tauri-webview";
     }
     if (agent.includes("Firefox")) {
         return "firefox";

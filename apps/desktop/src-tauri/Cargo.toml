@@ -5,12 +5,12 @@ edition.workspace = true
 license.workspace = true
 
 [build-dependencies]
-tauri-build = "2"
+tauri-build = { version = "2", features = [] }
 
 [dependencies]
 agentland-core = { path = "../../../crates/core" }
 anyhow.workspace = true
 serde.workspace = true
-tauri = "2"
+tauri = { version = "2", features = [] }
 tokio.workspace = true
 tracing-subscriber = "0.3"

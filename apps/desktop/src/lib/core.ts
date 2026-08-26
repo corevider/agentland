@@ -21,13 +21,17 @@ export interface GeneratorSpec {
 
 let endpoint: CoreEndpoint | null = null;
 
+export function is_tauri(): boolean {
+    const scope = window as unknown as Record<string, unknown>;
+    return "__TAURI_INTERNALS__" in scope || "__TAURI__" in scope;
+}
+
 export async function resolve_endpoint(): Promise<CoreEndpoint> {
     if (endpoint) {
         return endpoint;
     }
 
-    const tauri = (window as unknown as { __TAURI__?: unknown }).__TAURI__;
-    if (tauri) {
+    if (is_tauri()) {
         const { invoke } = await import("@tauri-apps/api/core");
         endpoint = await invoke<CoreEndpoint>("core_endpoint");
         return endpoint;
