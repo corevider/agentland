@@ -79,6 +79,7 @@ fn engine(id: &str) -> Option<Engine> {
 pub enum AgentState {
     Idle,
     Working,
+    Done,
     Offline,
 }
 
@@ -151,12 +152,38 @@ impl Crew {
             .and_then(|raw| serde_json::from_str(&raw).ok())
             .unwrap_or_default();
 
-        Arc::new(Self {
+        let crew = Arc::new(Self {
             manager,
             state: Mutex::new(state),
             data_dir,
             endpoint: Mutex::new(None),
-        })
+        });
+
+        crew.reconcile();
+        crew
+    }
+
+    fn reconcile(&self) {
+        let mut state = self.state.lock();
+        let mut changed = false;
+
+        for agent in state.agents.values_mut() {
+            let alive = agent
+                .session_id
+                .as_ref()
+                .map(|id| self.manager.get(id).is_some())
+                .unwrap_or(false);
+
+            if !alive && (agent.session_id.is_some() || agent.state == AgentState::Working) {
+                agent.session_id = None;
+                agent.state = AgentState::Done;
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.persist(&state);
+        }
     }
 
     pub fn set_endpoint(&self, port: u16, token: String) {

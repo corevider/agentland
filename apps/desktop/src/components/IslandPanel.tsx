@@ -200,7 +200,7 @@ export function IslandPanel({ active }: Props) {
                                     key={agent.id}
                                     className="border border-[#26343a] px-2 py-1 font-mono text-[11px]"
                                 >
-                                    {agent.name} · {agent.role} · {agent.state}
+                                    {agent.name} · {agent.role} · {agent.presence}
                                 </span>
                             ))}
                         </div>

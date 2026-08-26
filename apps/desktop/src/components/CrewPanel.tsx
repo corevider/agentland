@@ -18,10 +18,18 @@ import {
 
 const ROLES = ["implementer", "reviewer", "tester", "researcher", "ops"];
 
-const STATE_COLOR: Record<Agent["state"], string> = {
-    working: "text-[#5aa87c]",
-    idle: "text-[#c99a2e]",
-    offline: "text-[#7b8d94]",
+const PRESENCE_COLOR: Record<string, string> = {
+    done: "text-[#5aa87c]",
+    working: "text-[#c99a2e]",
+    attention: "text-[#d46969]",
+    idle: "text-[#7b8d94]",
+};
+
+const PRESENCE_LABEL: Record<string, string> = {
+    done: "finished",
+    working: "working",
+    attention: "needs you",
+    idle: "idle",
 };
 
 interface Props {
@@ -235,8 +243,11 @@ export function CrewPanel({ on_open_session }: Props) {
                         <span className="text-[#7b8d94]">
                             {agent.repository_id}/{agent.worktree}
                         </span>
-                        <span className={STATE_COLOR[agent.state]}>
-                            {agent.state}
+                        <span
+                            className={PRESENCE_COLOR[agent.presence] ?? PRESENCE_COLOR.idle}
+                            title={agent.reason}
+                        >
+                            {PRESENCE_LABEL[agent.presence] ?? agent.presence}
                             {activity[agent.id]
                                 ? ` ${format_elapsed(now - activity[agent.id].last_output_at)}`
                                 : ""}

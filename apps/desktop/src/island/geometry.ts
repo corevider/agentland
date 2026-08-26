@@ -66,8 +66,16 @@ export const ROLE_SHAPE: Record<string, "workbench" | "watchtower" | "radio" | "
     ops: "crane",
 };
 
-export const STATE_COLOR: Record<string, string> = {
-    working: "#5aa87c",
-    idle: "#c99a2e",
-    offline: "#46565d",
+export const PRESENCE_COLOR: Record<string, string> = {
+    done: "#5aa87c",
+    working: "#c99a2e",
+    attention: "#d46969",
+    idle: "#46565d",
+};
+
+export const PRESENCE_LABEL: Record<string, string> = {
+    done: "finished",
+    working: "working",
+    attention: "needs you",
+    idle: "idle",
 };

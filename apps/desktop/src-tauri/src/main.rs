@@ -50,7 +50,7 @@ fn main() {
     let endpoint = CoreEndpoint {
         host: "127.0.0.1".into(),
         port,
-        token: generate_token(),
+        token: std::env::var("AGENTLAND_TOKEN").unwrap_or_else(|_| generate_token()),
     };
 
     let config = ServerConfig {

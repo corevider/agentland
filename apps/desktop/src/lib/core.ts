@@ -265,7 +265,8 @@ export interface Engine {
     version: string | null;
 }
 
-export type AgentState = "idle" | "working" | "offline";
+export type AgentState = "idle" | "working" | "done" | "offline";
+export type Presence = "idle" | "working" | "done" | "attention";
 
 export interface Agent {
     id: string;
@@ -276,6 +277,9 @@ export interface Agent {
     worktree: string;
     session_id: string | null;
     state: AgentState;
+    presence: Presence;
+    since: number;
+    reason: string;
 }
 
 export interface HireRequest {

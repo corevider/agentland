@@ -939,8 +939,88 @@ async fn list_engines() -> Json<Vec<Engine>> {
     Json(crate::crew::engines())
 }
 
-async fn list_agents(State(state): State<AppState>) -> Json<Vec<Agent>> {
-    Json(state.crew.list())
+const SILENCE_BEFORE_ATTENTION: u64 = 90;
+
+#[derive(Serialize)]
+struct AgentPresence {
+    #[serde(flatten)]
+    agent: Agent,
+    presence: &'static str,
+    since: u64,
+    reason: String,
+}
+
+fn presence_of(state: &AppState, agent: &Agent, now: u64) -> AgentPresence {
+    let waiting_on_human = state
+        .approvals
+        .list()
+        .into_iter()
+        .any(|approval| {
+            approval.requested_by == agent.id
+                && approval.verdict == crate::approvals::Verdict::Pending
+        });
+
+    if waiting_on_human {
+        return AgentPresence {
+            agent: agent.clone(),
+            presence: "attention",
+            since: 0,
+            reason: "asked for approval".to_owned(),
+        };
+    }
+
+    let session = agent
+        .session_id
+        .as_ref()
+        .and_then(|id| state.manager.get(id));
+
+    match session {
+        Some(session) if session.alive() => {
+            let stats = session.stats();
+            let silence = now.saturating_sub(stats.last_output_at);
+
+            if silence >= SILENCE_BEFORE_ATTENTION {
+                AgentPresence {
+                    agent: agent.clone(),
+                    presence: "attention",
+                    since: silence,
+                    reason: "silent at a prompt".to_owned(),
+                }
+            } else {
+                AgentPresence {
+                    agent: agent.clone(),
+                    presence: "working",
+                    since: silence,
+                    reason: "producing output".to_owned(),
+                }
+            }
+        }
+        _ => match agent.state {
+            crate::crew::AgentState::Done => AgentPresence {
+                agent: agent.clone(),
+                presence: "done",
+                since: 0,
+                reason: "finished its run".to_owned(),
+            },
+            _ => AgentPresence {
+                agent: agent.clone(),
+                presence: "idle",
+                since: 0,
+                reason: "not started".to_owned(),
+            },
+        },
+    }
+}
+
+async fn list_agents(State(state): State<AppState>) -> Json<Vec<AgentPresence>> {
+    let now = now_secs();
+    let agents = state
+        .crew
+        .list()
+        .iter()
+        .map(|agent| presence_of(&state, agent, now))
+        .collect();
+    Json(agents)
 }
 
 async fn hire_agent(

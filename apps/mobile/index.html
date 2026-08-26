@@ -120,9 +120,10 @@
                 font-family: ui-monospace, monospace;
             }
 
-            .working { color: var(--good); }
-            .idle { color: var(--warn); }
-            .offline { color: var(--muted); }
+            .done { color: var(--good); }
+            .working { color: var(--warn); }
+            .attention { color: var(--bad); }
+            .idle { color: var(--muted); }
 
             .empty {
                 color: var(--muted);
@@ -253,7 +254,7 @@
                         <div class="card">
                             <div class="row">
                                 <strong>${escape(agent.name)}</strong>
-                                <span class="state ${agent.state}">${agent.state}</span>
+                                <span class="state ${agent.presence}">${escape(agent.presence === "attention" ? "needs you" : agent.presence)}</span>
                             </div>
                             <div class="detail">${escape(agent.role)} · ${escape(agent.engine_id)} · ${escape(
                                 agent.repository_id,

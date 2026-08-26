@@ -3,9 +3,10 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 
 import type { Agent } from "@/lib/core";
+import { Robot } from "@/island/Robot";
 import {
+    PRESENCE_COLOR,
     ROLE_SHAPE,
-    STATE_COLOR,
     seeded_random,
     station_placements,
     tier_for,
@@ -86,64 +87,55 @@ function Station({
     highlighted: boolean;
 }) {
     const shape = ROLE_SHAPE[agent.role] ?? "hut";
-    const color = STATE_COLOR[agent.state] ?? STATE_COLOR.offline;
-    const smoke = useRef<THREE.Mesh>(null);
-
-    useFrame(({ clock }) => {
-        if (smoke.current && agent.state === "working") {
-            const time = clock.getElapsedTime();
-            smoke.current.position.y = 0.9 + ((time * 0.4) % 0.7);
-            const material = smoke.current.material as THREE.MeshLambertMaterial;
-            material.opacity = 0.5 - ((time * 0.4) % 0.7) * 0.6;
-        }
-    });
+    const presence = agent.presence ?? "idle";
+    const color = PRESENCE_COLOR[presence] ?? PRESENCE_COLOR.idle;
 
     return (
         <group position={position} rotation={[0, rotation, 0]} userData={{ agent_id: agent.id }}>
-            <mesh position={[0, 0.25, 0]} castShadow userData={{ agent_id: agent.id }}>
-                <boxGeometry args={[0.62, 0.5, 0.62]} />
-                <meshLambertMaterial color={highlighted ? "#45bcc4" : "#8a6a4a"} flatShading />
+            <mesh position={[0, 0.02, 0]} receiveShadow userData={{ agent_id: agent.id }}>
+                <cylinderGeometry args={[0.44, 0.48, 0.06, 8]} />
+                <meshLambertMaterial color={highlighted ? "#1d5f66" : "#6b6257"} flatShading />
             </mesh>
 
+            <Robot
+                agent_id={agent.id}
+                presence={presence}
+                accent={color}
+                highlighted={highlighted}
+            />
+
             {shape === "watchtower" ? (
-                <mesh position={[0, 0.95, 0]} castShadow userData={{ agent_id: agent.id }}>
-                    <cylinderGeometry args={[0.16, 0.22, 0.9, 6]} />
+                <mesh position={[0.52, 0.5, -0.1]} castShadow userData={{ agent_id: agent.id }}>
+                    <cylinderGeometry args={[0.1, 0.14, 1.0, 6]} />
                     <meshLambertMaterial color="#9a7d5c" flatShading />
                 </mesh>
             ) : null}
 
             {shape === "crane" ? (
-                <mesh position={[0.3, 0.85, 0]} rotation={[0, 0, -0.5]} castShadow userData={{ agent_id: agent.id }}>
-                    <boxGeometry args={[0.9, 0.08, 0.08]} />
+                <mesh position={[0.55, 0.7, 0]} rotation={[0, 0, -0.5]} castShadow userData={{ agent_id: agent.id }}>
+                    <boxGeometry args={[0.8, 0.07, 0.07]} />
                     <meshLambertMaterial color="#b4541e" flatShading />
                 </mesh>
             ) : null}
 
             {shape === "radio" ? (
-                <mesh position={[0, 1.0, 0]} castShadow userData={{ agent_id: agent.id }}>
-                    <coneGeometry args={[0.16, 0.7, 5]} />
+                <mesh position={[0.5, 0.62, -0.05]} castShadow userData={{ agent_id: agent.id }}>
+                    <coneGeometry args={[0.12, 0.7, 5]} />
                     <meshLambertMaterial color="#9aa7ad" flatShading />
                 </mesh>
             ) : null}
 
             {shape === "workbench" ? (
-                <mesh position={[0.36, 0.2, 0]} castShadow userData={{ agent_id: agent.id }}>
-                    <boxGeometry args={[0.3, 0.12, 0.5]} />
+                <mesh position={[0.5, 0.22, 0]} castShadow userData={{ agent_id: agent.id }}>
+                    <boxGeometry args={[0.34, 0.1, 0.42]} />
                     <meshLambertMaterial color="#6b4b2f" flatShading />
                 </mesh>
             ) : null}
 
-            <mesh position={[0, 0.56, 0]}>
-                <sphereGeometry args={[0.1, 8, 8]} />
-                <meshBasicMaterial color={color} />
+            <mesh position={[0, 0.06, 0]}>
+                <cylinderGeometry args={[0.3, 0.3, 0.01, 12]} />
+                <meshBasicMaterial color={color} transparent opacity={0.5} />
             </mesh>
-
-            {agent.state === "working" ? (
-                <mesh ref={smoke} position={[0, 0.9, 0]}>
-                    <sphereGeometry args={[0.12, 6, 6]} />
-                    <meshLambertMaterial color="#d8e2e6" transparent opacity={0.4} />
-                </mesh>
-            ) : null}
         </group>
     );
 }
