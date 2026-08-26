@@ -124,6 +124,7 @@ pub struct Crew {
     manager: Arc<PtyManager>,
     state: Mutex<State>,
     data_dir: PathBuf,
+    endpoint: Mutex<Option<(u16, String)>>,
 }
 
 fn slugify(value: &str) -> String {
@@ -154,7 +155,12 @@ impl Crew {
             manager,
             state: Mutex::new(state),
             data_dir,
+            endpoint: Mutex::new(None),
         })
+    }
+
+    pub fn set_endpoint(&self, port: u16, token: String) {
+        *self.endpoint.lock() = Some((port, token));
     }
 
     fn persist(&self, state: &State) {
@@ -249,6 +255,11 @@ impl Crew {
         let mut env = BTreeMap::new();
         env.insert("AGENTLAND_AGENT".to_owned(), agent.id.clone());
         env.insert("AGENTLAND_ROLE".to_owned(), agent.role.clone());
+
+        if let Some((port, token)) = self.endpoint.lock().clone() {
+            env.insert("AGENTLAND_PORT".to_owned(), port.to_string());
+            env.insert("AGENTLAND_TOKEN".to_owned(), token);
+        }
 
         let session = self.manager.spawn(PtySpawnSpec {
             command: engine.command.to_owned(),

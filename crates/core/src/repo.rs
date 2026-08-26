@@ -350,6 +350,7 @@ impl RepoRegistry {
         git(&args, Some(&repository.primary_path))?;
 
         let port = self.ports.allocate(&key)?;
+        write_mcp_config(&path);
         let worktree = Worktree {
             name: name.to_owned(),
             repository_id: repository_id.to_owned(),
@@ -462,6 +463,65 @@ fn diff_untracked(worktree: &Path, file: &str) -> Option<String> {
     } else {
         Some(rendered)
     }
+}
+
+fn mcp_binary() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("agentland-mcp")))
+        .filter(|candidate| candidate.exists())
+        .map(|candidate| candidate.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "agentland-mcp".to_owned())
+}
+
+fn write_mcp_config(worktree: &Path) {
+    let config = serde_json::json!({
+        "mcpServers": {
+            "agentland": {
+                "command": mcp_binary(),
+                "args": [],
+                "env": {
+                    "AGENTLAND_PORT": "${AGENTLAND_PORT}",
+                    "AGENTLAND_TOKEN": "${AGENTLAND_TOKEN}"
+                }
+            }
+        }
+    });
+
+    if let Ok(rendered) = serde_json::to_string_pretty(&config) {
+        let _ = fs::write(worktree.join(".mcp.json"), rendered);
+    }
+
+    exclude_from_git(worktree, ".mcp.json");
+}
+
+fn exclude_from_git(worktree: &Path, pattern: &str) {
+    let Ok(common_dir) = git(
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        Some(worktree),
+    ) else {
+        return;
+    };
+
+    let info = PathBuf::from(common_dir).join("info");
+    if fs::create_dir_all(&info).is_err() {
+        return;
+    }
+
+    let path = info.join("exclude");
+    let existing = fs::read_to_string(&path).unwrap_or_default();
+
+    if existing.lines().any(|line| line.trim() == pattern) {
+        return;
+    }
+
+    let separator = if existing.is_empty() || existing.ends_with('\n') {
+        ""
+    } else {
+        "\n"
+    };
+
+    let _ = fs::write(&path, format!("{existing}{separator}{pattern}\n"));
 }
 
 fn numstat_totals(output: &str) -> (usize, u32, u32) {

@@ -200,7 +200,9 @@ impl Session {
 
     pub fn kill(&self) -> Result<()> {
         if let Some(handles) = self.handles.as_ref() {
-            handles.child.lock().kill()?;
+            let mut child = handles.child.lock();
+            let _ = child.kill();
+            let _ = child.wait();
         }
         Ok(())
     }

@@ -70,6 +70,8 @@ struct ErrorBody {
 pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()> {
     let manager_for_services = manager.clone();
     let manager_for_crew = manager.clone();
+    let port_for_crew = config.port;
+    let token_for_crew = config.token.clone();
     let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
 
     let origins: Vec<HeaderValue> = config
@@ -91,7 +93,11 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         metrics: Arc::new(MetricsStore::new(PathBuf::from("bench-results.jsonl"))),
         repos: Arc::new(RepoRegistry::new(PathBuf::from("data"))),
         services: ServiceRegistry::new(manager_for_services),
-        crew: Crew::new(manager_for_crew, PathBuf::from("data")),
+        crew: {
+            let crew = Crew::new(manager_for_crew, PathBuf::from("data"));
+            crew.set_endpoint(port_for_crew, token_for_crew);
+            crew
+        },
         board: Arc::new(Board::new(PathBuf::from("data"))),
         dispatch: Arc::new(parking_lot::Mutex::new(DispatchState::default())),
     };
@@ -122,6 +128,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/tasks/{id}/assign", post(assign_task))
         .route("/dispatch", get(dispatch_status))
         .route("/dispatch/pause", post(pause_dispatch))
+        .route("/dispatch/caps", post(set_caps))
         .route("/dispatch/tasks/{id}", post(dispatch_task))
         .route("/repos/{id}/worktrees/{name}/review", get(review_worktree))
         .route("/repos/{id}/worktrees/{name}/pr", post(open_pull_request))
@@ -451,6 +458,15 @@ async fn pause_dispatch(
 ) -> Json<DispatchState> {
     let mut dispatch = state.dispatch.lock();
     dispatch.paused = body.paused;
+    Json(dispatch.clone())
+}
+
+async fn set_caps(
+    State(state): State<AppState>,
+    Json(caps): Json<crate::dispatch::Caps>,
+) -> Json<DispatchState> {
+    let mut dispatch = state.dispatch.lock();
+    dispatch.caps = caps;
     Json(dispatch.clone())
 }
 

@@ -5,7 +5,7 @@ real git worktrees — each agent with its own branch, its own running dev serve
 the diff.
 
 
-Status: **v0.1 builds.** M0 passed and Tauri is confirmed by measurement; M1 shipped worktrees, ports and per-worktree dev servers; M2 hires agents and runs their engines; the board now carries a card from assignment to a diff.
+Status: **M5 — agents can reach the product.** M0 passed and Tauri is confirmed by measurement; M1 shipped worktrees, ports and per-worktree dev servers; M2 hires agents and runs their engines; the board now carries a card from assignment to a diff.
 
 ## Why M0 comes first
 
@@ -355,3 +355,46 @@ unverifiable update cannot install — it is refused rather than warned about.
 CI (`.github/workflows/ci.yml`) checks that `Cargo.toml` and `tauri.conf.json` agree on the version,
 runs the Rust tests and the interface build, then bundles for Linux and macOS with the signing key
 read from repository secrets.
+
+
+## M5 — MCP and delegation
+
+Agents talk to Agentland through one MCP server, `agentland-mcp`, a separate binary that speaks
+JSON-RPC over stdio and calls the core's HTTP API. It is deliberately a separate process: two
+processes writing the same state files would race.
+
+Eight tools, grouped by domain:
+
+| Tool | What an agent does with it |
+| --- | --- |
+| `task_list` / `task_create` / `task_move` | keep work on the board instead of in its head |
+| `crew_list` | see who else is on the crew and what they are doing |
+| `crew_delegate` | hand a card to X and get the decision *and its reason* back |
+| `repo_list` / `repo_worktrees` | find repositories, branches, ports, uncommitted counts |
+| `repo_review` | read its own diff, including untracked files |
+
+**Every worktree gets the tools automatically.** Creating a worktree writes a `.mcp.json` next to the
+code, so an engine launched there finds the server without configuration. The token is *not* written
+into it — the file references `${AGENTLAND_TOKEN}`, and the agent process receives that variable when
+Agentland starts it. A credential never lands on disk inside a repository.
+
+The file is appended to the repository's `info/exclude`, so git never offers to commit it. That
+append is careful: it reads what is there, adds the line only if missing, and leaves every rule the
+user already had. The first version overwrote the file, which would have deleted their excludes.
+
+### Fan-out, verified
+
+Four agents on one repository, caps at three per repository, four cards handed to X:
+
+```
+assign  ada      Ada is the free agent on agentland-svc-demo with the closest role
+assign  worker2  Worker2 is the free agent on agentland-svc-demo with the closest role
+queue            3 of 3 allowed agents are already working on agentland-svc-demo
+queue            3 of 3 allowed agents are already working on agentland-svc-demo
+```
+
+Three engines running concurrently, the rest queued with the reason attached. Caps are adjustable at
+runtime through `POST /dispatch/caps`.
+
+Stopping an agent now also reaps it — the first version killed the process without waiting, leaving
+zombies behind in a program whose whole purpose is spawning processes.
