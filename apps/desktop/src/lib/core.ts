@@ -278,3 +278,88 @@ export function stop_agent(id: string): Promise<void> {
 export function dismiss_agent(id: string): Promise<void> {
     return request<void>(`/agents/${id}`, { method: "DELETE" });
 }
+
+export type Column = "backlog" | "assigned" | "working" | "review" | "done";
+
+export interface Evidence {
+    kind: string;
+    [key: string]: unknown;
+}
+
+export interface Task {
+    id: string;
+    title: string;
+    body: string;
+    column: Column;
+    repository_id: string;
+    assignee: string | null;
+    worktree: string | null;
+    branch: string | null;
+    evidence: Evidence[];
+}
+
+export interface CommitInfo {
+    sha: string;
+    subject: string;
+}
+
+export interface Review {
+    base: string;
+    branch: string;
+    files: number;
+    insertions: number;
+    deletions: number;
+    commits: CommitInfo[];
+    untracked: string[];
+    uncommitted: boolean;
+    patch: string;
+}
+
+export interface PullRequestResult {
+    url: string;
+    created: boolean;
+    detail: string;
+}
+
+export function list_tasks(): Promise<Task[]> {
+    return request<Task[]>("/tasks");
+}
+
+export function create_task(title: string, body: string, repository_id: string): Promise<Task> {
+    return request<Task>("/tasks", {
+        method: "POST",
+        body: JSON.stringify({ title, body, repository_id }),
+    });
+}
+
+export function move_task(id: string, column: Column): Promise<Task> {
+    return request<Task>(`/tasks/${id}/move`, { method: "POST", body: JSON.stringify({ column }) });
+}
+
+export function assign_task(id: string, agent_id: string): Promise<Task> {
+    return request<Task>(`/tasks/${id}/assign`, {
+        method: "POST",
+        body: JSON.stringify({ agent_id }),
+    });
+}
+
+export function delete_task(id: string): Promise<void> {
+    return request<void>(`/tasks/${id}`, { method: "DELETE" });
+}
+
+export function review_worktree(repository_id: string, worktree: string): Promise<Review> {
+    return request<Review>(`/repos/${repository_id}/worktrees/${worktree}/review`);
+}
+
+export function open_pull_request(
+    repository_id: string,
+    worktree: string,
+    title: string,
+    body: string,
+    task_id?: string,
+): Promise<PullRequestResult> {
+    return request<PullRequestResult>(`/repos/${repository_id}/worktrees/${worktree}/pr`, {
+        method: "POST",
+        body: JSON.stringify({ title, body, task_id }),
+    });
+}

@@ -5,7 +5,7 @@ real git worktrees — each agent with its own branch, its own running dev serve
 the diff.
 
 
-Status: **M2 in progress.** M0 passed and Tauri is confirmed by measurement; M1 shipped worktrees, ports and per-worktree dev servers; the crew now hires and runs real agent CLIs.
+Status: **M3 in progress.** M0 passed and Tauri is confirmed by measurement; M1 shipped worktrees, ports and per-worktree dev servers; M2 hires agents and runs their engines; the board now carries a card from assignment to a diff.
 
 ## Why M0 comes first
 
@@ -211,3 +211,28 @@ size win, and keeps the webview inconsistency. Either the core is Rust or the sh
 
 From the PRD, in order: repo layer (worktrees, ports) → crew → board and review → parallel preview →
 island → v0.1. Roughly 27 weeks to v1.0 for one developer with agent assistance.
+
+
+## M3 — board and review
+
+A card is not a note. It carries a repository, and once assigned it carries an agent, a worktree, a
+branch and an evidence trail.
+
+**Assigning starts work.** Dropping a card on an agent records the assignment, moves the card to
+*working*, and launches that agent's engine in its worktree with the card's title and brief as the
+opening prompt. Engines take a prompt differently — Claude Code and Codex positionally, Gemini behind
+`-p` — so the catalog carries a prompt style per engine rather than assuming one shape.
+
+**Review reads what is actually there.** `git diff` alone would report an empty review for an agent
+that only created new files, which is most agents on a first task. The review therefore lists
+untracked files and renders a real patch for each, on top of the committed range and the working
+tree, and counts them in the totals.
+
+**Pull requests degrade honestly.** With a GitHub remote and `gh` installed the branch is pushed and
+the PR opened, and its URL is attached to the card as evidence. Otherwise the branch is still pushed
+and a compare URL is returned for GitHub or GitLab. With no remote at all, the answer is a plain
+sentence rather than a stack trace: *this repository has no remote to open a pull request against.*
+
+Verified end to end: create card → assign to Ada → engine starts in `work1` with the brief → new file
+appears in the review with its patch → commit → the review switches to the committed range with the
+commit listed.

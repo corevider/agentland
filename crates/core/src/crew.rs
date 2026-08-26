@@ -16,25 +16,33 @@ pub struct Engine {
     pub name: &'static str,
     pub command: &'static str,
     pub resume_flag: Option<&'static str>,
+    pub prompt_style: PromptStyle,
     pub installed: bool,
     pub version: Option<String>,
 }
 
-const CATALOG: &[(&str, &str, &str, Option<&str>)] = &[
-    ("claude", "Claude Code", "claude", Some("--continue")),
-    ("codex", "Codex CLI", "codex", Some("resume")),
-    ("gemini", "Gemini CLI", "gemini", None),
-    ("opencode", "OpenCode", "opencode", None),
-    ("crush", "Crush", "crush", None),
-    ("goose", "Goose", "goose", Some("--resume")),
-    ("qwen", "Qwen Code", "qwen", None),
-    ("cursor-agent", "Cursor Agent", "cursor-agent", None),
+const CATALOG: &[(&str, &str, &str, Option<&str>, PromptStyle)] = &[
+    ("claude", "Claude Code", "claude", Some("--continue"), PromptStyle::Positional),
+    ("codex", "Codex CLI", "codex", Some("resume"), PromptStyle::Positional),
+    ("gemini", "Gemini CLI", "gemini", None, PromptStyle::Flag("-p")),
+    ("opencode", "OpenCode", "opencode", None, PromptStyle::Positional),
+    ("crush", "Crush", "crush", None, PromptStyle::Positional),
+    ("goose", "Goose", "goose", Some("--resume"), PromptStyle::None),
+    ("qwen", "Qwen Code", "qwen", None, PromptStyle::Positional),
+    ("cursor-agent", "Cursor Agent", "cursor-agent", None, PromptStyle::Positional),
 ];
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub enum PromptStyle {
+    Positional,
+    Flag(&'static str),
+    None,
+}
 
 pub fn engines() -> Vec<Engine> {
     CATALOG
         .iter()
-        .map(|(id, name, command, resume_flag)| {
+        .map(|(id, name, command, resume_flag, prompt_style)| {
             let version = Command::new(command)
                 .arg("--version")
                 .output()
@@ -54,6 +62,7 @@ pub fn engines() -> Vec<Engine> {
                 name,
                 command,
                 resume_flag: *resume_flag,
+                prompt_style: *prompt_style,
                 installed: version.is_some(),
                 version,
             }
@@ -192,7 +201,13 @@ impl Crew {
         Ok(agent)
     }
 
-    pub fn start(&self, id: &str, worktree_path: &Path, resume: bool) -> Result<Agent> {
+    pub fn start(
+        &self,
+        id: &str,
+        worktree_path: &Path,
+        resume: bool,
+        brief: Option<&str>,
+    ) -> Result<Agent> {
         let agent = self
             .state
             .lock()
@@ -217,6 +232,17 @@ impl Crew {
         if resume {
             if let Some(flag) = engine.resume_flag {
                 args.push(flag.to_owned());
+            }
+        }
+
+        if let Some(text) = brief.filter(|value| !value.trim().is_empty()) {
+            match engine.prompt_style {
+                PromptStyle::Positional => args.push(text.to_owned()),
+                PromptStyle::Flag(flag) => {
+                    args.push(flag.to_owned());
+                    args.push(text.to_owned());
+                }
+                PromptStyle::None => {}
             }
         }
 

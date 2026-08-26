@@ -15,9 +15,10 @@ use tokio::sync::broadcast::error::RecvError;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::bench::GeneratorSpec;
+use crate::board::{Board, Column, CreateTask, Evidence, MoveTask, Task};
 use crate::crew::{Agent, Crew, Engine, HireRequest};
 use crate::metrics::{MetricsStore, Sample};
-use crate::repo::{RepoRegistry, Repository, Worktree, WorktreeStatus};
+use crate::repo::{PullRequest, RepoRegistry, Repository, Review, Worktree, WorktreeStatus};
 use crate::services::{Service, ServiceRegistry};
 use crate::pty::{PtyManager, PtySpawnSpec, SessionInfo};
 
@@ -38,6 +39,7 @@ struct AppState {
     repos: Arc<RepoRegistry>,
     services: Arc<ServiceRegistry>,
     crew: Arc<Crew>,
+    board: Arc<Board>,
 }
 
 #[derive(Deserialize)]
@@ -87,6 +89,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         repos: Arc::new(RepoRegistry::new(PathBuf::from("data"))),
         services: ServiceRegistry::new(manager_for_services),
         crew: Crew::new(manager_for_crew, PathBuf::from("data")),
+        board: Arc::new(Board::new(PathBuf::from("data"))),
     };
 
     let app = Router::new()
@@ -108,6 +111,12 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/agents/{id}", delete(dismiss_agent))
         .route("/agents/{id}/start", post(start_agent))
         .route("/agents/{id}/stop", post(stop_agent))
+        .route("/tasks", get(list_tasks).post(create_task))
+        .route("/tasks/{id}", delete(delete_task))
+        .route("/tasks/{id}/move", post(move_task))
+        .route("/tasks/{id}/assign", post(assign_task))
+        .route("/repos/{id}/worktrees/{name}/review", get(review_worktree))
+        .route("/repos/{id}/worktrees/{name}/pr", post(open_pull_request))
         .route(
             "/repos/{id}/worktrees/{name}/service",
             post(start_service).delete(stop_service),
@@ -274,6 +283,125 @@ struct StartAgentQuery {
     resume: bool,
 }
 
+#[derive(Deserialize)]
+struct AssignBody {
+    agent_id: String,
+}
+
+async fn list_tasks(State(state): State<AppState>) -> Json<Vec<Task>> {
+    Json(state.board.list())
+}
+
+async fn create_task(
+    State(state): State<AppState>,
+    Json(request): Json<CreateTask>,
+) -> Result<Json<Task>, ApiError> {
+    Ok(Json(state.board.create(request)?))
+}
+
+async fn move_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<MoveTask>,
+) -> Result<Json<Task>, ApiError> {
+    Ok(Json(state.board.move_to(&id, body.column)?))
+}
+
+async fn delete_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.board.delete(&id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn assign_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<AssignBody>,
+) -> Result<Json<Task>, ApiError> {
+    let task = state
+        .board
+        .get(&id)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("unknown task: {id}")))?;
+
+    let agent = state
+        .crew
+        .list()
+        .into_iter()
+        .find(|entry| entry.id == body.agent_id)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("unknown agent: {}", body.agent_id)))?;
+
+    if agent.repository_id != task.repository_id {
+        return Err(ApiError(anyhow::anyhow!(
+            "{} works in {}, not {}",
+            agent.name,
+            agent.repository_id,
+            task.repository_id
+        )));
+    }
+
+    let worktree = state
+        .repos
+        .worktrees()
+        .into_iter()
+        .find(|entry| {
+            entry.worktree.repository_id == agent.repository_id
+                && entry.worktree.name == agent.worktree
+        })
+        .ok_or_else(|| ApiError(anyhow::anyhow!("the agent's worktree is gone")))?
+        .worktree;
+
+    let brief = format!("{}\n\n{}", task.title, task.body);
+    state
+        .crew
+        .start(&agent.id, &worktree.path, false, Some(&brief))?;
+
+    let updated = state
+        .board
+        .record_assignment(&id, &agent.id, &worktree.name, &worktree.branch)?;
+
+    Ok(Json(updated))
+}
+
+async fn review_worktree(
+    State(state): State<AppState>,
+    Path((id, name)): Path<(String, String)>,
+) -> Result<Json<Review>, ApiError> {
+    Ok(Json(state.repos.review(&id, &name)?))
+}
+
+async fn open_pull_request(
+    State(state): State<AppState>,
+    Path((id, name)): Path<(String, String)>,
+    Json(body): Json<PullRequestBody>,
+) -> Result<Json<PullRequest>, ApiError> {
+    let request = state
+        .repos
+        .open_pull_request(&id, &name, &body.title, &body.body)?;
+
+    if let Some(task_id) = body.task_id {
+        let _ = state.board.attach(
+            &task_id,
+            Evidence::PullRequest {
+                url: request.url.clone(),
+            },
+        );
+        let _ = state.board.move_to(&task_id, Column::Review);
+    }
+
+    Ok(Json(request))
+}
+
+#[derive(Deserialize)]
+struct PullRequestBody {
+    title: String,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    task_id: Option<String>,
+}
+
 async fn list_engines() -> Json<Vec<Engine>> {
     Json(crate::crew::engines())
 }
@@ -324,7 +452,7 @@ async fn start_agent(
         .ok_or_else(|| ApiError(anyhow::anyhow!("agent worktree is gone")))?
         .worktree;
 
-    Ok(Json(state.crew.start(&id, &worktree.path, query.resume)?))
+    Ok(Json(state.crew.start(&id, &worktree.path, query.resume, None)?))
 }
 
 async fn stop_agent(

@@ -420,3 +420,241 @@ impl RepoRegistry {
         self.ports.snapshot()
     }
 }
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CommitInfo {
+    pub sha: String,
+    pub subject: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Review {
+    pub base: String,
+    pub branch: String,
+    pub files: usize,
+    pub insertions: u32,
+    pub deletions: u32,
+    pub commits: Vec<CommitInfo>,
+    pub untracked: Vec<String>,
+    pub uncommitted: bool,
+    pub patch: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PullRequest {
+    pub url: String,
+    pub created: bool,
+    pub detail: String,
+}
+
+const UNTRACKED_PATCH_LIMIT: usize = 40;
+
+fn diff_untracked(worktree: &Path, file: &str) -> Option<String> {
+    let output = Command::new("git")
+        .args(["diff", "--no-index", "--", "/dev/null", file])
+        .current_dir(worktree)
+        .output()
+        .ok()?;
+
+    let rendered = String::from_utf8_lossy(&output.stdout).into_owned();
+    if rendered.trim().is_empty() {
+        None
+    } else {
+        Some(rendered)
+    }
+}
+
+fn numstat_totals(output: &str) -> (usize, u32, u32) {
+    let mut files = 0;
+    let mut insertions = 0;
+    let mut deletions = 0;
+
+    for line in output.lines().filter(|line| !line.trim().is_empty()) {
+        let mut parts = line.split_whitespace();
+        let added = parts.next().unwrap_or("0").parse::<u32>().unwrap_or(0);
+        let removed = parts.next().unwrap_or("0").parse::<u32>().unwrap_or(0);
+        files += 1;
+        insertions += added;
+        deletions += removed;
+    }
+
+    (files, insertions, deletions)
+}
+
+impl RepoRegistry {
+    fn locate(&self, repository_id: &str, worktree_name: &str) -> Result<(Repository, Worktree)> {
+        let state = self.state.lock();
+        let repository = state
+            .repositories
+            .get(repository_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("unknown repository: {repository_id}"))?;
+        let worktree = state
+            .worktrees
+            .get(&format!("{repository_id}/{worktree_name}"))
+            .cloned()
+            .ok_or_else(|| anyhow!("unknown worktree: {repository_id}/{worktree_name}"))?;
+        Ok((repository, worktree))
+    }
+
+    pub fn review(&self, repository_id: &str, worktree_name: &str) -> Result<Review> {
+        let (repository, worktree) = self.locate(repository_id, worktree_name)?;
+        let base = repository.default_branch.clone();
+        let range = format!("{base}...HEAD");
+
+        let committed = git(&["diff", "--numstat", &range], Some(&worktree.path)).unwrap_or_default();
+        let pending = git(&["diff", "--numstat"], Some(&worktree.path)).unwrap_or_default();
+        let (files, insertions, deletions) = numstat_totals(&format!("{committed}\n{pending}"));
+
+        let commits = git(
+            &["log", "--format=%h\u{1f}%s", &format!("{base}..HEAD")],
+            Some(&worktree.path),
+        )
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| {
+            let (sha, subject) = line.split_once('\u{1f}')?;
+            Some(CommitInfo {
+                sha: sha.to_owned(),
+                subject: subject.to_owned(),
+            })
+        })
+        .collect();
+
+        let mut patch = git(&["diff", &range], Some(&worktree.path)).unwrap_or_default();
+        let working = git(&["diff"], Some(&worktree.path)).unwrap_or_default();
+        if !working.trim().is_empty() {
+            patch.push_str("\n");
+            patch.push_str(&working);
+        }
+
+        let untracked: Vec<String> = git(
+            &["ls-files", "--others", "--exclude-standard"],
+            Some(&worktree.path),
+        )
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(str::to_owned)
+        .collect();
+
+        let mut untracked_insertions = 0;
+        for file in untracked.iter().take(UNTRACKED_PATCH_LIMIT) {
+            if let Some(rendered) = diff_untracked(&worktree.path, file) {
+                untracked_insertions += rendered
+                    .lines()
+                    .filter(|line| line.starts_with('+') && !line.starts_with("+++"))
+                    .count() as u32;
+                patch.push_str("\n");
+                patch.push_str(&rendered);
+            }
+        }
+
+        Ok(Review {
+            base,
+            branch: worktree.branch,
+            files: files + untracked.len(),
+            insertions: insertions + untracked_insertions,
+            deletions,
+            commits,
+            uncommitted: !working.trim().is_empty() || !untracked.is_empty(),
+            untracked,
+            patch,
+        })
+    }
+
+    pub fn open_pull_request(
+        &self,
+        repository_id: &str,
+        worktree_name: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<PullRequest> {
+        let (repository, worktree) = self.locate(repository_id, worktree_name)?;
+
+        let origin = repository
+            .remotes
+            .iter()
+            .find(|remote| remote.name == "origin")
+            .or_else(|| repository.remotes.first())
+            .ok_or_else(|| anyhow!("this repository has no remote to open a pull request against"))?;
+
+        git(
+            &["push", "-u", &origin.name, &worktree.branch],
+            Some(&worktree.path),
+        )?;
+
+        let gh_available = Command::new("gh")
+            .arg("--version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+
+        if origin.provider == "github" && gh_available {
+            let url = git_command(
+                "gh",
+                &[
+                    "pr",
+                    "create",
+                    "--title",
+                    title,
+                    "--body",
+                    body,
+                    "--head",
+                    &worktree.branch,
+                    "--base",
+                    &repository.default_branch,
+                ],
+                Some(&worktree.path),
+            )?;
+
+            return Ok(PullRequest {
+                url: url.lines().last().unwrap_or_default().to_owned(),
+                created: true,
+                detail: "created with gh".to_owned(),
+            });
+        }
+
+        let (owner, name) = match (origin.owner.as_deref(), origin.repo.as_deref()) {
+            (Some(owner), Some(name)) => (owner, name),
+            _ => bail!("branch pushed, but this remote has no web address to open"),
+        };
+        let host = origin.host.as_deref().unwrap_or("github.com");
+
+        let url = match origin.provider.as_str() {
+            "gitlab" => format!(
+                "https://{host}/{owner}/{name}/-/merge_requests/new?merge_request[source_branch]={}",
+                worktree.branch
+            ),
+            _ => format!(
+                "https://{host}/{owner}/{name}/compare/{}...{}?expand=1",
+                repository.default_branch, worktree.branch
+            ),
+        };
+
+        Ok(PullRequest {
+            url,
+            created: false,
+            detail: "branch pushed; open the link to finish".to_owned(),
+        })
+    }
+}
+
+fn git_command(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<String> {
+    let mut command = Command::new(program);
+    command.args(args);
+    if let Some(dir) = cwd {
+        command.current_dir(dir);
+    }
+
+    let output = command.output()?;
+    if !output.status.success() {
+        bail!(
+            "{program} {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
