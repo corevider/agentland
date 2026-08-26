@@ -288,6 +288,9 @@ function LabelTracker({
     const point = useRef(new THREE.Vector3());
 
     useFrame(({ scene, camera, size }) => {
+        camera.updateMatrixWorld();
+        scene.updateMatrixWorld();
+
         const marks: Array<{ id: string; x: number; y: number; visible: boolean }> = [];
 
         for (const node of scene.children) {
