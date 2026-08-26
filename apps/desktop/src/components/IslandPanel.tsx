@@ -287,9 +287,17 @@ export function IslandPanel({ active, on_open_session }: Props) {
             <div
                 ref={container_ref}
                 onPointerDown={(event) => {
+                    if ((event.target as HTMLElement).closest("[data-overlay]")) {
+                        drag_origin.current = null;
+                        return;
+                    }
                     drag_origin.current = { x: event.clientX, y: event.clientY };
                 }}
                 onClick={(event) => {
+                    if ((event.target as HTMLElement).closest("[data-overlay]")) {
+                        return;
+                    }
+
                     const origin = drag_origin.current;
                     drag_origin.current = null;
 
@@ -403,7 +411,7 @@ export function IslandPanel({ active, on_open_session }: Props) {
                 </div>
 
                 {message ? (
-                    <div className="absolute bottom-3 left-3 border border-reef bg-lagoon px-3 py-2 font-mono text-[11px] text-driftwood rounded-lg">
+                    <div data-overlay className="absolute bottom-3 left-3 border border-reef bg-lagoon px-3 py-2 font-mono text-[11px] text-driftwood rounded-lg">
                         {message}
                     </div>
                 ) : null}
