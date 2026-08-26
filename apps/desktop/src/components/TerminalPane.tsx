@@ -12,6 +12,7 @@ export interface PaneMetrics {
     bytes: number;
     dropped_frames: number;
     dropped_local: number;
+    renderer: string;
 }
 
 interface Props {
@@ -36,6 +37,8 @@ export function TerminalPane({ session, on_metrics }: Props) {
             theme: { background: "#0d1315", foreground: "#d6e2e6" },
         });
 
+        const metrics: PaneMetrics = { bytes: 0, dropped_frames: 0, dropped_local: 0, renderer: "canvas" };
+
         const fit = new FitAddon();
         terminal.loadAddon(fit);
         terminal.open(host);
@@ -44,6 +47,7 @@ export function TerminalPane({ session, on_metrics }: Props) {
             const webgl = new WebglAddon();
             webgl.onContextLoss(() => webgl.dispose());
             terminal.loadAddon(webgl);
+            metrics.renderer = "webgl";
             set_renderer("webgl");
         } catch {
             set_renderer("canvas");
@@ -51,7 +55,6 @@ export function TerminalPane({ session, on_metrics }: Props) {
 
         fit.fit();
 
-        const metrics: PaneMetrics = { bytes: 0, dropped_frames: 0, dropped_local: 0 };
         let pending_writes = 0;
         let disposed = false;
 

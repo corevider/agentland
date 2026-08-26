@@ -105,6 +105,27 @@ export function resize_session(id: string, cols: number, rows: number): Promise<
     });
 }
 
+export interface Sample {
+    run_id: string;
+    elapsed_ms: number;
+    panes: number;
+    lines_per_second: number;
+    fps: number;
+    worst_frame_ms: number;
+    mb_per_second: number;
+    dropped_frames: number;
+    dropped_local: number;
+    renderer: string;
+    surface: string;
+}
+
+export function report_sample(sample: Sample): Promise<void> {
+    return request<void>("/metrics", {
+        method: "POST",
+        body: JSON.stringify(sample),
+    });
+}
+
 export async function open_stream(id: string): Promise<WebSocket> {
     const target = await resolve_endpoint();
     const url = `ws://${target.host}:${target.port}/sessions/${id}/stream?token=${encodeURIComponent(target.token)}`;

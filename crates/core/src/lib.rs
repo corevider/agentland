@@ -1,8 +1,10 @@
 pub mod bench;
+pub mod metrics;
 pub mod pty;
 pub mod server;
 
 pub use bench::GeneratorSpec;
+pub use metrics::{MetricsStore, Sample};
 pub use pty::{PtyManager, PtySpawnSpec, Session, SessionInfo};
 pub use server::{serve, ServerConfig};
 

@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { TerminalPane, type PaneMetrics } from "@/components/TerminalPane";
-import { kill_session, list_sessions, spawn_generator, spawn_shell, type SessionInfo } from "@/lib/core";
+import {
+    kill_session,
+    list_sessions,
+    report_sample,
+    spawn_generator,
+    spawn_shell,
+    type SessionInfo,
+} from "@/lib/core";
 
 const PANE_CHOICES = [1, 4, 8];
 const RATE_CHOICES = [1_000, 5_000, 10_000, 20_000];
@@ -54,8 +61,11 @@ export default function App() {
     const [busy, set_busy] = useState(false);
     const [error, set_error] = useState<string | null>(null);
     const metrics_ref = useRef(new Map<string, PaneMetrics>());
+    const run_ref = useRef<{ id: string; started: number; panes: number; rate: number } | null>(null);
+    const frame_ref = useRef({ fps: 0, worst_frame_ms: 0 });
     const [throughput, set_throughput] = useState({ mb_per_second: 0, dropped_frames: 0, dropped_local: 0 });
     const frame_stats = use_frame_stats();
+    frame_ref.current = frame_stats;
 
     useEffect(() => {
         list_sessions().then(set_sessions).catch((cause) => set_error(String(cause)));
@@ -87,10 +97,48 @@ export default function App() {
         metrics_ref.current.set(id, value);
     }, []);
 
+    useEffect(() => {
+        const handle = window.setInterval(() => {
+            const run = run_ref.current;
+            if (!run) {
+                return;
+            }
+
+            let bytes = 0;
+            let dropped_frames = 0;
+            let dropped_local = 0;
+            let renderer = "canvas";
+
+            for (const entry of metrics_ref.current.values()) {
+                bytes += entry.bytes;
+                dropped_frames += entry.dropped_frames;
+                dropped_local += entry.dropped_local;
+                renderer = entry.renderer;
+            }
+
+            void report_sample({
+                run_id: run.id,
+                elapsed_ms: Math.round(performance.now() - run.started),
+                panes: run.panes,
+                lines_per_second: run.rate,
+                fps: frame_ref.current.fps,
+                worst_frame_ms: frame_ref.current.worst_frame_ms,
+                mb_per_second: Number(((bytes * 2) / (1024 * 1024)).toFixed(2)),
+                dropped_frames,
+                dropped_local,
+                renderer,
+                surface: navigator.userAgent.includes("Chrome") ? "chromium" : "webkitgtk",
+            }).catch(() => undefined);
+        }, 2000);
+
+        return () => window.clearInterval(handle);
+    }, []);
+
     const clear = useCallback(async () => {
         const current = await list_sessions();
         await Promise.all(current.map((session) => kill_session(session.id).catch(() => undefined)));
         metrics_ref.current.clear();
+        run_ref.current = null;
         set_sessions([]);
     }, []);
 
@@ -109,6 +157,7 @@ export default function App() {
                     }),
                 ),
             );
+            run_ref.current = { id: `run-${Date.now()}`, started: performance.now(), panes: pane_count, rate };
             set_sessions(created);
         } catch (cause) {
             set_error(String(cause));

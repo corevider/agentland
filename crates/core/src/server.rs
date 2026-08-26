@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -14,6 +15,7 @@ use tokio::sync::broadcast::error::RecvError;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::bench::GeneratorSpec;
+use crate::metrics::{MetricsStore, Sample};
 use crate::pty::{PtyManager, PtySpawnSpec, SessionInfo};
 
 #[derive(Clone)]
@@ -29,6 +31,7 @@ pub struct ServerConfig {
 struct AppState {
     manager: Arc<PtyManager>,
     config: Arc<ServerConfig>,
+    metrics: Arc<MetricsStore>,
 }
 
 #[derive(Deserialize)]
@@ -72,6 +75,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
     let state = AppState {
         manager,
         config: Arc::new(config),
+        metrics: Arc::new(MetricsStore::new(PathBuf::from("bench-results.jsonl"))),
     };
 
     let app = Router::new()
@@ -81,6 +85,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/sessions/{id}/resize", post(resize_session))
         .route("/sessions/{id}/stream", get(stream_session))
         .route("/bench", post(spawn_generator))
+        .route("/metrics", get(read_metrics).post(record_metrics))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .layer(cors)
         .with_state(state);
@@ -149,6 +154,18 @@ async fn spawn_generator(
     Json(spec): Json<GeneratorSpec>,
 ) -> Result<Json<SessionInfo>, ApiError> {
     Ok(Json(state.manager.spawn_generator(spec)?))
+}
+
+async fn record_metrics(
+    State(state): State<AppState>,
+    Json(sample): Json<Sample>,
+) -> StatusCode {
+    state.metrics.record(sample);
+    StatusCode::NO_CONTENT
+}
+
+async fn read_metrics(State(state): State<AppState>) -> Json<Vec<Sample>> {
+    Json(state.metrics.samples())
 }
 
 async fn kill_session(
