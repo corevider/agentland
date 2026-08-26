@@ -100,8 +100,44 @@ export function IslandPanel({ active, on_open_session }: Props) {
             }
         }
 
-        return null;
+        return nearest_marker(pointer, bounds, context.camera);
     }, []);
+
+    const nearest_marker = useCallback(
+        (pointer: THREE.Vector2, bounds: DOMRect, camera: THREE.Camera): string | null => {
+            const context = scene_ref.current;
+            if (!context) {
+                return null;
+            }
+
+            const projected = new THREE.Vector3();
+            let best_id: string | null = null;
+            let best_distance = Number.POSITIVE_INFINITY;
+
+            context.scene.traverse((node) => {
+                const id = node.userData?.agent_id;
+                const dispatch = node.userData?.dispatch === true;
+                if (typeof id !== "string" && !dispatch) {
+                    return;
+                }
+
+                node.getWorldPosition(projected);
+                projected.project(camera);
+
+                const distance = Math.hypot(projected.x - pointer.x, projected.y - pointer.y);
+                const key = typeof id === "string" ? id : "__dispatch__";
+
+                if (distance < best_distance) {
+                    best_distance = distance;
+                    best_id = key;
+                }
+            });
+
+            const tolerance = (90 / Math.max(bounds.width, bounds.height)) * 2;
+            return best_distance < tolerance ? best_id : null;
+        },
+        [],
+    );
 
     const capture = useCallback(async (whole_window = false) => {
         let data: string;
@@ -166,7 +202,7 @@ export function IslandPanel({ active, on_open_session }: Props) {
             window.removeEventListener("agentland:capture-island", shortcut);
             window.removeEventListener("agentland:command", commands);
         };
-    }, [capture]);
+    }, [capture, agent_at]);
 
     const tier = tier_for(agents.length);
     const selected_agent = agents.find((agent) => agent.id === selected) ?? null;
@@ -231,6 +267,19 @@ export function IslandPanel({ active, on_open_session }: Props) {
                 ref={container_ref}
                 onPointerDown={(event) => {
                     drag_origin.current = { x: event.clientX, y: event.clientY };
+                }}
+                onClick={(event) => {
+                    const origin = drag_origin.current;
+                    if (origin && Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 6) {
+                        return;
+                    }
+
+                    const hit = agent_at(event as unknown as React.DragEvent<HTMLDivElement>);
+                    if (hit && hit !== "__dispatch__") {
+                        set_selected(hit);
+                    } else if (hit === "__dispatch__") {
+                        set_message("That is X's lighthouse — drop a card on it to hand work over.");
+                    }
                 }}
                 onPointerUpCapture={(event) => {
                     const origin = drag_origin.current;
@@ -321,19 +370,19 @@ export function IslandPanel({ active, on_open_session }: Props) {
                         {hovered === "__dispatch__" ? "drop to hand to X" : `drop to assign → ${hovered}`}
                     </div>
                 ) : null}
-            </div>
 
-            {selected_agent ? (
-                <AgentSheet
-                    agent={selected_agent}
-                    on_close={() => set_selected(null)}
-                    on_open_pane={(session_id) => {
-                        set_selected(null);
-                        on_open_session(session_id);
-                    }}
-                    on_changed={() => void refresh()}
-                />
-            ) : null}
+                {selected_agent ? (
+                    <AgentSheet
+                        agent={selected_agent}
+                        on_close={() => set_selected(null)}
+                        on_open_pane={(session_id) => {
+                            set_selected(null);
+                            on_open_session(session_id);
+                        }}
+                        on_changed={() => void refresh()}
+                    />
+                ) : null}
+            </div>
         </div>
     );
 }

@@ -89,7 +89,7 @@ export function AgentSheet({ agent, on_close, on_open_pane, on_changed }: Props)
     }, [agent.id, agent.name, agent.repository_id, instruction, run]);
 
     return (
-        <aside className="flex w-[380px] shrink-0 flex-col border-l border-reef bg-lagoon">
+        <aside className="absolute inset-y-0 right-0 z-10 flex w-full max-w-[380px] flex-col border-l border-reef bg-lagoon/95 backdrop-blur">
             <header className="flex items-start justify-between gap-3 border-b border-reef px-4 py-3">
                 <div>
                     <div className="font-display text-lg text-linen">{agent.name}</div>
