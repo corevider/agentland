@@ -5,7 +5,7 @@ real git worktrees — each agent with its own branch, its own running dev serve
 the diff.
 
 
-Status: **M3 in progress.** M0 passed and Tauri is confirmed by measurement; M1 shipped worktrees, ports and per-worktree dev servers; M2 hires agents and runs their engines; the board now carries a card from assignment to a diff.
+Status: **M3.5 in progress.** M0 passed and Tauri is confirmed by measurement; M1 shipped worktrees, ports and per-worktree dev servers; M2 hires agents and runs their engines; the board now carries a card from assignment to a diff.
 
 ## Why M0 comes first
 
@@ -236,3 +236,27 @@ sentence rather than a stack trace: *this repository has no remote to open a pul
 Verified end to end: create card → assign to Ada → engine starts in `work1` with the brief → new file
 appears in the review with its patch → commit → the review switches to the committed range with the
 commit listed.
+
+
+## M3.5 — the island
+
+The app opens on a low-poly island built from primitives, not model files: terraces, palms, a jetty
+and a lighthouse, all generated from the roster. **Island form is a pure function of the crew** — no
+progression state to save or lose. One to three agents make a sandbar; four to six a beach and palm
+grove; seven to ten a forest and ridge; eleven or more a settlement with a harbour and the lighthouse
+that will be X's post.
+
+Each agent occupies a station whose *shape* carries its role — a workbench for an implementer, a
+watchtower for a reviewer, an antenna for a researcher, a crane for ops — and a lamp whose colour
+carries its state. A working agent's chimney smokes; nothing else animates, because **nothing on the
+island moves unless a real process is doing something**.
+
+**Cards are dropped onto stations.** The unassigned column sits on the left; dragging a card over the
+island raycasts through the scene to find the station under the pointer, highlights it, and on drop
+assigns the task — the same call the board makes, so the agent starts with the card as its brief.
+
+**The island yields to the terminals.** The scene renders on demand rather than in a loop: 30 fps
+while it is the active view, 5 fps in the background, and nothing at all while the window is hidden.
+Its bundle is code-split, so the 900 KB of three.js loads when the island is opened rather than at
+startup. If a webview grants no WebGL context, the island degrades to a list carrying the same
+states instead of a blank canvas.
