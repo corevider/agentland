@@ -1,0 +1,16 @@
+[package]
+name = "agentland-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[build-dependencies]
+tauri-build = "2"
+
+[dependencies]
+agentland-core = { path = "../../../crates/core" }
+anyhow.workspace = true
+serde.workspace = true
+tauri = "2"
+tokio.workspace = true
+tracing-subscriber = "0.3"
