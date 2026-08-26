@@ -84,6 +84,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/sessions/{id}/input", post(write_input))
         .route("/sessions/{id}/resize", post(resize_session))
         .route("/sessions/{id}/stream", get(stream_session))
+        .route("/sessions/{id}/log", get(read_log))
         .route("/bench", post(spawn_generator))
         .route("/metrics", get(read_metrics).post(record_metrics))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
@@ -154,6 +155,22 @@ async fn spawn_generator(
     Json(spec): Json<GeneratorSpec>,
 ) -> Result<Json<SessionInfo>, ApiError> {
     Ok(Json(state.manager.spawn_generator(spec)?))
+}
+
+#[derive(Deserialize)]
+struct LogQuery {
+    #[serde(default)]
+    bytes: Option<u64>,
+}
+
+async fn read_log(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<LogQuery>,
+) -> Result<String, ApiError> {
+    let bytes = query.bytes.unwrap_or(256 * 1024);
+    let data = state.manager.read_log(&id, bytes)?;
+    Ok(String::from_utf8_lossy(&data).into_owned())
 }
 
 async fn record_metrics(

@@ -1,5 +1,7 @@
 use std::collections::{HashMap, VecDeque};
-use std::io::{Read, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -155,14 +157,42 @@ impl Session {
 pub struct PtyManager {
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     next_id: Mutex<u64>,
+    log_dir: PathBuf,
 }
 
 impl PtyManager {
     pub fn new() -> Self {
+        Self::with_log_dir(PathBuf::from("sessions"))
+    }
+
+    pub fn with_log_dir(log_dir: PathBuf) -> Self {
+        let _ = fs::create_dir_all(&log_dir);
         Self {
             sessions: Mutex::new(HashMap::new()),
             next_id: Mutex::new(1),
+            log_dir,
         }
+    }
+
+    fn open_log(&self, id: &str) -> Option<BufWriter<File>> {
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.log_dir.join(format!("{id}.log")))
+            .ok()
+            .map(BufWriter::new)
+    }
+
+    pub fn read_log(&self, id: &str, bytes: u64) -> Result<Vec<u8>> {
+        let path = self.log_dir.join(format!("{id}.log"));
+        let mut file = File::open(&path)?;
+        let length = file.metadata()?.len();
+        let start = length.saturating_sub(bytes);
+        file.seek(SeekFrom::Start(start))?;
+
+        let mut buffer = Vec::with_capacity((length - start) as usize);
+        file.read_to_end(&mut buffer)?;
+        Ok(buffer)
     }
 
     fn allocate_id(&self, prefix: &str) -> String {
@@ -196,6 +226,7 @@ impl PtyManager {
         let broadcaster = Broadcaster::new();
 
         let id = self.allocate_id("pane");
+        let log = self.open_log(&id);
         let info = SessionInfo {
             id: id.clone(),
             kind: "pty",
@@ -214,7 +245,7 @@ impl PtyManager {
             }),
         });
 
-        spawn_reader(reader, broadcaster);
+        spawn_reader(reader, broadcaster, log);
         self.sessions.lock().insert(id, session);
 
         Ok(info)
@@ -272,7 +303,11 @@ impl Default for PtyManager {
     }
 }
 
-fn spawn_reader(mut reader: Box<dyn Read + Send>, broadcaster: Arc<Broadcaster>) {
+fn spawn_reader(
+    mut reader: Box<dyn Read + Send>,
+    broadcaster: Arc<Broadcaster>,
+    mut log: Option<BufWriter<File>>,
+) {
     std::thread::spawn(move || {
         let mut buffer = vec![0u8; READ_BUFFER_BYTES];
         let mut pending = BytesMut::with_capacity(FRAME_MAX_BYTES);
@@ -282,6 +317,10 @@ fn spawn_reader(mut reader: Box<dyn Read + Send>, broadcaster: Arc<Broadcaster>)
             match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(count) => {
+                    if let Some(writer) = log.as_mut() {
+                        let _ = writer.write_all(&buffer[..count]);
+                    }
+
                     pending.extend_from_slice(&buffer[..count]);
 
                     let burst_drained = count < buffer.len();
@@ -299,6 +338,10 @@ fn spawn_reader(mut reader: Box<dyn Read + Send>, broadcaster: Arc<Broadcaster>)
 
         if !pending.is_empty() {
             broadcaster.publish(pending.freeze());
+        }
+
+        if let Some(writer) = log.as_mut() {
+            let _ = writer.flush();
         }
     });
 }
