@@ -13,6 +13,20 @@ import {
 const PANE_CHOICES = [1, 4, 8];
 const RATE_CHOICES = [1_000, 5_000, 10_000, 20_000];
 
+function detect_surface(): string {
+    const agent = navigator.userAgent;
+    if ((window as unknown as { __TAURI__?: unknown }).__TAURI__) {
+        return "tauri-webview";
+    }
+    if (agent.includes("Firefox")) {
+        return "firefox";
+    }
+    if (agent.includes("Chrome") || agent.includes("Chromium")) {
+        return "chromium";
+    }
+    return "webkit";
+}
+
 interface FrameStats {
     fps: number;
     worst_frame_ms: number;
@@ -63,7 +77,8 @@ export default function App() {
     const metrics_ref = useRef(new Map<string, PaneMetrics>());
     const run_ref = useRef<{ id: string; started: number; panes: number; rate: number } | null>(null);
     const frame_ref = useRef({ fps: 0, worst_frame_ms: 0 });
-    const [throughput, set_throughput] = useState({ mb_per_second: 0, dropped_frames: 0, dropped_local: 0 });
+    const [focused_id, set_focused_id] = useState<string | null>(null);
+    const [throughput, set_throughput] = useState({ mb_per_second: 0, dropped_frames: 0, collapsed_mb: 0 });
     const frame_stats = use_frame_stats();
     frame_ref.current = frame_stats;
 
@@ -75,18 +90,18 @@ export default function App() {
         const handle = window.setInterval(() => {
             let bytes = 0;
             let dropped_frames = 0;
-            let dropped_local = 0;
+            let collapsed_bytes = 0;
 
             for (const entry of metrics_ref.current.values()) {
                 bytes += entry.bytes;
                 dropped_frames += entry.dropped_frames;
-                dropped_local += entry.dropped_local;
+                collapsed_bytes += entry.collapsed_bytes;
             }
 
             set_throughput({
                 mb_per_second: Number(((bytes * 2) / (1024 * 1024)).toFixed(2)),
                 dropped_frames,
-                dropped_local,
+                collapsed_mb: Number((collapsed_bytes / (1024 * 1024)).toFixed(1)),
             });
         }, 500);
 
@@ -106,13 +121,13 @@ export default function App() {
 
             let bytes = 0;
             let dropped_frames = 0;
-            let dropped_local = 0;
+            let collapsed_bytes = 0;
             let renderer = "canvas";
 
             for (const entry of metrics_ref.current.values()) {
                 bytes += entry.bytes;
                 dropped_frames += entry.dropped_frames;
-                dropped_local += entry.dropped_local;
+                collapsed_bytes += entry.collapsed_bytes;
                 renderer = entry.renderer;
             }
 
@@ -125,9 +140,9 @@ export default function App() {
                 worst_frame_ms: frame_ref.current.worst_frame_ms,
                 mb_per_second: Number(((bytes * 2) / (1024 * 1024)).toFixed(2)),
                 dropped_frames,
-                dropped_local,
+                dropped_local: collapsed_bytes,
                 renderer,
-                surface: navigator.userAgent.includes("Chrome") ? "chromium" : "webkitgtk",
+                surface: detect_surface(),
             }).catch(() => undefined);
         }, 2000);
 
@@ -158,6 +173,7 @@ export default function App() {
                 ),
             );
             run_ref.current = { id: `run-${Date.now()}`, started: performance.now(), panes: pane_count, rate };
+            set_focused_id(created[0]?.id ?? null);
             set_sessions(created);
         } catch (cause) {
             set_error(String(cause));
@@ -249,7 +265,7 @@ export default function App() {
                     <span className="text-[#7b8d94]">worst {frame_stats.worst_frame_ms} ms</span>
                     <span className="text-[#7b8d94]">{throughput.mb_per_second} MB/s</span>
                     <span className="text-[#7b8d94]">
-                        dropped {throughput.dropped_frames}/{throughput.dropped_local}
+                        core drop {throughput.dropped_frames} · collapsed {throughput.collapsed_mb} MB
                     </span>
                 </div>
             </header>
@@ -268,7 +284,13 @@ export default function App() {
                 }}
             >
                 {sessions.map((session) => (
-                    <TerminalPane key={session.id} session={session} on_metrics={on_metrics} />
+                    <TerminalPane
+                        key={session.id}
+                        session={session}
+                        focused={focused_id ? focused_id === session.id : session.id === sessions[0]?.id}
+                        on_focus={set_focused_id}
+                        on_metrics={on_metrics}
+                    />
                 ))}
             </main>
         </div>

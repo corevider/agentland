@@ -6,23 +6,52 @@ import "@xterm/xterm/css/xterm.css";
 
 import { open_stream, resize_session, write_input, type SessionInfo } from "@/lib/core";
 
-const MAX_PENDING_WRITES = 8;
+const TAIL_LIMIT_BYTES = 48 * 1024;
+const QUEUE_LIMIT_BYTES = TAIL_LIMIT_BYTES * 4;
+const BACKGROUND_FLUSH_MS = 250;
+const RESET_SEQUENCE = new TextEncoder().encode("\x1b[0m");
 
 export interface PaneMetrics {
     bytes: number;
     dropped_frames: number;
-    dropped_local: number;
+    collapsed_bytes: number;
     renderer: string;
 }
 
 interface Props {
     session: SessionInfo;
+    focused: boolean;
+    on_focus: (id: string) => void;
     on_metrics: (id: string, metrics: PaneMetrics) => void;
 }
 
-export function TerminalPane({ session, on_metrics }: Props) {
+function concat(chunks: Uint8Array[], total: number): Uint8Array {
+    const merged = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+        merged.set(chunk, offset);
+        offset += chunk.byteLength;
+    }
+    return merged;
+}
+
+function collapse_to_tail(data: Uint8Array): Uint8Array {
+    const tail = data.subarray(data.byteLength - TAIL_LIMIT_BYTES);
+    const newline = tail.indexOf(10);
+    const aligned = newline >= 0 ? tail.subarray(newline + 1) : tail;
+
+    const result = new Uint8Array(RESET_SEQUENCE.byteLength + aligned.byteLength);
+    result.set(RESET_SEQUENCE, 0);
+    result.set(aligned, RESET_SEQUENCE.byteLength);
+    return result;
+}
+
+export function TerminalPane({ session, focused, on_focus, on_metrics }: Props) {
     const host_ref = useRef<HTMLDivElement>(null);
+    const focused_ref = useRef(focused);
     const [renderer, set_renderer] = useState("canvas");
+
+    focused_ref.current = focused;
 
     useEffect(() => {
         const host = host_ref.current;
@@ -30,14 +59,19 @@ export function TerminalPane({ session, on_metrics }: Props) {
             return;
         }
 
+        const metrics: PaneMetrics = {
+            bytes: 0,
+            dropped_frames: 0,
+            collapsed_bytes: 0,
+            renderer: "canvas",
+        };
+
         const terminal = new Terminal({
             fontSize: 12,
             fontFamily: "'IBM Plex Mono', ui-monospace, monospace",
-            scrollback: 2000,
+            scrollback: 500,
             theme: { background: "#0d1315", foreground: "#d6e2e6" },
         });
-
-        const metrics: PaneMetrics = { bytes: 0, dropped_frames: 0, dropped_local: 0, renderer: "canvas" };
 
         const fit = new FitAddon();
         terminal.loadAddon(fit);
@@ -55,8 +89,49 @@ export function TerminalPane({ session, on_metrics }: Props) {
 
         fit.fit();
 
-        let pending_writes = 0;
+        let queue: Uint8Array[] = [];
+        let queued_bytes = 0;
+        let writing = false;
         let disposed = false;
+        let frame_handle = 0;
+        let last_background_flush = 0;
+
+        const flush = () => {
+            if (writing || queued_bytes === 0) {
+                return;
+            }
+
+            let payload = concat(queue, queued_bytes);
+            queue = [];
+            queued_bytes = 0;
+
+            if (payload.byteLength > TAIL_LIMIT_BYTES) {
+                metrics.collapsed_bytes += payload.byteLength - TAIL_LIMIT_BYTES;
+                payload = collapse_to_tail(payload);
+            }
+
+            writing = true;
+            terminal.write(payload, () => {
+                writing = false;
+            });
+        };
+
+        const tick = (now: number) => {
+            if (disposed) {
+                return;
+            }
+
+            if (focused_ref.current) {
+                flush();
+            } else if (now - last_background_flush >= BACKGROUND_FLUSH_MS) {
+                last_background_flush = now;
+                flush();
+            }
+
+            frame_handle = requestAnimationFrame(tick);
+        };
+
+        frame_handle = requestAnimationFrame(tick);
 
         const flush_metrics = window.setInterval(() => {
             on_metrics(session.id, { ...metrics });
@@ -83,16 +158,16 @@ export function TerminalPane({ session, on_metrics }: Props) {
 
                 const payload = new Uint8Array(event.data as ArrayBuffer);
                 metrics.bytes += payload.byteLength;
+                queue.push(payload);
+                queued_bytes += payload.byteLength;
 
-                if (pending_writes >= MAX_PENDING_WRITES) {
-                    metrics.dropped_local += 1;
-                    return;
+                if (queued_bytes > QUEUE_LIMIT_BYTES) {
+                    const merged = concat(queue, queued_bytes);
+                    metrics.collapsed_bytes += merged.byteLength - TAIL_LIMIT_BYTES;
+                    const tail = collapse_to_tail(merged);
+                    queue = [tail];
+                    queued_bytes = tail.byteLength;
                 }
-
-                pending_writes += 1;
-                terminal.write(payload, () => {
-                    pending_writes -= 1;
-                });
             };
         });
 
@@ -112,6 +187,7 @@ export function TerminalPane({ session, on_metrics }: Props) {
 
         return () => {
             disposed = true;
+            cancelAnimationFrame(frame_handle);
             window.clearInterval(flush_metrics);
             observer.disconnect();
             input_disposable.dispose();
@@ -121,10 +197,15 @@ export function TerminalPane({ session, on_metrics }: Props) {
     }, [session.id, session.kind, on_metrics]);
 
     return (
-        <div className="flex min-h-0 flex-col border border-[#26343a] bg-[#0d1315]">
+        <div
+            className={`flex min-h-0 flex-col border bg-[#0d1315] ${focused ? "border-[#45bcc4]" : "border-[#26343a]"}`}
+            onMouseDown={() => on_focus(session.id)}
+        >
             <div className="flex items-center justify-between border-b border-[#26343a] px-2 py-1 font-mono text-[11px] text-[#7b8d94]">
                 <span>{session.id}</span>
-                <span>{renderer}</span>
+                <span>
+                    {focused ? "live" : `${BACKGROUND_FLUSH_MS}ms`} · {renderer}
+                </span>
             </div>
             <div ref={host_ref} className="min-h-0 flex-1 overflow-hidden p-1" />
         </div>
