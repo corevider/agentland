@@ -25,6 +25,7 @@ import {
     spawn_shell,
     type SessionInfo,
 } from "@/lib/core";
+import { island_frames } from "@/lib/frames";
 import { probe_gpu, type GpuReport } from "@/lib/gpu";
 import { load_settings, save_settings, type Settings } from "@/lib/settings";
 
@@ -96,8 +97,11 @@ export default function App() {
     const metrics_ref = useRef(new Map<string, PaneMetrics>());
     const run_ref = useRef<{ id: string; started: number; panes: number; rate: number } | null>(null);
     const frame_ref = useRef({ fps: 0, worst_frame_ms: 0 });
+    const island_ref = useRef({ rendered: 0, at: 0 });
     const [focused_id, set_focused_id] = useState<string | null>(null);
     const [layout, set_layout_state] = useState<Layout>(() => load_layout());
+    const layout_ref = useRef(layout);
+    layout_ref.current = layout;
     const pane_count = settings.panes;
     const rate = settings.lines_per_second;
     const [throughput, set_throughput] = useState({ mb_per_second: 0, dropped_frames: 0, collapsed_mb: 0 });
@@ -199,6 +203,17 @@ export default function App() {
                 renderer = entry.renderer;
             }
 
+            const now = performance.now();
+            const previous = island_ref.current;
+            const seconds = previous.at > 0 ? (now - previous.at) / 1000 : 0;
+            const island_fps =
+                seconds > 0
+                    ? Math.round((island_frames.rendered - previous.rendered) / seconds)
+                    : 0;
+            const island_worst_ms = Math.round(island_frames.worst_ms);
+            island_frames.worst_ms = 0;
+            island_ref.current = { rendered: island_frames.rendered, at: now };
+
             void report_sample({
                 run_id: run.id,
                 elapsed_ms: Math.round(performance.now() - run.started),
@@ -212,6 +227,11 @@ export default function App() {
                 renderer,
                 surface: detect_surface(),
                 gpu: `${gpu.webgl2 ? "webgl2" : gpu.renderer === "none" ? "none" : "webgl1"} · ${gpu.renderer} · ${gpu.max_contexts} ctx`,
+                island_fps,
+                island_worst_ms,
+                panels: [layout_ref.current.left, layout_ref.current.right, layout_ref.current.bottom]
+                    .filter(Boolean)
+                    .join("+"),
             }).catch(() => undefined);
         }, 2000);
 
@@ -265,6 +285,28 @@ export default function App() {
             set_busy(false);
         }
     }, [clear, pane_count, rate, settings.duration_ms]);
+
+    useEffect(() => {
+        const listener = (event: Event) => {
+            const command = (event as CustomEvent<string>).detail;
+            if (!command.startsWith("bench:")) {
+                return;
+            }
+
+            const wants_island = command === "bench:with-island";
+            set_layout({
+                ...layout_ref.current,
+                left: wants_island ? "island" : "panes",
+                right: "panes",
+                bottom: null,
+            });
+
+            window.setTimeout(() => void run_benchmark(), 600);
+        };
+
+        window.addEventListener("agentland:command", listener);
+        return () => window.removeEventListener("agentland:command", listener);
+    }, [run_benchmark, set_layout]);
 
     const open_shells = useCallback(async () => {
         set_busy(true);

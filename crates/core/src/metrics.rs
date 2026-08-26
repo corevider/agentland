@@ -22,6 +22,12 @@ pub struct Sample {
     pub surface: String,
     #[serde(default)]
     pub gpu: String,
+    #[serde(default)]
+    pub island_fps: u32,
+    #[serde(default)]
+    pub island_worst_ms: u32,
+    #[serde(default)]
+    pub panels: String,
 }
 
 pub struct MetricsStore {

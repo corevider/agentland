@@ -5,6 +5,7 @@ import * as THREE from "three";
 import type { Agent } from "@/lib/core";
 import { Projectile } from "@/island/Projectile";
 import { Robot } from "@/island/Robot";
+import { note_island_frame } from "@/lib/frames";
 import {
     JETTY_ANGLE,
     LIGHTHOUSE_ANGLE,
@@ -288,6 +289,7 @@ function LabelTracker({
     const point = useRef(new THREE.Vector3());
 
     useFrame(({ scene, camera, size }) => {
+        note_island_frame(performance.now());
         camera.updateMatrixWorld();
         scene.updateMatrixWorld();
 

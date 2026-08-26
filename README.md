@@ -52,8 +52,28 @@ Both passing runs fell back to the canvas renderer rather than WebGL, so 62 fps 
 *without* GPU acceleration — there is headroom left on the table.
 
 The island's requirement is answered too: the Tauri webview reports **WebGL2 with 16 available
-contexts**, and the island needs one. What remains unmeasured is the two running together, which the
-benchmark will cover once the island lands.
+contexts**, and the island needs one.
+
+### The island and the terminals together
+
+That last question — what happens when the island renders while eight terminals stream — was left
+open for months in the risk register. It is now measured. Both runs are the same benchmark, driven
+through the command channel so the layout is the only difference:
+
+| Layout | UI fps (median / min) | Worst frame | Throughput | Dropped | Island fps |
+|---|---|---|---|---|---|
+| 8 terminals only | 56 / 25 | 79 ms | 8.4 MB/s | 0 | — |
+| island + 8 terminals | **60 / 29** | 69 ms | 8.2 MB/s | 0 | **29** |
+
+The island costs nothing measurable, and it holds its governor exactly: the cap is 30 fps while
+active and the measurement says 29. Throughput and dropped frames are unchanged.
+
+Two honest caveats. The island takes half the window, so the terminals beside it render into a
+smaller area — the load is not purely additive, which is part of why the island run scores *higher*.
+And this run happened on a virtual display, because a Wayland window that is not on screen gets no
+animation frames at all: the first attempt reported `fps=0`, which is the absence of a measurement
+rather than a bad one. The renderer string the webview reports there is masked, so treat the fps as
+the shape of the answer on this machine, not a hardware benchmark.
 
 Why xterm's WebGL addon declines a context the webview clearly has is still open. The failure reason
 is now captured in the pane label and in every sample instead of being swallowed, so the next run

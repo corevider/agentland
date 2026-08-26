@@ -153,6 +153,9 @@ export interface Sample {
     renderer: string;
     surface: string;
     gpu: string;
+    island_fps?: number;
+    island_worst_ms?: number;
+    panels?: string;
 }
 
 export function report_sample(sample: Sample): Promise<void> {
