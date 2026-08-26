@@ -1,4 +1,4 @@
-export type PanelId = "island" | "panes" | "board" | "repos" | "crew";
+export type PanelId = "island" | "panes" | "board" | "repos" | "crew" | "skills";
 
 export interface PanelMeta {
     id: PanelId;
@@ -12,6 +12,7 @@ export const PANELS: PanelMeta[] = [
     { id: "board", label: "Board", hint: "cards and their evidence" },
     { id: "repos", label: "Repositories", hint: "worktrees, ports, servers" },
     { id: "crew", label: "Crew", hint: "hire, start, stop" },
+    { id: "skills", label: "Skills", hint: "what the crew knows how to do" },
 ];
 
 export type SlotId = "left" | "right" | "bottom";

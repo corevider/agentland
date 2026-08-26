@@ -28,6 +28,7 @@ use crate::routines::{CreateRoutine, Routine, Routines};
 use crate::metrics::{MetricsStore, Sample};
 use crate::repo::{PullRequest, RepoRegistry, Repository, Review, Worktree, WorktreeStatus};
 use crate::services::{Service, ServiceRegistry};
+use crate::skills::{Skill, SkillLibrary};
 use crate::pty::{PtyManager, PtySpawnSpec, SessionInfo, SessionStats};
 
 #[derive(Clone)]
@@ -64,6 +65,7 @@ struct AppState {
     gateway: Arc<Gateway>,
     approvals: Arc<Approvals>,
     tokens: Arc<TokenStore>,
+    skills: Arc<SkillLibrary>,
     ui_commands: Arc<parking_lot::Mutex<Vec<String>>>,
 }
 
@@ -130,6 +132,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         gateway: Arc::new(Gateway::new(data_dir.clone())),
         approvals: Arc::new(Approvals::new(data_dir.clone())),
         tokens: Arc::new(TokenStore::new(token_for_store, data_dir.clone())),
+        skills: Arc::new(SkillLibrary::new(data_dir.clone())),
         ui_commands: Arc::new(parking_lot::Mutex::new(Vec::new())),
     };
 
@@ -175,6 +178,13 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/integrations/call", post(call_integration))
         .route("/approvals", get(list_approvals).post(request_approval))
         .route("/approvals/{id}", post(answer_approval))
+        .route("/skills", get(list_skills).post(write_skill))
+        .route("/skills/{id}", delete(remove_skill))
+        .route(
+            "/agents/{id}/skills",
+            get(list_agent_skills).post(install_skill),
+        )
+        .route("/agents/{id}/skills/{skill_id}", delete(uninstall_skill))
         .route("/devices", get(list_devices).post(pair_device))
         .route("/devices/{id}", delete(revoke_device))
         .route("/ui/commands", get(take_ui_commands).post(queue_ui_command))
@@ -287,6 +297,10 @@ fn compose_brief(state: &AppState, agent: &Agent, base: &str) -> String {
         for memory in memories {
             brief.push_str(&format!("\n- {}", memory.text));
         }
+    }
+
+    if let Some(section) = state.skills.brief_section(&agent.id) {
+        brief.push_str(&section);
     }
 
     let inbox = state.mail.take_inbox(&agent.id);
@@ -1119,7 +1133,57 @@ async fn dismiss_agent(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     state.crew.dismiss(&id)?;
+    state.skills.forget_agent(&id);
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct WriteSkill {
+    id: String,
+    manifest: String,
+}
+
+#[derive(Deserialize)]
+struct InstallSkill {
+    skill_id: String,
+}
+
+async fn list_skills(State(state): State<AppState>) -> Json<Vec<Skill>> {
+    Json(state.skills.list())
+}
+
+async fn write_skill(
+    State(state): State<AppState>,
+    Json(body): Json<WriteSkill>,
+) -> Result<Json<Skill>, ApiError> {
+    Ok(Json(state.skills.write(&body.id, &body.manifest)?))
+}
+
+async fn remove_skill(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.skills.remove(&id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_agent_skills(State(state): State<AppState>, Path(id): Path<String>) -> Json<Vec<Skill>> {
+    Json(state.skills.installed_for(&id))
+}
+
+async fn install_skill(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<InstallSkill>,
+) -> Result<Json<Vec<Skill>>, ApiError> {
+    Ok(Json(state.skills.install(&id, &body.skill_id)?))
+}
+
+async fn uninstall_skill(
+    State(state): State<AppState>,
+    Path((id, skill_id)): Path<(String, String)>,
+) -> Json<Vec<Skill>> {
+    Json(state.skills.uninstall(&id, &skill_id))
 }
 
 async fn list_services(State(state): State<AppState>) -> Json<Vec<Service>> {

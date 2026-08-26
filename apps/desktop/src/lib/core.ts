@@ -290,6 +290,48 @@ export interface HireRequest {
     worktree: string;
 }
 
+export interface Skill {
+    id: string;
+    name: string;
+    description: string;
+    when_to_use: string;
+    body: string;
+    builtin: boolean;
+}
+
+export function list_skills(): Promise<Skill[]> {
+    return request<Skill[]>("/skills");
+}
+
+export function write_skill(id: string, manifest: string): Promise<Skill> {
+    return request<Skill>("/skills", {
+        method: "POST",
+        body: JSON.stringify({ id, manifest }),
+    });
+}
+
+export function remove_skill(id: string): Promise<void> {
+    return request<void>(`/skills/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export function agent_skills(agent_id: string): Promise<Skill[]> {
+    return request<Skill[]>(`/agents/${encodeURIComponent(agent_id)}/skills`);
+}
+
+export function install_skill(agent_id: string, skill_id: string): Promise<Skill[]> {
+    return request<Skill[]>(`/agents/${encodeURIComponent(agent_id)}/skills`, {
+        method: "POST",
+        body: JSON.stringify({ skill_id }),
+    });
+}
+
+export function uninstall_skill(agent_id: string, skill_id: string): Promise<Skill[]> {
+    return request<Skill[]>(
+        `/agents/${encodeURIComponent(agent_id)}/skills/${encodeURIComponent(skill_id)}`,
+        { method: "DELETE" },
+    );
+}
+
 export function list_engines(): Promise<Engine[]> {
     return request<Engine[]>("/engines");
 }

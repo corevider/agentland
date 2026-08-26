@@ -10,6 +10,7 @@ import {
     type Layout,
     type PanelId,
 } from "@/workspace/layout";
+import { SkillsPanel } from "@/components/SkillsPanel";
 import { CrewPanel } from "@/components/CrewPanel";
 import { RepoPanel } from "@/components/RepoPanel";
 import { SettingsPage } from "@/components/SettingsPage";
@@ -439,6 +440,9 @@ export default function App() {
                 render_panel={(panel: PanelId) => {
                     if (panel === "repos") {
                         return <RepoPanel active />;
+                    }
+                    if (panel === "skills") {
+                        return <SkillsPanel active />;
                     }
                     if (panel === "crew") {
                         return <CrewPanel active on_open_session={open_session} />;

@@ -73,6 +73,31 @@ fn updater_status() -> String {
     }
 }
 
+fn desktop_data_dir() -> std::path::PathBuf {
+    if let Ok(configured) = std::env::var("AGENTLAND_DATA_DIR") {
+        return std::path::PathBuf::from(configured);
+    }
+
+    if cfg!(debug_assertions) {
+        return std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data");
+    }
+
+    dirs_next_data_dir()
+        .map(|base| base.join("agentland"))
+        .unwrap_or_else(|| std::path::PathBuf::from("data"))
+}
+
+fn dirs_next_data_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .map(|home| home.join(".local/share"))
+        })
+}
+
 fn main() {
     tracing_subscriber::fmt().with_target(false).init();
 
@@ -99,7 +124,7 @@ fn main() {
             "http://tauri.localhost".into(),
             "https://tauri.localhost".into(),
         ],
-        data_dir: ServerConfig::data_dir_from_env(),
+        data_dir: desktop_data_dir(),
     };
 
     tauri::Builder::default()
