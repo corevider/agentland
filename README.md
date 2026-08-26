@@ -5,7 +5,7 @@ real git worktrees — each agent with its own branch, its own running dev serve
 the diff.
 
 
-Status: **M0 — the throughput gate.** Nothing else gets built until the numbers below are green.
+Status: **M0 passed.** Tauri is confirmed by measurement; M1 (worktrees and ports) is next.
 
 ## Why M0 comes first
 
@@ -49,9 +49,15 @@ panes batched to one write per animation frame, unfocused panes throttled to 250
 panes collapsed to their last 48 KB, the same hardware tripled its frame rate.
 
 Both passing runs fell back to the canvas renderer rather than WebGL, so 62 fps is what this costs
-*without* GPU acceleration. That leaves one open question, and it belongs to the island rather than
-the terminals: react-three-fiber needs a WebGL context. The app now probes for one at startup and
-reports it in the HUD and in every sample.
+*without* GPU acceleration — there is headroom left on the table.
+
+The island's requirement is answered too: the Tauri webview reports **WebGL2 with 16 available
+contexts**, and the island needs one. What remains unmeasured is the two running together, which the
+benchmark will cover once the island lands.
+
+Why xterm's WebGL addon declines a context the webview clearly has is still open. The failure reason
+is now captured in the pane label and in every sample instead of being swallowed, so the next run
+answers it.
 
 ## Layout
 

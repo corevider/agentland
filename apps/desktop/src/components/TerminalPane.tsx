@@ -83,7 +83,9 @@ export function TerminalPane({ session, focused, on_focus, on_metrics }: Props) 
             terminal.loadAddon(webgl);
             metrics.renderer = "webgl";
             set_renderer("webgl");
-        } catch {
+        } catch (cause) {
+            const reason = cause instanceof Error ? cause.message : String(cause);
+            metrics.renderer = `canvas (${reason.slice(0, 60)})`;
             set_renderer("canvas");
         }
 

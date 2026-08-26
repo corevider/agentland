@@ -17,7 +17,7 @@ function unmasked_renderer(context: WebGLRenderingContext | WebGL2RenderingConte
     return typeof fallback === "string" ? fallback : "unknown";
 }
 
-export function probe_gpu(limit = 16): GpuReport {
+export function probe_gpu(limit = 4): GpuReport {
     const probe = document.createElement("canvas");
     const context =
         (probe.getContext("webgl2") as WebGL2RenderingContext | null) ??
