@@ -3,7 +3,7 @@ import * as THREE from "three";
 
 import { AgentSheet } from "@/components/AgentSheet";
 import { Island } from "@/island/Island";
-import { tier_for } from "@/island/geometry";
+import { PRESENCE_COLOR, tier_for } from "@/island/geometry";
 import {
     assign_task,
     dispatch_status,
@@ -32,6 +32,7 @@ export function IslandPanel({ active, on_open_session }: Props) {
     const [dispatch, set_dispatch] = useState<DispatchState | null>(null);
     const [shots, set_shots] = useState<Array<{ seq: number; agent_id: string }>>([]);
     const [selected, set_selected] = useState<string | null>(null);
+    const [labels, set_labels] = useState<Array<{ id: string; x: number; y: number }>>([]);
     const drag_origin = useRef<{ x: number; y: number } | null>(null);
     const seen_seq = useRef(0);
     const container_ref = useRef<HTMLDivElement>(null);
@@ -204,6 +205,53 @@ export function IslandPanel({ active, on_open_session }: Props) {
         };
     }, [capture, agent_at]);
 
+    useEffect(() => {
+        if (!webgl) {
+            return;
+        }
+
+        let handle = 0;
+        const projected = new THREE.Vector3();
+
+        const place = () => {
+            const context = scene_ref.current;
+            const container = container_ref.current;
+
+            if (context && container) {
+                const bounds = container.getBoundingClientRect();
+                const found: Array<{ id: string; x: number; y: number }> = [];
+
+                for (const node of context.scene.children) {
+                    const id = node.userData?.agent_id;
+                    if (typeof id !== "string") {
+                        continue;
+                    }
+
+                    node.getWorldPosition(projected);
+                    projected.y += 1.95;
+                    projected.project(context.camera);
+
+                    if (projected.z > 1) {
+                        continue;
+                    }
+
+                    found.push({
+                        id,
+                        x: ((projected.x + 1) / 2) * bounds.width,
+                        y: ((1 - projected.y) / 2) * bounds.height,
+                    });
+                }
+
+                set_labels(found);
+            }
+
+            handle = window.setTimeout(place, active ? 120 : 600);
+        };
+
+        place();
+        return () => window.clearTimeout(handle);
+    }, [webgl, active]);
+
     const tier = tier_for(agents.length);
     const selected_agent = agents.find((agent) => agent.id === selected) ?? null;
 
@@ -353,6 +401,32 @@ export function IslandPanel({ active, on_open_session }: Props) {
                         </div>
                     </div>
                 )}
+
+                {webgl
+                    ? labels.map((label) => {
+                          const agent = agents.find((entry) => entry.id === label.id);
+                          if (!agent) {
+                              return null;
+                          }
+
+                          return (
+                              <div
+                                  key={label.id}
+                                  className="pointer-events-none absolute -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-full border border-reef/80 bg-lagoon-deep/80 px-2 py-[2px] font-mono text-[10px] text-linen backdrop-blur-sm"
+                                  style={{ left: label.x, top: label.y }}
+                              >
+                                  <span
+                                      className="mr-1 inline-block h-[6px] w-[6px] rounded-full align-middle"
+                                      style={{
+                                          backgroundColor:
+                                              PRESENCE_COLOR[agent.presence] ?? PRESENCE_COLOR.idle,
+                                      }}
+                                  />
+                                  {agent.name}
+                              </div>
+                          );
+                      })
+                    : null}
 
                 {message ? (
                     <div className="absolute bottom-3 left-3 border border-reef bg-lagoon px-3 py-2 font-mono text-[11px] text-driftwood rounded-lg">
