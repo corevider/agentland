@@ -684,7 +684,11 @@ async fn dispatch_task(
                 },
             )?;
 
-            state.dispatch.lock().queue.retain(|entry| entry != &task.id);
+            {
+                let mut dispatch = state.dispatch.lock();
+                dispatch.queue.retain(|entry| entry != &task.id);
+                dispatch.record_handoff(&agent.id, &task.id, reason);
+            }
 
             let _ = updated;
             Ok(Json(DispatchReport {

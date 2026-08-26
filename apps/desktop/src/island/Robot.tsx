@@ -18,9 +18,22 @@ export function Robot({ agent_id, presence, accent, highlighted }: Props) {
     const left_arm = useRef<THREE.Group>(null);
     const right_arm = useRef<THREE.Group>(null);
     const head = useRef<THREE.Group>(null);
+    const bulb = useRef<THREE.Mesh>(null);
 
     useFrame(({ clock }) => {
         const time = clock.getElapsedTime();
+
+        if (bulb.current) {
+            const material = bulb.current.material as THREE.MeshBasicMaterial;
+            material.opacity =
+                presence === "attention"
+                    ? 0.55 + Math.abs(Math.sin(time * 3.2)) * 0.45
+                    : presence === "working"
+                      ? 0.7 + Math.sin(time * 1.6) * 0.15
+                      : presence === "done"
+                        ? 0.9
+                        : 0.25;
+        }
 
         if (presence === "working") {
             const swing = Math.sin(time * 2.4) * 0.35;
@@ -68,6 +81,22 @@ export function Robot({ agent_id, presence, accent, highlighted }: Props) {
 
     return (
         <group ref={body} userData={{ agent_id }} scale={0.44}>
+            <group position={[0, 2.12, 0]} userData={{ agent_id }}>
+                <mesh position={[0, -0.14, 0]} userData={{ agent_id }}>
+                    <cylinderGeometry args={[0.015, 0.015, 0.16, 4]} />
+                    <meshLambertMaterial color={JOINT} flatShading />
+                </mesh>
+                <mesh position={[0, -0.03, 0]} userData={{ agent_id }}>
+                    <cylinderGeometry args={[0.07, 0.05, 0.05, 6]} />
+                    <meshLambertMaterial color={JOINT} flatShading />
+                </mesh>
+                <mesh ref={bulb} position={[0, 0.08, 0]} userData={{ agent_id }}>
+                    <icosahedronGeometry args={[0.12, 0]} />
+                    <meshBasicMaterial color={accent} transparent opacity={0.8} />
+                </mesh>
+                <pointLight color={accent} intensity={presence === "idle" ? 0.15 : 0.6} distance={2.4} />
+            </group>
+
             <group ref={head} position={[0, 1.62, 0]} userData={{ agent_id }}>
                 <mesh castShadow userData={{ agent_id }}>
                     <boxGeometry args={[0.34, 0.3, 0.3]} />
@@ -87,11 +116,6 @@ export function Robot({ agent_id, presence, accent, highlighted }: Props) {
             <mesh position={[0, 1.02, 0]} castShadow userData={{ agent_id }}>
                 <boxGeometry args={[0.5, 0.62, 0.28]} />
                 <meshLambertMaterial color={panel} flatShading />
-            </mesh>
-
-            <mesh position={[0, 1.12, 0.15]} userData={{ agent_id }}>
-                <boxGeometry args={[0.16, 0.16, 0.02]} />
-                <meshBasicMaterial color={accent} />
             </mesh>
 
             <mesh position={[0, 0.66, 0]} userData={{ agent_id }}>

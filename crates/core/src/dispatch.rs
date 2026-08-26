@@ -28,6 +28,14 @@ pub enum Decision {
     Refuse { reason: String },
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct DispatchEvent {
+    pub seq: u64,
+    pub agent_id: String,
+    pub task_id: String,
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct DispatchState {
     #[serde(default)]
@@ -36,6 +44,28 @@ pub struct DispatchState {
     pub caps: Caps,
     #[serde(default)]
     pub queue: VecDeque<String>,
+    #[serde(default)]
+    pub events: VecDeque<DispatchEvent>,
+    #[serde(default)]
+    pub next_seq: u64,
+}
+
+const EVENT_HISTORY: usize = 24;
+
+impl DispatchState {
+    pub fn record_handoff(&mut self, agent_id: &str, task_id: &str, reason: &str) {
+        self.next_seq += 1;
+        self.events.push_back(DispatchEvent {
+            seq: self.next_seq,
+            agent_id: agent_id.to_owned(),
+            task_id: task_id.to_owned(),
+            reason: reason.to_owned(),
+        });
+
+        while self.events.len() > EVENT_HISTORY {
+            self.events.pop_front();
+        }
+    }
 }
 
 fn role_affinity(role: &str, task: &Task) -> u8 {

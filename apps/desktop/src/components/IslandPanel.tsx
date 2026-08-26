@@ -27,6 +27,8 @@ export function IslandPanel({ active }: Props) {
     const [message, set_message] = useState<string | null>(null);
     const [webgl] = useState(() => probe_gpu(1).renderer !== "none");
     const [dispatch, set_dispatch] = useState<DispatchState | null>(null);
+    const [shots, set_shots] = useState<Array<{ seq: number; agent_id: string }>>([]);
+    const seen_seq = useRef(0);
     const container_ref = useRef<HTMLDivElement>(null);
     const scene_ref = useRef<{ scene: THREE.Scene; camera: THREE.Camera } | null>(null);
     const raycaster = useRef(new THREE.Raycaster());
@@ -40,6 +42,15 @@ export function IslandPanel({ active }: Props) {
         set_agents(crew);
         set_tasks(board.filter((task) => !task.assignee));
         set_dispatch(manager);
+
+        const fresh = (manager.events ?? []).filter((event) => event.seq > seen_seq.current);
+        if (fresh.length > 0) {
+            seen_seq.current = Math.max(...fresh.map((event) => event.seq));
+            set_shots((current) => [
+                ...current,
+                ...fresh.map((event) => ({ seq: event.seq, agent_id: event.agent_id })),
+            ]);
+        }
     }, []);
 
     useEffect(() => {
@@ -184,6 +195,10 @@ export function IslandPanel({ active }: Props) {
                         active={active}
                         highlighted={hovered}
                         paused={dispatch?.paused ?? false}
+                        shots={shots}
+                        on_shot_done={(seq) =>
+                            set_shots((current) => current.filter((shot) => shot.seq !== seq))
+                        }
                         on_scene={(scene, camera) => {
                             scene_ref.current = { scene, camera };
                         }}

@@ -1,6 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { BoardPanel } from "@/components/BoardPanel";
+import { ContextMenu, useContextMenu } from "@/components/ContextMenu";
 import { CrewPanel } from "@/components/CrewPanel";
 import { RepoPanel } from "@/components/RepoPanel";
 import { SettingsPage } from "@/components/SettingsPage";
@@ -93,6 +94,7 @@ export default function App() {
     const frame_stats = use_frame_stats();
     frame_ref.current = frame_stats;
     const [gpu] = useState<GpuReport>(() => probe_gpu());
+    const menu = useContextMenu();
 
     useEffect(() => {
         list_sessions().then(set_sessions).catch((cause) => set_error(String(cause)));
@@ -234,8 +236,48 @@ export default function App() {
         save_settings(next);
     }, []);
 
+    const open_window_menu = useCallback(
+        (event: React.MouseEvent) => {
+            menu.open(event, "Agentland", [
+                { label: "Island", hint: "view", run: () => set_view("island") },
+                { label: "Panes", hint: "view", run: () => set_view("panes") },
+                { label: "Board", hint: "view", run: () => set_view("board") },
+                { label: "Repositories", hint: "view", run: () => set_view("repos") },
+                { label: "Crew", hint: "view", run: () => set_view("crew") },
+                { label: "Settings", run: () => set_settings_open(true) },
+                {
+                    label: "Reload the interface",
+                    run: () => window.location.reload(),
+                },
+                ...(import.meta.env.DEV
+                    ? [
+                          {
+                              label: "Developer tools",
+                              hint: "dev",
+                              run: () => {
+                                  void import("@tauri-apps/api/webviewWindow")
+                                      .then((module) => {
+                                          const window_handle = module.getCurrentWebviewWindow() as unknown as {
+                                              internalToggleDevtools?: () => void;
+                                          };
+                                          window_handle.internalToggleDevtools?.();
+                                      })
+                                      .catch(() => undefined);
+                              },
+                          },
+                      ]
+                    : []),
+            ]);
+        },
+        [menu],
+    );
+
     return (
-        <div className="relative flex h-screen flex-col bg-[#0b1113] text-[#d6e2e6]">
+        <div
+            className="relative flex h-screen flex-col bg-[#0b1113] text-[#d6e2e6]"
+            onContextMenu={open_window_menu}
+        >
+            <ContextMenu request={menu.request} on_close={menu.close} />
             {settings_open ? (
                 <SettingsPage
                     settings={settings}

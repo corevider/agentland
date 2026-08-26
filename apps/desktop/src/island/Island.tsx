@@ -3,6 +3,7 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 
 import type { Agent } from "@/lib/core";
+import { Projectile } from "@/island/Projectile";
 import { Robot } from "@/island/Robot";
 import {
     PRESENCE_COLOR,
@@ -253,12 +254,24 @@ interface Props {
     active: boolean;
     highlighted: string | null;
     paused: boolean;
+    shots: Array<{ seq: number; agent_id: string }>;
+    on_shot_done: (seq: number) => void;
     on_scene: (scene: THREE.Scene, camera: THREE.Camera) => void;
 }
 
-export function Island({ agents, seed, active, highlighted, paused, on_scene }: Props) {
+export function Island({
+    agents,
+    seed,
+    active,
+    highlighted,
+    paused,
+    shots,
+    on_shot_done,
+    on_scene,
+}: Props) {
     const tier = tier_for(agents.length);
     const placements = station_placements(agents.length, tier.radius);
+    const lighthouse: [number, number, number] = [tier.radius * 0.8, 1.9, -tier.radius * 0.35];
 
     return (
         <Canvas
@@ -284,6 +297,23 @@ export function Island({ agents, seed, active, highlighted, paused, on_scene }: 
                 paused={paused}
                 highlighted={highlighted === "__dispatch__"}
             />
+
+            {shots.map((shot) => {
+                const index = agents.findIndex((agent) => agent.id === shot.agent_id);
+                if (index < 0) {
+                    return null;
+                }
+
+                return (
+                    <Projectile
+                        key={shot.seq}
+                        from={lighthouse}
+                        to={[placements[index].x, 0.9, placements[index].z]}
+                        color="#e0c05a"
+                        on_done={() => on_shot_done(shot.seq)}
+                    />
+                );
+            })}
 
             {agents.map((agent, index) => (
                 <Station

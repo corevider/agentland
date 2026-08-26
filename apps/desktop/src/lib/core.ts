@@ -399,10 +399,19 @@ export function open_pull_request(
     });
 }
 
+export interface DispatchEvent {
+    seq: number;
+    agent_id: string;
+    task_id: string;
+    reason: string;
+}
+
 export interface DispatchState {
     paused: boolean;
     caps: { per_repository: number; per_engine: number };
     queue: string[];
+    events: DispatchEvent[];
+    next_seq: number;
 }
 
 export interface DispatchReport {
