@@ -20,6 +20,25 @@ fn core_endpoint(state: tauri::State<'_, CoreEndpoint>) -> CoreEndpoint {
     state.inner().clone()
 }
 
+fn updater_endpoints() -> Vec<String> {
+    std::env::var("AGENTLAND_UPDATER_ENDPOINTS")
+        .unwrap_or_default()
+        .split(',')
+        .map(|entry| entry.trim().to_owned())
+        .filter(|entry| !entry.is_empty())
+        .collect()
+}
+
+#[tauri::command]
+fn updater_status() -> String {
+    let endpoints = updater_endpoints();
+    if endpoints.is_empty() {
+        "Updates are off: no endpoint configured.".to_owned()
+    } else {
+        format!("Updates come from {} signed endpoint(s).", endpoints.len())
+    }
+}
+
 fn main() {
     tracing_subscriber::fmt().with_target(false).init();
 
@@ -49,8 +68,9 @@ fn main() {
     };
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(endpoint)
-        .invoke_handler(tauri::generate_handler![core_endpoint])
+        .invoke_handler(tauri::generate_handler![core_endpoint, updater_status])
         .setup(move |app| {
             let manager = Arc::new(PtyManager::new());
             app.manage(manager.clone());

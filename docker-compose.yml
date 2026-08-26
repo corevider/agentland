@@ -1,0 +1,23 @@
+services:
+  agentland:
+    build: .
+    image: agentland-core:dev
+    container_name: agentland-core
+    ports:
+      - "127.0.0.1:${HOST_PORT:-9470}:9470"
+    environment:
+      AGENTLAND_TOKEN: ${AGENTLAND_TOKEN:?run ./scripts/container.sh, which generates a token}
+      AGENTLAND_PORT: 9470
+      AGENTLAND_HOST: 0.0.0.0
+      AGENTLAND_UI_DIR: /opt/agentland/ui
+      AGENTLAND_ALLOWED_HOSTS: "127.0.0.1:${HOST_PORT:-9470},localhost:${HOST_PORT:-9470}"
+    volumes:
+      - ./data/container:/data
+      - ${AGENTLAND_PROJECTS_DIR:-./projects}:/projects
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 2048
+    mem_limit: 4g
+    restart: unless-stopped

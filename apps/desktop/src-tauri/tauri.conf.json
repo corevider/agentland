@@ -24,7 +24,30 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "all"
+    "active": true,
+    "targets": [
+      "deb",
+      "appimage"
+    ],
+    "publisher": "Agentland",
+    "category": "DeveloperTool",
+    "shortDescription": "A crew of coding agents, one worktree each",
+    "longDescription": "Agentland runs a named crew of CLI coding agents in parallel across real git worktrees, each with its own branch, dev server and preview.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "linux": {
+      "deb": {}
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": []
+    }
   }
 }

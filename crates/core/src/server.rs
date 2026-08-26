@@ -13,6 +13,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::services::ServeDir;
 
 use crate::bench::GeneratorSpec;
 use crate::board::{Board, Column, CreateTask, Evidence, MoveTask, Task};
@@ -132,6 +133,14 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .layer(cors)
         .with_state(state);
 
+    let app = match std::env::var("AGENTLAND_UI_DIR").ok().filter(|dir| !dir.is_empty()) {
+        Some(dir) => {
+            tracing::info!(%dir, "serving the interface");
+            app.fallback_service(ServeDir::new(dir))
+        }
+        None => app,
+    };
+
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, "core listening");
     axum::serve(listener, app).await?;
@@ -161,6 +170,10 @@ async fn guard(
             .into_response();
     }
 
+    if is_public_asset(request.uri().path()) {
+        return next.run(request).await;
+    }
+
     let header_token = headers
         .get("x-auth-token")
         .and_then(|value| value.to_str().ok())
@@ -178,6 +191,13 @@ async fn guard(
     }
 
     next.run(request).await
+}
+
+fn is_public_asset(path: &str) -> bool {
+    path == "/"
+        || path == "/index.html"
+        || path == "/favicon.ico"
+        || path.starts_with("/assets/")
 }
 
 async fn list_sessions(State(state): State<AppState>) -> Json<Vec<SessionReport>> {
