@@ -6,10 +6,13 @@ import { Workspace } from "@/workspace/Workspace";
 import {
     PANELS,
     load_layout,
+    open_panel,
     save_layout,
+    visible_panels,
     type Layout,
     type PanelId,
 } from "@/workspace/layout";
+import { PreviewPanel } from "@/components/PreviewPanel";
 import { SkillsPanel } from "@/components/SkillsPanel";
 import { CrewPanel } from "@/components/CrewPanel";
 import { RepoPanel } from "@/components/RepoPanel";
@@ -120,19 +123,13 @@ export default function App() {
         save_layout(next);
     }, []);
 
-    const focus_panel = useCallback(
-        (panel: PanelId) => {
-            set_layout_state((current) => {
-                if (current.left === panel || current.right === panel || current.bottom === panel) {
-                    return current;
-                }
-                const next = { ...current, right: panel };
-                save_layout(next);
-                return next;
-            });
-        },
-        [],
-    );
+    const focus_panel = useCallback((panel: PanelId) => {
+        set_layout_state((current) => {
+            const next = open_panel(current, panel);
+            save_layout(next);
+            return next;
+        });
+    }, []);
 
     useEffect(() => {
         const handle = window.setInterval(() => {
@@ -141,7 +138,7 @@ export default function App() {
                     for (const command of commands) {
                         if (command.startsWith("view:")) {
                             const target = command.slice("view:".length);
-                            if (["island", "panes", "board", "repos", "crew"].includes(target)) {
+                            if (PANELS.some((panel) => panel.id === target)) {
                                 focus_panel(target as PanelId);
                             }
                             continue;
@@ -229,9 +226,7 @@ export default function App() {
                 gpu: `${gpu.webgl2 ? "webgl2" : gpu.renderer === "none" ? "none" : "webgl1"} · ${gpu.renderer} · ${gpu.max_contexts} ctx`,
                 island_fps,
                 island_worst_ms,
-                panels: [layout_ref.current.left, layout_ref.current.right, layout_ref.current.bottom]
-                    .filter(Boolean)
-                    .join("+"),
+                panels: visible_panels(layout_ref.current).join("+"),
             }).catch(() => undefined);
         }, 2000);
 
@@ -296,9 +291,13 @@ export default function App() {
             const wants_island = command === "bench:with-island";
             set_layout({
                 ...layout_ref.current,
-                left: wants_island ? "island" : "panes",
-                right: "panes",
-                bottom: null,
+                slots: {
+                    left_top: { panels: wants_island ? ["island"] : ["board"], active: 0 },
+                    left_bottom: { panels: [], active: 0 },
+                    right_top: { panels: ["panes"], active: 0 },
+                    right_bottom: { panels: [], active: 0 },
+                },
+                column_fraction: wants_island ? 0.38 : 0.2,
             });
 
             window.setTimeout(() => void run_benchmark(), 600);
@@ -324,6 +323,7 @@ export default function App() {
         }
     }, [clear, pane_count]);
 
+    const visible = useMemo(() => visible_panels(layout), [layout]);
     const grid_columns = useMemo(() => (sessions.length > 4 ? 4 : Math.max(sessions.length, 1)), [sessions.length]);
     const verdict = frame_stats.fps >= 55 ? "pass" : frame_stats.fps >= 30 ? "marginal" : "fail";
 
@@ -340,10 +340,12 @@ export default function App() {
                 { label: "Board", hint: "panel", run: () => focus_panel("board") },
                 { label: "Repositories", hint: "panel", run: () => focus_panel("repos") },
                 { label: "Crew", hint: "panel", run: () => focus_panel("crew") },
+                { label: "Skills", hint: "panel", run: () => focus_panel("skills") },
+                { label: "Preview", hint: "panel", run: () => focus_panel("preview") },
                 {
                     label: "Capture the island",
                     hint: "png",
-                    disabled: layout.left !== "island" && layout.right !== "island" && layout.bottom !== "island",
+                    disabled: !visible_panels(layout).includes("island"),
                     run: () => {
                         window.dispatchEvent(new CustomEvent("agentland:capture-island"));
                     },
@@ -399,10 +401,7 @@ export default function App() {
 
                 <div className="flex gap-1">
                     {PANELS.map((panel) => {
-                        const shown =
-                            layout.left === panel.id ||
-                            layout.right === panel.id ||
-                            layout.bottom === panel.id;
+                        const shown = visible.includes(panel.id);
 
                         return (
                             <button
@@ -479,9 +478,12 @@ export default function App() {
             <Workspace
                 layout={layout}
                 on_layout={set_layout}
-                render_panel={(panel: PanelId) => {
+                render_panel={(panel: PanelId, active: boolean) => {
                     if (panel === "repos") {
                         return <RepoPanel active />;
+                    }
+                    if (panel === "preview") {
+                        return <PreviewPanel active={active} />;
                     }
                     if (panel === "skills") {
                         return <SkillsPanel active />;

@@ -1,7 +1,16 @@
-import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
-import { Panel } from "@/workspace/Panel";
-import { PANELS, clamp_fraction, type Layout, type PanelId, type SlotId } from "@/workspace/layout";
+import { PanelBoundary } from "@/workspace/Panel";
+import {
+    PANELS,
+    SLOTS,
+    clamp_fraction,
+    close_panel,
+    move_panel,
+    type Layout,
+    type PanelId,
+    type SlotId,
+} from "@/workspace/layout";
 
 interface Props {
     layout: Layout;
@@ -10,60 +19,189 @@ interface Props {
     subtitle_for: (id: PanelId) => string | undefined;
 }
 
-function PanelPicker({
-    slot,
-    current,
-    on_pick,
-}: {
+type Divider = { kind: "column" } | { kind: "row"; column: "left" | "right" };
+
+function label_of(panel: PanelId): string {
+    return PANELS.find((entry) => entry.id === panel)?.label ?? panel;
+}
+
+function AddPanel({ slot, layout, on_layout }: {
     slot: SlotId;
-    current: PanelId | null;
-    on_pick: (slot: SlotId, id: PanelId | null) => void;
+    layout: Layout;
+    on_layout: (next: Layout) => void;
 }) {
+    const [open, set_open] = useState(false);
+    const taken = new Set(SLOTS.flatMap((id) => layout.slots[id].panels));
+    const available = PANELS.filter((panel) => !taken.has(panel.id));
+
+    if (available.length === 0) {
+        return null;
+    }
+
     return (
-        <select
-            className="rounded-lg border border-reef bg-lagoon-deep px-2 py-1 font-mono text-[10px]"
-            value={current ?? ""}
-            onChange={(event) => on_pick(slot, (event.target.value || null) as PanelId | null)}
+        <div className="relative">
+            <button
+                className="rounded px-1.5 py-0.5 font-mono text-[11px] text-shell hover:text-linen"
+                title="add a panel here"
+                onClick={() => set_open((value) => !value)}
+            >
+                +
+            </button>
+            {open ? (
+                <div
+                    className="absolute right-0 top-full z-20 mt-1 w-52 rounded-lg border border-reef bg-lagoon-deep p-1 shadow-lg"
+                    onMouseLeave={() => set_open(false)}
+                >
+                    {available.map((panel) => (
+                        <button
+                            key={panel.id}
+                            className="block w-full rounded px-2 py-1 text-left hover:bg-lagoon"
+                            onClick={() => {
+                                on_layout(move_panel(layout, panel.id, slot));
+                                set_open(false);
+                            }}
+                        >
+                            <span className="text-xs text-linen">{panel.label}</span>
+                            <span className="ml-1 font-mono text-[10px] text-shade">{panel.hint}</span>
+                        </button>
+                    ))}
+                </div>
+            ) : null}
+        </div>
+    );
+}
+
+function SlotView({
+    id,
+    layout,
+    on_layout,
+    render_panel,
+    subtitle_for,
+}: Props & { id: SlotId }) {
+    const slot = layout.slots[id];
+    const [over, set_over] = useState(false);
+    const active = slot.panels[slot.active] ?? null;
+
+    const accept = useCallback(
+        (event: React.DragEvent) => {
+            event.preventDefault();
+            set_over(false);
+            const panel = event.dataTransfer.getData("text/agentland-panel") as PanelId;
+            if (panel) {
+                on_layout(move_panel(layout, panel, id));
+            }
+        },
+        [id, layout, on_layout],
+    );
+
+    return (
+        <section
+            className={`flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-xl border bg-lagoon ${
+                over ? "border-turquoise" : "border-reef"
+            }`}
+            onDragOver={(event) => {
+                event.preventDefault();
+                set_over(true);
+            }}
+            onDragLeave={() => set_over(false)}
+            onDrop={accept}
         >
-            <option value="">empty</option>
-            {PANELS.map((panel) => (
-                <option key={panel.id} value={panel.id}>
-                    {panel.label}
-                </option>
-            ))}
-        </select>
+            <header className="flex shrink-0 items-stretch gap-1 border-b border-reef/70 pr-1">
+                <div className="flex min-w-0 flex-1 items-stretch overflow-x-auto">
+                    {slot.panels.map((panel, index) => (
+                        <div
+                            key={panel}
+                            draggable
+                            onDragStart={(event) => {
+                                event.dataTransfer.setData("text/agentland-panel", panel);
+                                event.dataTransfer.effectAllowed = "move";
+                            }}
+                            onClick={() =>
+                                on_layout({
+                                    ...layout,
+                                    slots: { ...layout.slots, [id]: { ...slot, active: index } },
+                                })
+                            }
+                            className={`group flex cursor-pointer items-center gap-1.5 border-b-2 px-3 py-1.5 ${
+                                index === slot.active
+                                    ? "border-turquoise text-linen"
+                                    : "border-transparent text-shell hover:text-linen"
+                            }`}
+                        >
+                            <span className="whitespace-nowrap text-xs">{label_of(panel)}</span>
+                            {index === slot.active ? (
+                                <span className="whitespace-nowrap font-mono text-[10px] text-shade">
+                                    {subtitle_for(panel)}
+                                </span>
+                            ) : null}
+                            <button
+                                className="rounded px-0.5 font-mono text-[10px] text-shade opacity-0 hover:text-coral group-hover:opacity-100"
+                                title="close"
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    on_layout(close_panel(layout, id, panel));
+                                }}
+                            >
+                                ×
+                            </button>
+                        </div>
+                    ))}
+                </div>
+                <div className="flex shrink-0 items-center">
+                    <AddPanel slot={id} layout={layout} on_layout={on_layout} />
+                </div>
+            </header>
+
+            <PanelBoundary label={active ? label_of(active) : id}>
+                <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                    {slot.panels.length === 0 ? (
+                        <div className="flex flex-1 items-center justify-center font-mono text-[11px] text-shade">
+                            drop a panel here
+                        </div>
+                    ) : (
+                        slot.panels.map((panel) => (
+                            <div
+                                key={panel}
+                                className={`min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${
+                                    panel === active ? "flex" : "hidden"
+                                }`}
+                            >
+                                {render_panel(panel, panel === active)}
+                            </div>
+                        ))
+                    )}
+                </div>
+            </PanelBoundary>
+        </section>
     );
 }
 
 export function Workspace({ layout, on_layout, render_panel, subtitle_for }: Props) {
     const frame = useRef<HTMLDivElement>(null);
-    const dragging = useRef<"column" | "row" | null>(null);
-
-    const update = useCallback(
-        (next: Layout) => {
-            on_layout(next);
-        },
-        [on_layout],
-    );
+    const dragging = useRef<Divider | null>(null);
 
     useEffect(() => {
         const move = (event: PointerEvent) => {
             const bounds = frame.current?.getBoundingClientRect();
-            if (!bounds || !dragging.current) {
+            const divider = dragging.current;
+            if (!bounds || !divider) {
                 return;
             }
 
-            if (dragging.current === "column") {
-                update({
+            if (divider.kind === "column") {
+                on_layout({
                     ...layout,
-                    left_fraction: clamp_fraction((event.clientX - bounds.left) / bounds.width),
+                    column_fraction: clamp_fraction((event.clientX - bounds.left) / bounds.width),
                 });
-            } else {
-                update({
-                    ...layout,
-                    bottom_fraction: clamp_fraction((bounds.bottom - event.clientY) / bounds.height),
-                });
+                return;
             }
+
+            const fraction = clamp_fraction((event.clientY - bounds.top) / bounds.height);
+            on_layout(
+                divider.column === "left"
+                    ? { ...layout, left_row_fraction: fraction }
+                    : { ...layout, right_row_fraction: fraction },
+            );
         };
 
         const stop = () => {
@@ -73,80 +211,75 @@ export function Workspace({ layout, on_layout, render_panel, subtitle_for }: Pro
 
         window.addEventListener("pointermove", move);
         window.addEventListener("pointerup", stop);
+        window.addEventListener("pointercancel", stop);
 
         return () => {
             window.removeEventListener("pointermove", move);
             window.removeEventListener("pointerup", stop);
+            window.removeEventListener("pointercancel", stop);
         };
-    }, [layout, update]);
+    }, [layout, on_layout]);
 
-    const pick = useCallback(
-        (slot: SlotId, id: PanelId | null) => {
-            update({ ...layout, [slot]: id });
-        },
-        [layout, update],
-    );
-
-    const slot = (id: SlotId, panel: PanelId | null) => {
-        if (!panel) {
-            return (
-                <div className="flex h-full w-full min-h-0 min-w-0 flex-1 items-center justify-center rounded-xl border border-dashed border-reef/70">
-                    <PanelPicker slot={id} current={null} on_pick={pick} />
-                </div>
-            );
-        }
-
-        const meta = PANELS.find((entry) => entry.id === panel);
+    const column = (
+        side: "left" | "right",
+        top: SlotId,
+        bottom: SlotId,
+        fraction: number,
+    ) => {
+        const has_bottom = layout.slots[bottom].panels.length > 0;
+        const props = { layout, on_layout, render_panel, subtitle_for };
 
         return (
-            <Panel
-                title={meta?.label ?? panel}
-                subtitle={subtitle_for(panel)}
-                actions={<PanelPicker slot={id} current={panel} on_pick={pick} />}
-            >
-                {render_panel(panel, true)}
-            </Panel>
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+                <div
+                    className="flex min-h-0 min-w-0"
+                    style={has_bottom ? { height: `${fraction * 100}%` } : { flex: 1 }}
+                >
+                    <SlotView id={top} {...props} />
+                </div>
+
+                {has_bottom ? (
+                    <>
+                        <div
+                            className="h-1 shrink-0 cursor-row-resize rounded bg-reef/60 hover:bg-turquoise"
+                            onPointerDown={() => {
+                                dragging.current = { kind: "row", column: side };
+                                document.body.style.cursor = "row-resize";
+                            }}
+                        />
+                        <div className="flex min-h-0 min-w-0 flex-1">
+                            <SlotView id={bottom} {...props} />
+                        </div>
+                    </>
+                ) : (
+                    <div className="flex shrink-0">
+                        <SlotView id={bottom} {...props} />
+                    </div>
+                )}
+            </div>
         );
     };
 
-    const bottom_height = layout.bottom ? `${layout.bottom_fraction * 100}%` : "0%";
-
     return (
-        <div ref={frame} className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 p-2">
-            <div className="flex min-h-0 min-w-0 flex-1 gap-2">
-                <div style={{ width: `${layout.left_fraction * 100}%` }} className="flex min-h-0 min-w-0">
-                    {slot("left", layout.left)}
-                </div>
-
-                <div
-                    className="w-1 shrink-0 cursor-col-resize rounded bg-reef/60 hover:bg-turquoise"
-                    onPointerDown={() => {
-                        dragging.current = "column";
-                        document.body.style.cursor = "col-resize";
-                    }}
-                />
-
-                <div className="flex min-h-0 min-w-0 flex-1">{slot("right", layout.right)}</div>
+        <div ref={frame} className="flex min-h-0 min-w-0 flex-1 gap-2 p-2">
+            <div
+                style={{ width: `${layout.column_fraction * 100}%` }}
+                className="flex min-h-0 min-w-0"
+            >
+                {column("left", "left_top", "left_bottom", layout.left_row_fraction)}
             </div>
 
-            {layout.bottom ? (
-                <>
-                    <div
-                        className="h-1 shrink-0 cursor-row-resize rounded bg-reef/60 hover:bg-turquoise"
-                        onPointerDown={() => {
-                            dragging.current = "row";
-                            document.body.style.cursor = "row-resize";
-                        }}
-                    />
-                    <div style={{ height: bottom_height }} className="flex min-h-0 min-w-0">
-                        {slot("bottom", layout.bottom)}
-                    </div>
-                </>
-            ) : (
-                <div className="flex shrink-0 justify-center">
-                    <PanelPicker slot="bottom" current={null} on_pick={pick} />
-                </div>
-            )}
+            <div
+                className="w-1 shrink-0 cursor-col-resize rounded bg-reef/60 hover:bg-turquoise"
+                onPointerDown={() => {
+                    dragging.current = { kind: "column" };
+                    document.body.style.cursor = "col-resize";
+                }}
+            />
+
+            <div className="flex min-h-0 min-w-0 flex-1">
+                {column("right", "right_top", "right_bottom", layout.right_row_fraction)}
+            </div>
         </div>
     );
 }
