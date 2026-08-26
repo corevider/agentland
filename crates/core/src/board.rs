@@ -16,7 +16,7 @@ pub enum Column {
     Done,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum Evidence {
     Commit { sha: String, subject: String },
@@ -25,7 +25,7 @@ pub enum Evidence {
     Note { text: String },
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Task {
     pub id: String,
     pub title: String,

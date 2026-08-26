@@ -363,3 +363,30 @@ export function open_pull_request(
         body: JSON.stringify({ title, body, task_id }),
     });
 }
+
+export interface DispatchState {
+    paused: boolean;
+    caps: { per_repository: number; per_engine: number };
+    queue: string[];
+}
+
+export interface DispatchReport {
+    state: DispatchState;
+    decision: { outcome: "assign" | "queue" | "refuse"; agent_id?: string; reason: string };
+    task: Task | null;
+}
+
+export function dispatch_status(): Promise<DispatchState> {
+    return request<DispatchState>("/dispatch");
+}
+
+export function pause_dispatch(paused: boolean): Promise<DispatchState> {
+    return request<DispatchState>("/dispatch/pause", {
+        method: "POST",
+        body: JSON.stringify({ paused }),
+    });
+}
+
+export function dispatch_task(id: string): Promise<DispatchReport> {
+    return request<DispatchReport>(`/dispatch/tasks/${id}`, { method: "POST" });
+}

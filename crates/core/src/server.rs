@@ -17,6 +17,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use crate::bench::GeneratorSpec;
 use crate::board::{Board, Column, CreateTask, Evidence, MoveTask, Task};
 use crate::crew::{Agent, Crew, Engine, HireRequest};
+use crate::dispatch::{decide, Decision, DispatchState};
 use crate::metrics::{MetricsStore, Sample};
 use crate::repo::{PullRequest, RepoRegistry, Repository, Review, Worktree, WorktreeStatus};
 use crate::services::{Service, ServiceRegistry};
@@ -40,6 +41,7 @@ struct AppState {
     services: Arc<ServiceRegistry>,
     crew: Arc<Crew>,
     board: Arc<Board>,
+    dispatch: Arc<parking_lot::Mutex<DispatchState>>,
 }
 
 #[derive(Deserialize)]
@@ -90,6 +92,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         services: ServiceRegistry::new(manager_for_services),
         crew: Crew::new(manager_for_crew, PathBuf::from("data")),
         board: Arc::new(Board::new(PathBuf::from("data"))),
+        dispatch: Arc::new(parking_lot::Mutex::new(DispatchState::default())),
     };
 
     let app = Router::new()
@@ -115,6 +118,9 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/tasks/{id}", delete(delete_task))
         .route("/tasks/{id}/move", post(move_task))
         .route("/tasks/{id}/assign", post(assign_task))
+        .route("/dispatch", get(dispatch_status))
+        .route("/dispatch/pause", post(pause_dispatch))
+        .route("/dispatch/tasks/{id}", post(dispatch_task))
         .route("/repos/{id}/worktrees/{name}/review", get(review_worktree))
         .route("/repos/{id}/worktrees/{name}/pr", post(open_pull_request))
         .route(
@@ -362,6 +368,119 @@ async fn assign_task(
         .record_assignment(&id, &agent.id, &worktree.name, &worktree.branch)?;
 
     Ok(Json(updated))
+}
+
+#[derive(Deserialize)]
+struct PauseBody {
+    paused: bool,
+}
+
+#[derive(Serialize)]
+struct DispatchReport {
+    state: DispatchState,
+    decision: Decision,
+    task: Option<Task>,
+}
+
+async fn dispatch_status(State(state): State<AppState>) -> Json<DispatchState> {
+    Json(state.dispatch.lock().clone())
+}
+
+async fn pause_dispatch(
+    State(state): State<AppState>,
+    Json(body): Json<PauseBody>,
+) -> Json<DispatchState> {
+    let mut dispatch = state.dispatch.lock();
+    dispatch.paused = body.paused;
+    Json(dispatch.clone())
+}
+
+async fn dispatch_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<DispatchReport>, ApiError> {
+    let task = state
+        .board
+        .get(&id)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("unknown task: {id}")))?;
+
+    let crew = state.crew.list();
+    let decision = {
+        let dispatch = state.dispatch.lock();
+        decide(&dispatch, &task, &crew)
+    };
+
+    match &decision {
+        Decision::Assign { agent_id, reason } => {
+            let agent = crew
+                .iter()
+                .find(|entry| &entry.id == agent_id)
+                .cloned()
+                .ok_or_else(|| ApiError(anyhow::anyhow!("chosen agent vanished")))?;
+
+            let worktree = state
+                .repos
+                .worktrees()
+                .into_iter()
+                .find(|entry| {
+                    entry.worktree.repository_id == agent.repository_id
+                        && entry.worktree.name == agent.worktree
+                })
+                .ok_or_else(|| ApiError(anyhow::anyhow!("{}'s worktree is gone", agent.name)))?
+                .worktree;
+
+            let brief = format!("{}\n\n{}", task.title, task.body);
+            state
+                .crew
+                .start(&agent.id, &worktree.path, false, Some(&brief))?;
+
+            let updated =
+                state
+                    .board
+                    .record_assignment(&task.id, &agent.id, &worktree.name, &worktree.branch)?;
+            let with_reason = state.board.attach(
+                &task.id,
+                Evidence::Note {
+                    text: format!("X: {reason}"),
+                },
+            )?;
+
+            state.dispatch.lock().queue.retain(|entry| entry != &task.id);
+
+            let _ = updated;
+            Ok(Json(DispatchReport {
+                state: state.dispatch.lock().clone(),
+                decision: decision.clone(),
+                task: Some(with_reason),
+            }))
+        }
+        Decision::Queue { reason } => {
+            let mut dispatch = state.dispatch.lock();
+            if !dispatch.queue.contains(&task.id) {
+                dispatch.queue.push_back(task.id.clone());
+            }
+            let snapshot = dispatch.clone();
+            drop(dispatch);
+
+            let noted = state.board.attach(
+                &task.id,
+                Evidence::Note {
+                    text: format!("X queued this: {reason}"),
+                },
+            )?;
+
+            Ok(Json(DispatchReport {
+                state: snapshot,
+                decision: decision.clone(),
+                task: Some(noted),
+            }))
+        }
+        Decision::Refuse { .. } => Ok(Json(DispatchReport {
+            state: state.dispatch.lock().clone(),
+            decision: decision.clone(),
+            task: None,
+        })),
+    }
 }
 
 async fn review_worktree(

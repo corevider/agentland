@@ -3,7 +3,17 @@ import * as THREE from "three";
 
 import { Island } from "@/island/Island";
 import { tier_for } from "@/island/geometry";
-import { assign_task, list_agents, list_tasks, type Agent, type Task } from "@/lib/core";
+import {
+    assign_task,
+    dispatch_status,
+    dispatch_task,
+    list_agents,
+    list_tasks,
+    pause_dispatch,
+    type Agent,
+    type DispatchState,
+    type Task,
+} from "@/lib/core";
 import { probe_gpu } from "@/lib/gpu";
 
 interface Props {
@@ -16,14 +26,20 @@ export function IslandPanel({ active }: Props) {
     const [hovered, set_hovered] = useState<string | null>(null);
     const [message, set_message] = useState<string | null>(null);
     const [webgl] = useState(() => probe_gpu(1).renderer !== "none");
+    const [dispatch, set_dispatch] = useState<DispatchState | null>(null);
     const container_ref = useRef<HTMLDivElement>(null);
     const scene_ref = useRef<{ scene: THREE.Scene; camera: THREE.Camera } | null>(null);
     const raycaster = useRef(new THREE.Raycaster());
 
     const refresh = useCallback(async () => {
-        const [crew, board] = await Promise.all([list_agents(), list_tasks()]);
+        const [crew, board, manager] = await Promise.all([
+            list_agents(),
+            list_tasks(),
+            dispatch_status(),
+        ]);
         set_agents(crew);
         set_tasks(board.filter((task) => !task.assignee));
+        set_dispatch(manager);
     }, []);
 
     useEffect(() => {
@@ -56,6 +72,9 @@ export function IslandPanel({ active }: Props) {
                 const id = node.userData?.agent_id;
                 if (typeof id === "string") {
                     return id;
+                }
+                if (node.userData?.dispatch === true) {
+                    return "__dispatch__";
                 }
                 node = node.parent;
             }
@@ -96,8 +115,29 @@ export function IslandPanel({ active }: Props) {
                     ))}
                 </div>
 
-                <footer className="border-t border-[#26343a] px-3 py-2 font-mono text-[10px] text-[#5d6e75]">
-                    {agents.length} crew · {tier.label}
+                <footer className="flex flex-col gap-2 border-t border-[#26343a] px-3 py-2 font-mono text-[10px] text-[#5d6e75]">
+                    <span>
+                        {agents.length} crew · {tier.label}
+                    </span>
+
+                    {dispatch ? (
+                        <div className="flex items-center justify-between gap-2">
+                            <span className={dispatch.paused ? "text-[#c99a2e]" : "text-[#5aa87c]"}>
+                                X {dispatch.paused ? "paused" : "on duty"}
+                                {dispatch.queue.length > 0 ? ` · ${dispatch.queue.length} queued` : ""}
+                            </span>
+                            <button
+                                className="border border-[#26343a] px-2 py-1"
+                                onClick={() =>
+                                    pause_dispatch(!dispatch.paused)
+                                        .then(set_dispatch)
+                                        .catch((cause) => set_message(String(cause)))
+                                }
+                            >
+                                {dispatch.paused ? "resume" : "pause"}
+                            </button>
+                        </div>
+                    ) : null}
                 </footer>
             </aside>
 
@@ -120,11 +160,18 @@ export function IslandPanel({ active }: Props) {
                         return;
                     }
 
-                    assign_task(task_id, agent_id)
-                        .then(() => {
-                            set_message(`${task_id} assigned to ${agent_id}`);
-                            return refresh();
-                        })
+                    const action =
+                        agent_id === "__dispatch__"
+                            ? dispatch_task(task_id).then((report) => {
+                                  const { outcome, reason } = report.decision;
+                                  set_message(`X ${outcome}: ${reason}`);
+                              })
+                            : assign_task(task_id, agent_id).then(() => {
+                                  set_message(`${task_id} assigned to ${agent_id}`);
+                              });
+
+                    action
+                        .then(() => refresh())
                         .catch((cause) =>
                             set_message(cause instanceof Error ? cause.message : String(cause)),
                         );
@@ -136,6 +183,7 @@ export function IslandPanel({ active }: Props) {
                         seed={agents.map((agent) => agent.id).join("-") || "empty"}
                         active={active}
                         highlighted={hovered}
+                        paused={dispatch?.paused ?? false}
                         on_scene={(scene, camera) => {
                             scene_ref.current = { scene, camera };
                         }}
@@ -167,7 +215,7 @@ export function IslandPanel({ active }: Props) {
 
                 {hovered ? (
                     <div className="absolute right-3 top-3 border border-[#45bcc4] bg-[#14343a] px-3 py-2 font-mono text-[11px] text-[#45bcc4]">
-                        drop to assign → {hovered}
+                        {hovered === "__dispatch__" ? "drop to hand to X" : `drop to assign → ${hovered}`}
                     </div>
                 ) : null}
             </div>

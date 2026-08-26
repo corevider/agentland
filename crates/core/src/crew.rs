@@ -82,7 +82,7 @@ pub enum AgentState {
     Offline,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Agent {
     pub id: String,
     pub name: String,

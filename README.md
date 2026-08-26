@@ -260,3 +260,25 @@ while it is the active view, 5 fps in the background, and nothing at all while t
 Its bundle is code-split, so the 900 KB of three.js loads when the island is opened rather than at
 startup. If a webview grants no WebGL context, the island degrades to a list carrying the same
 states instead of a blank canvas.
+
+
+## X — the manager
+
+X stands at the lighthouse and hands out work. It is deliberately not a black box: **every decision
+carries one line of reasoning, recorded on the card as evidence.** A manager that cannot explain a
+choice is a random number generator with a hat.
+
+The policy is deterministic and tested, not a model guessing:
+
+- an agent must be hired on the task's repository, or X refuses and says so
+- the task's words are matched against roles — "review the auth changes" goes to a reviewer
+- concurrency is capped per repository and per engine, so a runaway X cannot open twelve sessions
+  against one rate limit
+- when nobody is free, the card is queued with the reason attached rather than silently dropped
+- **pausing X freezes new handouts and leaves running agents alone** — the control you want at 2am
+
+Verified: two agents hired, a card reading "review the auth changes" dropped on X →
+`assign · Rex is free and the task reads like reviewer work`, recorded on the card. Paused →
+`queue · X is paused; nothing new is being handed out`, card in the queue.
+
+On the island, the lighthouse is the drop target for X; its lamp goes dark when X is paused.

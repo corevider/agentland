@@ -157,16 +157,16 @@ function Sea() {
     );
 }
 
-function Lighthouse({ radius }: { radius: number }) {
+function Lighthouse({ radius, paused, highlighted }: { radius: number; paused: boolean; highlighted: boolean }) {
     return (
-        <group position={[radius * 0.8, 0.2, -radius * 0.35]}>
-            <mesh position={[0, 0.7, 0]} castShadow>
+        <group position={[radius * 0.8, 0.2, -radius * 0.35]} userData={{ dispatch: true }}>
+            <mesh position={[0, 0.7, 0]} castShadow userData={{ dispatch: true }}>
                 <cylinderGeometry args={[0.16, 0.26, 1.4, 6]} />
-                <meshLambertMaterial color="#d8e2e6" flatShading />
+                <meshLambertMaterial color={highlighted ? "#45bcc4" : "#d8e2e6"} flatShading />
             </mesh>
-            <mesh position={[0, 1.5, 0]}>
+            <mesh position={[0, 1.5, 0]} userData={{ dispatch: true }}>
                 <sphereGeometry args={[0.14, 8, 8]} />
-                <meshBasicMaterial color="#e0c05a" />
+                <meshBasicMaterial color={paused ? "#46565d" : "#e0c05a"} />
             </mesh>
         </group>
     );
@@ -260,10 +260,11 @@ interface Props {
     seed: string;
     active: boolean;
     highlighted: string | null;
+    paused: boolean;
     on_scene: (scene: THREE.Scene, camera: THREE.Camera) => void;
 }
 
-export function Island({ agents, seed, active, highlighted, on_scene }: Props) {
+export function Island({ agents, seed, active, highlighted, paused, on_scene }: Props) {
     const tier = tier_for(agents.length);
     const placements = station_placements(agents.length, tier.radius);
 
@@ -286,7 +287,11 @@ export function Island({ agents, seed, active, highlighted, on_scene }: Props) {
             <Terrain tier={tier} seed={seed} />
             <Palms tier={tier} seed={seed} />
             {tier.has_jetty ? <Jetty radius={tier.radius} /> : null}
-            {tier.has_lighthouse ? <Lighthouse radius={tier.radius} /> : null}
+            <Lighthouse
+                radius={tier.radius}
+                paused={paused}
+                highlighted={highlighted === "__dispatch__"}
+            />
 
             {agents.map((agent, index) => (
                 <Station
