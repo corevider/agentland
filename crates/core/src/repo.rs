@@ -433,6 +433,14 @@ pub struct Review {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct Commit {
+    pub sha: String,
+    pub branch: String,
+    pub files: usize,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct PullRequest {
     pub url: String,
     pub created: bool,
@@ -614,6 +622,39 @@ impl RepoRegistry {
         })
     }
 
+    pub fn commit(
+        &self,
+        repository_id: &str,
+        worktree_name: &str,
+        message: &str,
+    ) -> Result<Commit> {
+        let message = message.trim();
+        if message.is_empty() {
+            bail!("a commit needs a message");
+        }
+
+        let (_, worktree) = self.locate(repository_id, worktree_name)?;
+        git(&["add", "-A"], Some(&worktree.path))?;
+
+        let staged = git(&["diff", "--cached", "--name-only"], Some(&worktree.path))?;
+        if staged.trim().is_empty() {
+            bail!("there is nothing to commit in {worktree_name}");
+        }
+
+        git(&["commit", "-q", "-m", message], Some(&worktree.path))?;
+
+        let sha = git(&["rev-parse", "--short", "HEAD"], Some(&worktree.path))?
+            .trim()
+            .to_owned();
+
+        Ok(Commit {
+            sha,
+            branch: worktree.branch,
+            files: staged.lines().filter(|line| !line.is_empty()).count(),
+            message: message.to_owned(),
+        })
+    }
+
     pub fn open_pull_request(
         &self,
         repository_id: &str,
@@ -622,6 +663,21 @@ impl RepoRegistry {
         body: &str,
     ) -> Result<PullRequest> {
         let (repository, worktree) = self.locate(repository_id, worktree_name)?;
+
+        let pending = git(&["status", "--porcelain"], Some(&worktree.path))?;
+        if !pending.trim().is_empty() {
+            let count = pending.lines().filter(|line| !line.is_empty()).count();
+            bail!("commit the work first: {count} file(s) in {worktree_name} are not committed");
+        }
+
+        let base = repository.default_branch.clone();
+        let ahead = git(
+            &["rev-list", "--count", &format!("{base}..HEAD")],
+            Some(&worktree.path),
+        )?;
+        if ahead.trim() == "0" {
+            bail!("{worktree_name} has no commits on top of {base} to open a pull request with");
+        }
 
         let origin = repository
             .remotes
@@ -668,7 +724,16 @@ impl RepoRegistry {
 
         let (owner, name) = match (origin.owner.as_deref(), origin.repo.as_deref()) {
             (Some(owner), Some(name)) => (owner, name),
-            _ => bail!("branch pushed, but this remote has no web address to open"),
+            _ => {
+                return Ok(PullRequest {
+                    url: String::new(),
+                    created: false,
+                    detail: format!(
+                        "{} is pushed to {}, which has no web address to open a pull request on",
+                        worktree.branch, origin.name
+                    ),
+                })
+            }
         };
         let host = origin.host.as_deref().unwrap_or("github.com");
 

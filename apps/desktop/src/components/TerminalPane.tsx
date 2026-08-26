@@ -19,6 +19,16 @@ const QUEUE_LIMIT_BYTES = TAIL_LIMIT_BYTES * 4;
 const BACKGROUND_FLUSH_MS = 250;
 const RESET_SEQUENCE = new TextEncoder().encode("\x1b[0m");
 
+function format_tokens(tokens: number): string {
+    if (tokens >= 1_000_000) {
+        return `${(tokens / 1_000_000).toFixed(1)}M`;
+    }
+    if (tokens >= 1_000) {
+        return `${(tokens / 1_000).toFixed(1)}k`;
+    }
+    return String(tokens);
+}
+
 export interface PaneMetrics {
     bytes: number;
     dropped_frames: number;
@@ -252,7 +262,11 @@ export function TerminalPane({ session, focused, on_focus, on_metrics }: Props) 
                             {format_bytes(stats.bytes)}
                         </span>
                         {stats.context_percent !== null ? (
-                            <span className="text-turquoise">{stats.context_percent}% ctx</span>
+                            <span className="text-turquoise">{stats.context_percent}% ctx left</span>
+                        ) : stats.context_tokens !== null ? (
+                            <span className="text-turquoise" title="what the engine reports in context">
+                                {format_tokens(stats.context_tokens)} ctx
+                            </span>
                         ) : null}
                     </span>
                 ) : null}

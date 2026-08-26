@@ -615,3 +615,100 @@ The mobile and desktop static files were mounted **after** the guard layer, so n
 Host check — a forged `Host` header fetched the app bundle. Routes are now assembled first and the
 guard wraps the finished router, so `/mobile` answers 403 to a forged host exactly like every data
 route does.
+
+## Paying down what the PRD owed
+
+Three debts were carried for months, each written down as a risk rather than fixed. They are closed.
+
+### State moved to SQLite
+
+Every store kept its whole state in one pretty-printed JSON file and rewrote it in full on each
+change. That survives until it doesn't: a crash between `write` and `close` takes the file with it.
+State now lives in one WAL-mode SQLite database. Each store keeps its struct; what changes is that a
+write is atomic.
+
+The migration mattered more than the schema. On first start a legacy `board.json` is imported and
+renamed to `board.json.imported` — kept, not deleted, so a bad import can be undone by hand. A file
+that will not parse is left exactly where it is and reported, because destroying an unreadable file
+is the one unrecoverable move.
+
+It was verified against a copy of the live directory: 4 agents, 12 cards, 2 repositories, 2 memories
+and 1 routine came back through the API, and a card created afterwards was read straight out of the
+database file.
+
+That verification found a second bug. The data directory was hardcoded as `"data"` in nine places,
+resolved against the working directory — so the desktop app's state lived wherever it happened to be
+launched from, and a packaged build would have started empty. It is now `ServerConfig::data_dir`,
+overridable with `AGENTLAND_DATA_DIR`, which is also what made the migration testable in isolation.
+
+### Skills
+
+Four built-in skills ship with the binary — systematic debugging, test-driven development, code
+review, architecture diagrams. A skill is a folder with a `SKILL.md`: a `---` header naming it, and
+instructions underneath. Users write their own into the data directory and they are read on start.
+Built-ins cannot be overwritten or deleted.
+
+Installing a skill on an agent puts it in that agent's opening brief, next to what the crew has
+learned and its waiting mail. It is not a prompt the user pastes; it is content the product carries.
+
+### The island and the terminals, measured
+
+Recorded above — the island costs nothing measurable, and holds its 30 fps governor while eight
+terminals stream at 10,000 lines a second.
+
+## The workspace, deepened
+
+Three fixed slots became four, and every slot holds a strip of tabs. Tabs drag between slots, close
+individually, and an emptied slot stays as a drop target rather than vanishing. The **Preview**
+panel lists the dev servers the service registry is running and frames the selected worktree's
+localhost inside the app — the thing this product exists to do at eight-agent scale, finally visible
+beside the work instead of in a separate browser.
+
+A layout saved by the previous version is upgraded on load, and a panel that no longer exists is
+dropped rather than leaving a slot rendering nothing. Eight tests cover that upgrade and the tab
+arithmetic; the UI had no test runner before this, and now has vitest.
+
+## Real work, end to end
+
+The product was pointed at the only genuinely real codebase on hand: itself.
+
+A card was written — *let a phone token read the skills library*, because the scope matrix in
+`auth.rs` did not include `/skills`, so the phone could not show what a crew member knows. It was
+assigned to an agent called Kai, running Claude Code in a worktree, with the test-driven-development
+skill installed. Kai added `/skills` to the allowed GET paths and wrote a test that also asserts the
+negatives: `POST /skills` denied, `GET /skills/tdd` denied. `cargo test` in the worktree went from 4
+auth tests to 5, all passing.
+
+Two things this run exposed that no unit test would have:
+
+- **The engine asks questions before it works.** Claude Code opened with a trust prompt for the
+  worktree and waited. An agent that is blocked on a question is not an agent that is working, and
+  the terminal is where a person answers it.
+- **There was no commit step.** The chain read card → diff → pull request, and the pull request
+  pushed a branch that had no commits on it. `POST /repos/{id}/worktrees/{name}/commit` now stages
+  and commits the worktree, and the pull request refuses to run before it: *commit the work first: 1
+  file(s) in scope-skills are not committed*. A branch that is pushed to a remote with no web
+  address is a success that says so, not an error.
+
+The full chain then ran: card → assignment → real work → diff → commit `46d2414` → pushed to the
+remote.
+
+### The context meter, filled honestly
+
+The field `context_percent` existed and nothing ever set it. The PRD's reason was sound: a number
+that disagrees with the engine's own status would be worse than none.
+
+Real output settled it. The running engine reports `Ctx: 44.5k` — tokens in context, not a
+percentage, and it never states the window those tokens are a fraction of. Turning 44.5k into a
+percentage would have required inventing that window, which is exactly the disagreeing number the
+PRD warned about.
+
+So the parser reports what the engine says and nothing more: a percentage when the engine prints a
+percentage, a token count when it prints tokens, and nothing when it prints neither. The pane shows
+`44.5k ctx` or `23% ctx left` accordingly.
+
+The recorded session is committed as a test fixture, so the parser is tested against output a real
+agent actually produced, escape sequences and the non-breaking space in `Ctx:\u{a0}44.5k` included —
+a detail that would have broken a regex written from memory. Live, through the API, the meter read
+`context_tokens=40400` from the running engine's own status line while `context_percent` stayed
+null, which is the correct answer for this engine.

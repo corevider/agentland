@@ -18,6 +18,7 @@ use tower_http::services::ServeDir;
 use crate::approvals::{AnswerApproval, Approval, Approvals, RequestApproval};
 use crate::auth::{permits as scope_permits, Scope as TokenScope, TokenStore};
 use crate::bench::GeneratorSpec;
+use crate::context::{read_context, ContextReading};
 use crate::board::{Board, Column, CreateTask, Evidence, MoveTask, Task};
 use crate::crew::{Agent, Crew, Engine, HireRequest};
 use crate::dispatch::{decide, Decision, DispatchState};
@@ -26,7 +27,7 @@ use crate::mail::{MailPolicy, Mailbox, Message as MailMessage, SendMessage};
 use crate::memory::{Memory, MemoryStore, ProposeMemory, Scope};
 use crate::routines::{CreateRoutine, Routine, Routines};
 use crate::metrics::{MetricsStore, Sample};
-use crate::repo::{PullRequest, RepoRegistry, Repository, Review, Worktree, WorktreeStatus};
+use crate::repo::{Commit, PullRequest, RepoRegistry, Repository, Review, Worktree, WorktreeStatus};
 use crate::services::{Service, ServiceRegistry};
 use crate::skills::{Skill, SkillLibrary};
 use crate::pty::{PtyManager, PtySpawnSpec, SessionInfo, SessionStats};
@@ -190,6 +191,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/ui/commands", get(take_ui_commands).post(queue_ui_command))
         .route("/dispatch/tasks/{id}", post(dispatch_task))
         .route("/repos/{id}/worktrees/{name}/review", get(review_worktree))
+        .route("/repos/{id}/worktrees/{name}/commit", post(commit_worktree))
         .route("/repos/{id}/worktrees/{name}/pr", post(open_pull_request))
         .route(
             "/repos/{id}/worktrees/{name}/service",
@@ -405,9 +407,10 @@ async fn list_sessions(State(state): State<AppState>) -> Json<Vec<SessionReport>
         .into_iter()
         .filter_map(|info| {
             let session = state.manager.get(&info.id)?;
+            let stats = stats_with_context(&state, &info.id, session.stats());
             Some(SessionReport {
                 info,
-                stats: session.stats(),
+                stats,
                 alive: session.alive(),
             })
         })
@@ -453,11 +456,28 @@ async fn read_stats(
         .get(&id)
         .ok_or_else(|| ApiError(anyhow::anyhow!("unknown session: {id}")))?;
 
+    let stats = stats_with_context(&state, &id, session.stats());
     Ok(Json(SessionReport {
         info: session.info(),
-        stats: session.stats(),
+        stats,
         alive: session.alive(),
     }))
+}
+
+const CONTEXT_TAIL_BYTES: u64 = 8 * 1024;
+
+fn stats_with_context(state: &AppState, id: &str, mut stats: SessionStats) -> SessionStats {
+    let Ok(tail) = state.manager.read_log(id, CONTEXT_TAIL_BYTES) else {
+        return stats;
+    };
+
+    match read_context(&String::from_utf8_lossy(&tail)) {
+        Some(ContextReading::PercentLeft(percent)) => stats.context_percent = Some(percent),
+        Some(ContextReading::TokensUsed(tokens)) => stats.context_tokens = Some(tokens),
+        None => {}
+    }
+
+    stats
 }
 
 async fn read_log(
@@ -761,6 +781,19 @@ async fn review_worktree(
     Path((id, name)): Path<(String, String)>,
 ) -> Result<Json<Review>, ApiError> {
     Ok(Json(state.repos.review(&id, &name)?))
+}
+
+#[derive(Deserialize)]
+struct CommitBody {
+    message: String,
+}
+
+async fn commit_worktree(
+    State(state): State<AppState>,
+    Path((id, name)): Path<(String, String)>,
+    Json(body): Json<CommitBody>,
+) -> Result<Json<Commit>, ApiError> {
+    Ok(Json(state.repos.commit(&id, &name, &body.message)?))
 }
 
 async fn open_pull_request(

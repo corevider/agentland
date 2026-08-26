@@ -73,3 +73,68 @@ fn worktree_lifecycle_allocates_and_releases_a_port() {
     assert_eq!(reopened.repositories().len(), 1);
     assert_eq!(reopened.worktrees().len(), 1);
 }
+
+#[test]
+fn a_pull_request_refuses_work_that_is_not_committed_yet() {
+    let base = scratch("commit-gate");
+    let repo_path = base.join("demo");
+    fs::create_dir_all(&repo_path).unwrap();
+
+    git(&["init", "-q", "-b", "main"], &repo_path);
+    git(&["config", "user.email", "test@example.com"], &repo_path);
+    git(&["config", "user.name", "test"], &repo_path);
+    fs::write(repo_path.join("README.md"), "demo").unwrap();
+    git(&["add", "-A"], &repo_path);
+    git(&["commit", "-qm", "init"], &repo_path);
+
+    let bare = base.join("origin.git");
+    git(&["init", "-q", "--bare", bare.to_str().unwrap()], &base);
+    git(&["remote", "add", "origin", bare.to_str().unwrap()], &repo_path);
+
+    let registry = RepoRegistry::new(base.join("data"));
+    registry.register(&repo_path).expect("register");
+    let worktree = registry.create_worktree("demo", "work1").expect("worktree");
+
+    let empty = registry.commit("demo", "work1", "nothing to see");
+    assert!(
+        empty.unwrap_err().to_string().contains("nothing to commit"),
+        "an empty commit is refused"
+    );
+
+    fs::write(worktree.path.join("feature.txt"), "the agent's work").unwrap();
+
+    let refused = registry
+        .open_pull_request("demo", "work1", "title", "body")
+        .expect_err("uncommitted work cannot become a pull request");
+    assert!(refused.to_string().contains("commit the work first"), "{refused}");
+
+    let blank = registry.commit("demo", "work1", "   ");
+    assert!(blank.unwrap_err().to_string().contains("needs a message"));
+
+    let commit = registry
+        .commit("demo", "work1", "feat(demo): add the feature")
+        .expect("commit");
+    assert_eq!(commit.files, 1);
+    assert_eq!(commit.branch, "agent/work1");
+    assert!(!commit.sha.is_empty());
+
+    let opened = registry
+        .open_pull_request("demo", "work1", "Add the feature", "body")
+        .expect("a committed branch can be pushed");
+    assert!(!opened.created, "a local remote hosts no pull requests");
+    assert!(
+        opened.detail.contains("no web address"),
+        "it says why instead of failing: {}",
+        opened.detail
+    );
+
+    let pushed = std::process::Command::new("git")
+        .args(["branch", "--list", "agent/work1"])
+        .current_dir(&bare)
+        .output()
+        .expect("git");
+    assert!(
+        String::from_utf8_lossy(&pushed.stdout).contains("agent/work1"),
+        "the branch reached the remote"
+    );
+}

@@ -117,6 +117,7 @@ pub struct SessionStats {
     pub bytes: u64,
     pub lines: u64,
     pub context_percent: Option<u8>,
+    pub context_tokens: Option<u64>,
 }
 
 fn now_secs() -> u64 {

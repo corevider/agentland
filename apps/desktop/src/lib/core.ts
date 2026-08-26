@@ -15,6 +15,7 @@ export interface SessionInfo {
     bytes: number;
     lines: number;
     context_percent: number | null;
+    context_tokens: number | null;
     alive: boolean;
 }
 
