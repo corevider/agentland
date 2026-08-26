@@ -160,6 +160,7 @@ pub struct PtyManager {
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     next_id: Mutex<u64>,
     log_dir: PathBuf,
+    boot: String,
 }
 
 impl PtyManager {
@@ -169,10 +170,16 @@ impl PtyManager {
 
     pub fn with_log_dir(log_dir: PathBuf) -> Self {
         let _ = fs::create_dir_all(&log_dir);
+        let boot = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|value| value.as_secs())
+            .unwrap_or_default();
+
         Self {
             sessions: Mutex::new(HashMap::new()),
             next_id: Mutex::new(1),
             log_dir,
+            boot: format!("{boot:x}"),
         }
     }
 
@@ -199,7 +206,7 @@ impl PtyManager {
 
     fn allocate_id(&self, prefix: &str) -> String {
         let mut next = self.next_id.lock();
-        let id = format!("{prefix}-{}", *next);
+        let id = format!("{prefix}-{}-{}", self.boot, *next);
         *next += 1;
         id
     }
@@ -334,6 +341,9 @@ fn spawn_reader(
 
                     if burst_drained || interval_elapsed || frame_full {
                         broadcaster.publish(pending.split().freeze());
+                        if let Some(writer) = log.as_mut() {
+                            let _ = writer.flush();
+                        }
                         last_flush = Instant::now();
                     }
                 }

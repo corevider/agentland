@@ -139,12 +139,22 @@ export async function open_stream(id: string): Promise<WebSocket> {
     return socket;
 }
 
+export interface Remote {
+    name: string;
+    url: string;
+    host: string | null;
+    owner: string | null;
+    repo: string | null;
+    provider: string;
+}
+
 export interface Repository {
     id: string;
     name: string;
     primary_path: string;
     default_branch: string;
-    remote: string | null;
+    remotes: Remote[];
+    origin: string | null;
 }
 
 export interface WorktreeStatus {
@@ -183,4 +193,88 @@ export function create_worktree(repository_id: string, name: string): Promise<Wo
 export function remove_worktree(repository_id: string, name: string, force: boolean): Promise<void> {
     const suffix = force ? "?force=true" : "";
     return request<void>(`/repos/${repository_id}/worktrees/${name}${suffix}`, { method: "DELETE" });
+}
+
+export type ServiceState = "starting" | "ready" | "unreachable" | "stopped";
+
+export interface Service {
+    key: string;
+    repository_id: string;
+    worktree: string;
+    port: number;
+    session_id: string;
+    state: ServiceState;
+    command: string;
+    detected_from: string;
+    url: string;
+}
+
+export function list_services(): Promise<Service[]> {
+    return request<Service[]>("/services");
+}
+
+export function start_service(repository_id: string, worktree: string): Promise<Service> {
+    return request<Service>(`/repos/${repository_id}/worktrees/${worktree}/service`, {
+        method: "POST",
+    });
+}
+
+export function stop_service(repository_id: string, worktree: string): Promise<void> {
+    return request<void>(`/repos/${repository_id}/worktrees/${worktree}/service`, {
+        method: "DELETE",
+    });
+}
+
+export interface Engine {
+    id: string;
+    name: string;
+    command: string;
+    resume_flag: string | null;
+    installed: boolean;
+    version: string | null;
+}
+
+export type AgentState = "idle" | "working" | "offline";
+
+export interface Agent {
+    id: string;
+    name: string;
+    role: string;
+    engine_id: string;
+    repository_id: string;
+    worktree: string;
+    session_id: string | null;
+    state: AgentState;
+}
+
+export interface HireRequest {
+    name: string;
+    role: string;
+    engine_id: string;
+    repository_id: string;
+    worktree: string;
+}
+
+export function list_engines(): Promise<Engine[]> {
+    return request<Engine[]>("/engines");
+}
+
+export function list_agents(): Promise<Agent[]> {
+    return request<Agent[]>("/agents");
+}
+
+export function hire_agent(payload: HireRequest): Promise<Agent> {
+    return request<Agent>("/agents", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function start_agent(id: string, resume: boolean): Promise<Agent> {
+    return request<Agent>(`/agents/${id}/start${resume ? "?resume=true" : ""}`, { method: "POST" });
+}
+
+export function stop_agent(id: string): Promise<void> {
+    return request<void>(`/agents/${id}/stop`, { method: "POST" });
+}
+
+export function dismiss_agent(id: string): Promise<void> {
+    return request<void>(`/agents/${id}`, { method: "DELETE" });
 }

@@ -15,6 +15,7 @@ use tokio::sync::broadcast::error::RecvError;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::bench::GeneratorSpec;
+use crate::crew::{Agent, Crew, Engine, HireRequest};
 use crate::metrics::{MetricsStore, Sample};
 use crate::repo::{RepoRegistry, Repository, Worktree, WorktreeStatus};
 use crate::services::{Service, ServiceRegistry};
@@ -36,6 +37,7 @@ struct AppState {
     metrics: Arc<MetricsStore>,
     repos: Arc<RepoRegistry>,
     services: Arc<ServiceRegistry>,
+    crew: Arc<Crew>,
 }
 
 #[derive(Deserialize)]
@@ -62,6 +64,7 @@ struct ErrorBody {
 
 pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()> {
     let manager_for_services = manager.clone();
+    let manager_for_crew = manager.clone();
     let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
 
     let origins: Vec<HeaderValue> = config
@@ -83,6 +86,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         metrics: Arc::new(MetricsStore::new(PathBuf::from("bench-results.jsonl"))),
         repos: Arc::new(RepoRegistry::new(PathBuf::from("data"))),
         services: ServiceRegistry::new(manager_for_services),
+        crew: Crew::new(manager_for_crew, PathBuf::from("data")),
     };
 
     let app = Router::new()
@@ -99,6 +103,11 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/repos/{id}/worktrees/{name}", delete(remove_worktree))
         .route("/ports", get(list_ports))
         .route("/services", get(list_services))
+        .route("/engines", get(list_engines))
+        .route("/agents", get(list_agents).post(hire_agent))
+        .route("/agents/{id}", delete(dismiss_agent))
+        .route("/agents/{id}/start", post(start_agent))
+        .route("/agents/{id}/stop", post(stop_agent))
         .route(
             "/repos/{id}/worktrees/{name}/service",
             post(start_service).delete(stop_service),
@@ -256,6 +265,81 @@ async fn remove_worktree(
     Query(query): Query<RemoveQuery>,
 ) -> Result<StatusCode, ApiError> {
     state.repos.remove_worktree(&id, &name, query.force)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct StartAgentQuery {
+    #[serde(default)]
+    resume: bool,
+}
+
+async fn list_engines() -> Json<Vec<Engine>> {
+    Json(crate::crew::engines())
+}
+
+async fn list_agents(State(state): State<AppState>) -> Json<Vec<Agent>> {
+    Json(state.crew.list())
+}
+
+async fn hire_agent(
+    State(state): State<AppState>,
+    Json(request): Json<HireRequest>,
+) -> Result<Json<Agent>, ApiError> {
+    let known = state.repos.worktrees().into_iter().any(|entry| {
+        entry.worktree.repository_id == request.repository_id
+            && entry.worktree.name == request.worktree
+    });
+    if !known {
+        return Err(ApiError(anyhow::anyhow!(
+            "unknown worktree: {}/{}",
+            request.repository_id,
+            request.worktree
+        )));
+    }
+
+    Ok(Json(state.crew.hire(request)?))
+}
+
+async fn start_agent(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<StartAgentQuery>,
+) -> Result<Json<Agent>, ApiError> {
+    let agent = state
+        .crew
+        .list()
+        .into_iter()
+        .find(|entry| entry.id == id)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("unknown agent: {id}")))?;
+
+    let worktree = state
+        .repos
+        .worktrees()
+        .into_iter()
+        .find(|entry| {
+            entry.worktree.repository_id == agent.repository_id
+                && entry.worktree.name == agent.worktree
+        })
+        .ok_or_else(|| ApiError(anyhow::anyhow!("agent worktree is gone")))?
+        .worktree;
+
+    Ok(Json(state.crew.start(&id, &worktree.path, query.resume)?))
+}
+
+async fn stop_agent(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.crew.stop(&id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn dismiss_agent(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.crew.dismiss(&id)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

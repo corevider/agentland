@@ -5,7 +5,7 @@ real git worktrees — each agent with its own branch, its own running dev serve
 the diff.
 
 
-Status: **M1 in progress.** M0 passed and Tauri is confirmed by measurement; the repository layer now creates worktrees and allocates ports.
+Status: **M2 in progress.** M0 passed and Tauri is confirmed by measurement; M1 shipped worktrees, ports and per-worktree dev servers; the crew now hires and runs real agent CLIs.
 
 ## Why M0 comes first
 
@@ -91,12 +91,40 @@ started first.
 `400 … has 1 uncommitted file(s); pass force to discard them`. Only an explicit force discards it.
 
 ```bash
-cargo test -p agentland-core --test repo_lifecycle
+cargo test -p agentland-core
 ```
 
-The test builds a real git repository in a temp directory, creates two worktrees, checks that they
-get different ports, dirties one, asserts the removal is refused, forces it, and confirms the port is
-released and the state survives a reload.
+The tests build a real git repository in a temp directory, create two worktrees, check that they get
+different ports, dirty one, assert the removal is refused, force it, and confirm the port is released
+and the state survives a reload. A second suite parses every remote URL form a developer actually
+uses — https, scp-style ssh, `ssh://` with nested GitLab groups, self-hosted hosts, and filesystem
+paths — because a repository can come from GitHub, GitLab, a private server, or no server at all.
+
+**Every remote is recorded, not just origin.** Host, owner and provider are parsed from each, which
+is what a pull-request action will need later. A local checkout with no remote works exactly the
+same. Registering a worktree as if it were a repository is refused, with the main checkout's path in
+the message.
+
+### Dev servers
+
+A worktree's service is detected from its own files — `package.json` (Vite gets `--port` and
+`--strictPort`, otherwise `PORT` is exported) or `Cargo.toml` — and started as a real pty in that
+worktree, on that worktree's port. The core polls the port until it answers, then health-checks every
+five seconds, so a dead server becomes a visible `unreachable` state instead of a blank page.
+
+Verified end to end: register → worktree on port 4100 → `package.json (dev script)` detected →
+`starting` → `ready` in two seconds → `curl :4100` answers.
+
+## M2 — the crew
+
+An agent is a record, not a terminal: a name, a role, an engine, and a worktree it owns. Engines are
+detected by asking each known CLI for its version, so the hire form only offers what is actually on
+this machine. Starting an agent spawns its engine as a pty inside its own worktree, with `--continue`
+or the engine's equivalent when resuming.
+
+Verified with Claude Code: hire → start → the engine opens in
+`data/worktrees/<repo>/work1` and its output is captured to `sessions/<id>.log`. Hiring against a
+missing engine or an unknown worktree is refused with the reason.
 
 ## Running it
 

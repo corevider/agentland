@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { CrewPanel } from "@/components/CrewPanel";
 import { RepoPanel } from "@/components/RepoPanel";
 import { SettingsPage } from "@/components/SettingsPage";
 import { TerminalPane, type PaneMetrics } from "@/components/TerminalPane";
@@ -80,7 +81,7 @@ export default function App() {
     const run_ref = useRef<{ id: string; started: number; panes: number; rate: number } | null>(null);
     const frame_ref = useRef({ fps: 0, worst_frame_ms: 0 });
     const [focused_id, set_focused_id] = useState<string | null>(null);
-    const [view, set_view] = useState<"panes" | "repos">("panes");
+    const [view, set_view] = useState<"panes" | "repos" | "crew">("panes");
     const pane_count = settings.panes;
     const rate = settings.lines_per_second;
     const [throughput, set_throughput] = useState({ mb_per_second: 0, dropped_frames: 0, collapsed_mb: 0 });
@@ -156,6 +157,21 @@ export default function App() {
         return () => window.clearInterval(handle);
     }, [gpu]);
 
+    const open_session = useCallback(async (session_id: string) => {
+        const current = await list_sessions();
+        const session = current.find((entry) => entry.id === session_id);
+        if (!session) {
+            set_error(`session ${session_id} is gone`);
+            return;
+        }
+
+        set_sessions((existing) =>
+            existing.some((entry) => entry.id === session_id) ? existing : [...existing, session],
+        );
+        set_focused_id(session_id);
+        set_view("panes");
+    }, []);
+
     const clear = useCallback(async () => {
         const current = await list_sessions();
         await Promise.all(current.map((session) => kill_session(session.id).catch(() => undefined)));
@@ -229,7 +245,7 @@ export default function App() {
                 <span className="font-mono text-xs uppercase tracking-[0.14em] text-[#45bcc4]">Agentland</span>
 
                 <div className="flex">
-                    {(["panes", "repos"] as const).map((choice) => (
+                    {(["panes", "repos", "crew"] as const).map((choice) => (
                         <button
                             key={choice}
                             className={`border px-3 py-1 font-mono text-xs ${
@@ -302,6 +318,7 @@ export default function App() {
             ) : null}
 
             {view === "repos" ? <RepoPanel /> : null}
+            {view === "crew" ? <CrewPanel on_open_session={open_session} /> : null}
 
             <main
                 hidden={view !== "panes"}

@@ -1,4 +1,5 @@
 pub mod bench;
+pub mod crew;
 pub mod metrics;
 pub mod ports;
 pub mod repo;
@@ -7,6 +8,7 @@ pub mod pty;
 pub mod server;
 
 pub use bench::GeneratorSpec;
+pub use crew::{Agent, Crew, Engine, HireRequest};
 pub use metrics::{MetricsStore, Sample};
 pub use ports::PortRegistry;
 pub use repo::{RepoRegistry, Repository, Worktree, WorktreeStatus};
