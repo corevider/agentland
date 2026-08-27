@@ -712,3 +712,16 @@ agent actually produced, escape sequences and the non-breaking space in `Ctx:\u{
 a detail that would have broken a regex written from memory. Live, through the API, the meter read
 `context_tokens=40400` from the running engine's own status line while `context_percent` stayed
 null, which is the correct answer for this engine.
+
+### What an agent knows, on the phone
+
+The scope matrix let a phone read the crew but not the library, so the companion could say *Kai is
+idle* and not *Kai knows how to work test-first*. An agent wrote that permission itself — the card
+above — and the matrix now also admits `GET /agents/{id}/skills`, one agent at a time, GET only:
+installing a skill is still a desktop action, and the test pins that down alongside the paths that
+stay refused.
+
+Tapping a crew card on the phone opens what that agent carries: each skill's name, when it is meant
+to be used, and what it is for. An agent with none says so and points at where to give it one. The
+list is fetched when the card is opened rather than on every five-second refresh, because a phone on
+a tailnet should not pay for what nobody is looking at.

@@ -140,6 +140,44 @@
                 padding: 10px 12px;
                 font-size: 14px;
             }
+
+            .card.opens {
+                cursor: pointer;
+            }
+
+            .chev {
+                margin-left: auto;
+                color: var(--muted);
+                font-size: 12px;
+                font-family: ui-monospace, monospace;
+            }
+
+            .knows {
+                margin-top: 12px;
+                border-top: 1px solid var(--line);
+                padding-top: 10px;
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+            }
+
+            .skill strong {
+                font-size: 14px;
+                font-weight: 600;
+            }
+
+            .skill .when {
+                color: var(--accent);
+                font-size: 13px;
+                margin-top: 2px;
+            }
+
+            .skill .says {
+                color: var(--muted);
+                font-size: 13px;
+                margin-top: 4px;
+                white-space: pre-wrap;
+            }
         </style>
     </head>
     <body>
@@ -245,7 +283,65 @@
                 }
             }
 
+            const skills_of = new Map();
+            const opened = new Set();
+
+            async function toggle_skills(agent_id) {
+                if (opened.has(agent_id)) {
+                    opened.delete(agent_id);
+                } else {
+                    opened.add(agent_id);
+                    if (!skills_of.has(agent_id)) {
+                        skills_of.set(agent_id, "loading");
+                        try {
+                            skills_of.set(
+                                agent_id,
+                                await api(`/agents/${encodeURIComponent(agent_id)}/skills`),
+                            );
+                        } catch (cause) {
+                            skills_of.set(agent_id, cause.message);
+                        }
+                    }
+                }
+
+                render_crew(last_agents);
+            }
+
+            function render_skills(agent_id) {
+                if (!opened.has(agent_id)) {
+                    return "";
+                }
+
+                const held = skills_of.get(agent_id);
+
+                if (held === "loading") {
+                    return '<div class="knows"><span class="empty">Reading…</span></div>';
+                }
+
+                if (typeof held === "string") {
+                    return `<div class="knows"><span class="empty">${escape(held)}</span></div>`;
+                }
+
+                if (!held || held.length === 0) {
+                    return '<div class="knows"><span class="empty">No skills yet. Give it one from the desktop.</span></div>';
+                }
+
+                return `<div class="knows">${held
+                    .map(
+                        (skill) => `
+                        <div class="skill">
+                            <strong>${escape(skill.name)}</strong>
+                            <div class="when">Uses it when: ${escape(skill.when_to_use)}</div>
+                            <div class="says">${escape(skill.description)}</div>
+                        </div>`,
+                    )
+                    .join("")}</div>`;
+            }
+
+            let last_agents = [];
+
             function render_crew(agents) {
+                last_agents = agents;
                 const holder = document.getElementById("crew");
                 if (agents.length === 0) {
                     holder.innerHTML = '<p class="empty">No crew yet.</p>';
@@ -255,17 +351,23 @@
                 holder.innerHTML = agents
                     .map(
                         (agent) => `
-                        <div class="card">
+                        <div class="card opens" data-agent="${escape(agent.id)}">
                             <div class="row">
                                 <strong>${escape(agent.name)}</strong>
                                 <span class="state ${agent.presence}">${escape(agent.presence === "attention" ? "needs you" : agent.presence)}</span>
+                                <span class="chev">${opened.has(agent.id) ? "hide skills" : "skills"}</span>
                             </div>
                             <div class="detail">${escape(agent.role)} · ${escape(agent.engine_id)} · ${escape(
                                 agent.repository_id,
                             )}/${escape(agent.worktree)}</div>
+                            ${render_skills(agent.id)}
                         </div>`,
                     )
                     .join("");
+
+                for (const card of holder.querySelectorAll("[data-agent]")) {
+                    card.addEventListener("click", () => toggle_skills(card.dataset.agent));
+                }
             }
 
             function render_board(tasks) {

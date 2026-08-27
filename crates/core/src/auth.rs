@@ -54,22 +54,36 @@ pub fn permits(scope: Scope, method: &str, path: &str) -> bool {
     }
 
     match method {
-        "GET" => matches!(
-            path,
-            "/agents"
-                | "/tasks"
-                | "/approvals"
-                | "/memories"
-                | "/dispatch"
-                | "/routines"
-                | "/skills"
-        ),
+        "GET" => {
+            matches!(
+                path,
+                "/agents"
+                    | "/tasks"
+                    | "/approvals"
+                    | "/memories"
+                    | "/dispatch"
+                    | "/routines"
+                    | "/skills"
+            ) || is_agent_skills(path)
+        }
         "POST" => {
             path.starts_with("/approvals/")
                 || (path.starts_with("/memories/") && path.ends_with("/approve"))
         }
         _ => false,
     }
+}
+
+fn is_agent_skills(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("/agents/") else {
+        return false;
+    };
+
+    let Some(id) = rest.strip_suffix("/skills") else {
+        return false;
+    };
+
+    !id.is_empty() && !id.contains('/')
 }
 
 impl TokenStore {
@@ -176,6 +190,16 @@ mod tests {
         assert!(permits(Scope::Approve, "GET", "/skills"));
         assert!(!permits(Scope::Approve, "POST", "/skills"));
         assert!(!permits(Scope::Approve, "GET", "/skills/tdd"));
+    }
+
+    #[test]
+    fn an_approval_token_can_see_what_one_agent_knows() {
+        assert!(permits(Scope::Approve, "GET", "/agents/kai/skills"));
+        assert!(!permits(Scope::Approve, "POST", "/agents/kai/skills"));
+        assert!(!permits(Scope::Approve, "DELETE", "/agents/kai/skills/code-review"));
+        assert!(!permits(Scope::Approve, "GET", "/agents/kai/skills/code-review"));
+        assert!(!permits(Scope::Approve, "GET", "/agents//skills"));
+        assert!(!permits(Scope::Approve, "GET", "/agents/kai/start"));
     }
 
     #[test]
