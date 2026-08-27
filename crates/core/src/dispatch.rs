@@ -1,5 +1,8 @@
 use std::collections::VecDeque;
+use std::fs;
+use std::path::PathBuf;
 
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::crew::{Agent, AgentState};
@@ -176,6 +179,67 @@ pub fn decide(state: &DispatchState, task: &Task, crew: &[Agent]) -> Decision {
     }
 }
 
+pub struct Dispatch {
+    state: Mutex<DispatchState>,
+    data_dir: PathBuf,
+}
+
+impl Dispatch {
+    pub fn new(data_dir: PathBuf) -> Self {
+        let _ = fs::create_dir_all(&data_dir);
+        let data_dir = fs::canonicalize(&data_dir).unwrap_or(data_dir);
+        let state = crate::db::load_state(&data_dir, "dispatch");
+
+        Self {
+            state: Mutex::new(state),
+            data_dir,
+        }
+    }
+
+    fn persist(&self, state: &DispatchState) {
+        crate::db::save_state(&self.data_dir, "dispatch", state);
+    }
+
+    pub fn snapshot(&self) -> DispatchState {
+        self.state.lock().clone()
+    }
+
+    pub fn set_paused(&self, paused: bool) -> DispatchState {
+        let mut state = self.state.lock();
+        state.paused = paused;
+        self.persist(&state);
+        state.clone()
+    }
+
+    pub fn set_caps(&self, caps: Caps) -> DispatchState {
+        let mut state = self.state.lock();
+        state.caps = caps;
+        self.persist(&state);
+        state.clone()
+    }
+
+    pub fn decide(&self, task: &Task, crew: &[Agent]) -> Decision {
+        decide(&self.state.lock(), task, crew)
+    }
+
+    pub fn record_assignment(&self, agent_id: &str, task_id: &str, reason: &str) -> DispatchState {
+        let mut state = self.state.lock();
+        state.queue.retain(|entry| entry != task_id);
+        state.record_handoff(agent_id, task_id, reason);
+        self.persist(&state);
+        state.clone()
+    }
+
+    pub fn enqueue(&self, task_id: &str) -> DispatchState {
+        let mut state = self.state.lock();
+        if !state.queue.iter().any(|entry| entry == task_id) {
+            state.queue.push_back(task_id.to_owned());
+        }
+        self.persist(&state);
+        state.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,5 +330,72 @@ mod tests {
             decide(&state, &task("anything"), &[]),
             Decision::Refuse { .. }
         ));
+    }
+}
+
+#[cfg(test)]
+mod store_tests {
+    use super::*;
+
+    fn store(name: &str) -> Dispatch {
+        let dir = std::env::temp_dir().join(format!("agentland-dispatch-{name}"));
+        let _ = fs::remove_dir_all(&dir);
+        Dispatch::new(dir)
+    }
+
+    fn reopen(name: &str) -> Dispatch {
+        Dispatch::new(std::env::temp_dir().join(format!("agentland-dispatch-{name}")))
+    }
+
+    #[test]
+    fn what_x_decided_survives_a_restart() {
+        let dispatch = store("history");
+        dispatch.record_assignment("ada", "t9", "Ada is the free agent with the closest role");
+        dispatch.record_assignment("kai", "t8", "Kai is idle on this repository");
+
+        let after = reopen("history").snapshot();
+        assert_eq!(after.events.len(), 2);
+        assert_eq!(after.events[0].agent_id, "ada");
+        assert_eq!(after.events[1].task_id, "t8");
+        assert!(after.events[1].reason.contains("idle"));
+        assert_eq!(after.next_seq, 2, "the sequence keeps counting rather than restarting");
+    }
+
+    #[test]
+    fn the_caps_and_the_pause_are_remembered() {
+        let dispatch = store("caps");
+        dispatch.set_caps(Caps {
+            per_repository: 1,
+            per_engine: 5,
+        });
+        dispatch.set_paused(true);
+
+        let after = reopen("caps").snapshot();
+        assert_eq!(after.caps.per_repository, 1);
+        assert_eq!(after.caps.per_engine, 5);
+        assert!(after.paused, "a held dispatch stays held");
+    }
+
+    #[test]
+    fn a_queued_card_is_still_queued_after_a_restart_and_only_once() {
+        let dispatch = store("queue");
+        dispatch.enqueue("t5");
+        dispatch.enqueue("t5");
+        dispatch.enqueue("t6");
+
+        let after = reopen("queue").snapshot();
+        assert_eq!(after.queue.len(), 2);
+        assert_eq!(after.queue[0], "t5");
+    }
+
+    #[test]
+    fn assigning_a_queued_card_takes_it_out_of_the_queue_for_good() {
+        let dispatch = store("dequeue");
+        dispatch.enqueue("t5");
+        dispatch.record_assignment("ada", "t5", "a slot opened");
+
+        let after = reopen("dequeue").snapshot();
+        assert!(after.queue.is_empty(), "{:?}", after.queue);
+        assert_eq!(after.events.len(), 1);
     }
 }

@@ -927,3 +927,20 @@ approval including `answered_note`, so *yes, but push the branch first* reaches 
 asked. Verified by answering from the panel and reading it back the way an agent would.
 
 Two files this time — the panel and one registry entry. The client calls already existed.
+
+### X stops forgetting
+
+Every store moved to SQLite except one: dispatch lived in a mutex in `AppState`, so the caps, the
+queue and the record of what X handed to whom vanished with the window. Nobody noticed while there
+was no interface; the panel made it obvious, because a reason you can read until you close the app
+is not a record.
+
+Dispatch is now a store like the others — `snapshot`, `set_paused`, `set_caps`, `decide`,
+`record_assignment`, `enqueue` — each write persisted, and the handlers no longer reach for a lock.
+Four tests cover the reopening: the history keeps its sequence rather than restarting at one, the
+caps and the pause come back, a card queued twice is queued once, and assigning a queued card takes
+it out for good.
+
+Verified the long way round: X assigned `t12` to zen with its reason, the app was closed, the row
+was read straight out of `agentland.db` with nothing running, and the same decision came back
+through the API after a restart.

@@ -21,7 +21,7 @@ use crate::bench::GeneratorSpec;
 use crate::context::{read_context, ContextReading};
 use crate::board::{Board, Column, CreateTask, Evidence, MoveTask, Task};
 use crate::crew::{Agent, Crew, Engine, HireRequest};
-use crate::dispatch::{decide, Decision, DispatchState};
+use crate::dispatch::{Decision, Dispatch, DispatchState};
 use crate::gateway::{CallRequest, ConnectRequest, Gateway, Integration};
 use crate::mail::{MailPolicy, Mailbox, Message as MailMessage, SendMessage};
 use crate::memory::{Memory, MemoryStore, ProposeMemory, Scope};
@@ -60,7 +60,7 @@ struct AppState {
     services: Arc<ServiceRegistry>,
     crew: Arc<Crew>,
     board: Arc<Board>,
-    dispatch: Arc<parking_lot::Mutex<DispatchState>>,
+    dispatch: Arc<Dispatch>,
     memories: Arc<MemoryStore>,
     mail: Arc<Mailbox>,
     routines: Arc<Routines>,
@@ -128,7 +128,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
             crew
         },
         board: Arc::new(Board::new(data_dir.clone())),
-        dispatch: Arc::new(parking_lot::Mutex::new(DispatchState::default())),
+        dispatch: Arc::new(Dispatch::new(data_dir.clone())),
         memories: Arc::new(MemoryStore::new(data_dir.clone())),
         mail: Arc::new(Mailbox::new(data_dir.clone())),
         routines: Arc::new(Routines::new(data_dir.clone())),
@@ -664,25 +664,21 @@ struct DispatchReport {
 }
 
 async fn dispatch_status(State(state): State<AppState>) -> Json<DispatchState> {
-    Json(state.dispatch.lock().clone())
+    Json(state.dispatch.snapshot())
 }
 
 async fn pause_dispatch(
     State(state): State<AppState>,
     Json(body): Json<PauseBody>,
 ) -> Json<DispatchState> {
-    let mut dispatch = state.dispatch.lock();
-    dispatch.paused = body.paused;
-    Json(dispatch.clone())
+    Json(state.dispatch.set_paused(body.paused))
 }
 
 async fn set_caps(
     State(state): State<AppState>,
     Json(caps): Json<crate::dispatch::Caps>,
 ) -> Json<DispatchState> {
-    let mut dispatch = state.dispatch.lock();
-    dispatch.caps = caps;
-    Json(dispatch.clone())
+    Json(state.dispatch.set_caps(caps))
 }
 
 async fn dispatch_task(
@@ -695,10 +691,7 @@ async fn dispatch_task(
         .ok_or_else(|| ApiError(anyhow::anyhow!("unknown task: {id}")))?;
 
     let crew = state.crew.list();
-    let decision = {
-        let dispatch = state.dispatch.lock();
-        decide(&dispatch, &task, &crew)
-    };
+    let decision = state.dispatch.decide(&task, &crew);
 
     match &decision {
         Decision::Assign { agent_id, reason } => {
@@ -735,26 +728,17 @@ async fn dispatch_task(
                 },
             )?;
 
-            {
-                let mut dispatch = state.dispatch.lock();
-                dispatch.queue.retain(|entry| entry != &task.id);
-                dispatch.record_handoff(&agent.id, &task.id, reason);
-            }
+            let after = state.dispatch.record_assignment(&agent.id, &task.id, reason);
 
             let _ = updated;
             Ok(Json(DispatchReport {
-                state: state.dispatch.lock().clone(),
+                state: after,
                 decision: decision.clone(),
                 task: Some(with_reason),
             }))
         }
         Decision::Queue { reason } => {
-            let mut dispatch = state.dispatch.lock();
-            if !dispatch.queue.contains(&task.id) {
-                dispatch.queue.push_back(task.id.clone());
-            }
-            let snapshot = dispatch.clone();
-            drop(dispatch);
+            let snapshot = state.dispatch.enqueue(&task.id);
 
             let noted = state.board.attach(
                 &task.id,
@@ -770,7 +754,7 @@ async fn dispatch_task(
             }))
         }
         Decision::Refuse { .. } => Ok(Json(DispatchReport {
-            state: state.dispatch.lock().clone(),
+            state: state.dispatch.snapshot(),
             decision: decision.clone(),
             task: None,
         })),

@@ -29,7 +29,7 @@ pub use context::{read_context, ContextReading};
 pub use db::Database;
 pub use skills::{Skill, SkillLibrary};
 pub use workspaces::{CreateWorkspace, Workspace, Workspaces};
-pub use dispatch::{decide, Caps, Decision, DispatchState};
+pub use dispatch::{decide, Caps, Decision, Dispatch, DispatchState};
 pub use gateway::{CallRequest, ConnectRequest, Gateway, Integration};
 pub use mail::{Mailbox, MailPolicy, Message, SendMessage};
 pub use memory::{mask_secrets, Memory, MemoryStore, ProposeMemory, Scope};
