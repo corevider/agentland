@@ -73,6 +73,27 @@ fn updater_status() -> String {
     }
 }
 
+fn allowed_hosts(host: &str, port: u16) -> Vec<String> {
+    if let Ok(configured) = std::env::var("AGENTLAND_ALLOWED_HOSTS") {
+        let listed: Vec<String> = configured
+            .split(',')
+            .map(|entry| entry.trim().to_owned())
+            .filter(|entry| !entry.is_empty())
+            .collect();
+
+        if !listed.is_empty() {
+            return listed;
+        }
+    }
+
+    let mut hosts = vec![format!("127.0.0.1:{port}"), format!("localhost:{port}")];
+    if host != "127.0.0.1" && host != "localhost" {
+        hosts.push(format!("{host}:{port}"));
+    }
+
+    hosts
+}
+
 fn desktop_data_dir() -> std::path::PathBuf {
     if let Ok(configured) = std::env::var("AGENTLAND_DATA_DIR") {
         return std::path::PathBuf::from(configured);
@@ -106,8 +127,10 @@ fn main() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(DEFAULT_PORT);
 
+    let host = std::env::var("AGENTLAND_HOST").unwrap_or_else(|_| "127.0.0.1".to_owned());
+
     let endpoint = CoreEndpoint {
-        host: "127.0.0.1".into(),
+        host: host.clone(),
         port,
         token: std::env::var("AGENTLAND_TOKEN").unwrap_or_else(|_| generate_token()),
     };
@@ -116,7 +139,7 @@ fn main() {
         host: endpoint.host.clone(),
         port,
         token: endpoint.token.clone(),
-        allowed_hosts: vec![format!("127.0.0.1:{port}"), format!("localhost:{port}")],
+        allowed_hosts: allowed_hosts(&host, port),
         allowed_origins: vec![
             "http://localhost:5273".into(),
             "http://127.0.0.1:5273".into(),
