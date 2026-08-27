@@ -295,31 +295,26 @@ fn now_secs() -> u64 {
 }
 
 fn compose_brief(state: &AppState, agent: &Agent, base: &str) -> String {
-    let mut brief = base.trim().to_owned();
-
-    let memories = state
+    let learned = state
         .memories
-        .approved_for(Scope::Repository, &agent.repository_id);
-    if !memories.is_empty() {
-        brief.push_str("\n\nWhat this crew has learned:");
-        for memory in memories {
-            brief.push_str(&format!("\n- {}", memory.text));
-        }
-    }
+        .approved_for(Scope::Repository, &agent.repository_id)
+        .into_iter()
+        .map(|memory| memory.text)
+        .collect();
 
-    if let Some(section) = state.skills.brief_section(&agent.id) {
-        brief.push_str(&section);
-    }
+    let mail = state
+        .mail
+        .take_inbox(&agent.id)
+        .into_iter()
+        .map(|message| (message.from, message.text))
+        .collect();
 
-    let inbox = state.mail.take_inbox(&agent.id);
-    if !inbox.is_empty() {
-        brief.push_str("\n\nMessages waiting for you:");
-        for message in inbox {
-            brief.push_str(&format!("\n- from {}: {}", message.from, message.text));
-        }
-    }
-
-    brief
+    crate::brief::compose(crate::brief::Ingredients {
+        base,
+        learned,
+        skills: state.skills.brief_section(&agent.id),
+        mail,
+    })
 }
 
 fn start_agent_with_brief(state: &AppState, agent: &Agent, base: &str) -> Result<(), ApiError> {
@@ -1156,7 +1151,14 @@ async fn start_agent(
         .ok_or_else(|| ApiError(anyhow::anyhow!("agent worktree is gone")))?
         .worktree;
 
-    Ok(Json(state.crew.start(&id, &worktree.path, query.resume, None)?))
+    let brief = compose_brief(&state, &agent, "");
+
+    Ok(Json(state.crew.start(
+        &id,
+        &worktree.path,
+        query.resume,
+        crate::brief::spoken(&brief),
+    )?))
 }
 
 async fn stop_agent(

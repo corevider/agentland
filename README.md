@@ -866,3 +866,31 @@ Then it was used rather than admired: a message typed into the panel and sent ar
 One thing the exercise cost: the registry test imports the panels, the panels import xterm, and
 xterm's bundle wants `self` at import time. A three-line setup file gives the test runner that
 global instead of pulling in a DOM implementation.
+
+### Two more panels, and what they exposed
+
+Memory and Routines were in the same state Mail had been in: built in M6, reachable over HTTP,
+invisible. Both are panels now — memory proposes, approves, revokes and forgets with the scope it
+belongs to and a mark when a secret was masked; routines create, enable, disable and delete, showing
+when each last ran, whether it is due, and how many failures in a row it has taken.
+
+Same three files each time: the panel, one entry in the registry, the calls in `lib/core.ts`.
+
+Using them found two defects that reading would not have.
+
+**The approve button returned a 400.** `POST /memories/{id}/approve` takes `{"approved": bool}` —
+approve *or* reject — and the client sent no body at all. Fixed in the client, and the approved list
+gained a `revoke` that sends `false`, which takes a memory out of the crew's brief without deleting
+it.
+
+**A plain start gave an agent nothing.** `start_agent` passed `None` where the brief belongs, so
+memories, mail and skills only reached an agent that was started *by a card* or *by a routine*.
+Every panel that starts an agent — the crew list, the rail, the island — was handing it an empty
+head. This document previously said all three start paths went through the composer; that was
+untrue, and now it is true.
+
+The composition moved out of `server.rs` into `brief.rs`, where four tests hold it: an agent with
+nothing to say is told nothing rather than handed an empty line, a plain start still carries what
+the crew knows, a task keeps the first word, and the sections stay in the order that puts the work
+before the housekeeping. Verified in the running app: a memory proposed and approved in the panel
+appeared in the opening brief of an agent started with no task at all.

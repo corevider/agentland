@@ -380,6 +380,83 @@ export function set_mail_policy(policy: MailPolicy): Promise<MailPolicy> {
     });
 }
 
+export type MemoryScope = "workspace" | "repository" | "agent";
+
+export interface Memory {
+    id: string;
+    text: string;
+    scope: MemoryScope;
+    scope_id: string;
+    proposed_by: string;
+    approved: boolean;
+    masked: boolean;
+}
+
+export function list_memories(): Promise<Memory[]> {
+    return request<Memory[]>("/memories");
+}
+
+export function propose_memory(
+    text: string,
+    scope: MemoryScope,
+    scope_id: string,
+    proposed_by: string,
+): Promise<Memory> {
+    return request<Memory>("/memories", {
+        method: "POST",
+        body: JSON.stringify({ text, scope, scope_id, proposed_by }),
+    });
+}
+
+export function answer_memory(id: string, approved: boolean): Promise<Memory> {
+    return request<Memory>(`/memories/${encodeURIComponent(id)}/approve`, {
+        method: "POST",
+        body: JSON.stringify({ approved }),
+    });
+}
+
+export function forget_memory(id: string): Promise<void> {
+    return request<void>(`/memories/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export interface Routine {
+    id: string;
+    name: string;
+    agent_id: string;
+    brief: string;
+    every_minutes: number;
+    draft_only: boolean;
+    enabled: boolean;
+    last_run: number;
+    consecutive_failures: number;
+    last_result: string | null;
+}
+
+export function list_routines(): Promise<Routine[]> {
+    return request<Routine[]>("/routines");
+}
+
+export function create_routine(payload: {
+    name: string;
+    agent_id: string;
+    brief: string;
+    every_minutes: number;
+    draft_only: boolean;
+}): Promise<Routine> {
+    return request<Routine>("/routines", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function set_routine_enabled(id: string, enabled: boolean): Promise<Routine> {
+    return request<Routine>(`/routines/${encodeURIComponent(id)}/enabled`, {
+        method: "POST",
+        body: JSON.stringify({ enabled }),
+    });
+}
+
+export function delete_routine(id: string): Promise<void> {
+    return request<void>(`/routines/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
 export function list_skills(): Promise<Skill[]> {
     return request<Skill[]>("/skills");
 }

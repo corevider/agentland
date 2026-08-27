@@ -2,6 +2,8 @@ import { Suspense, createContext, lazy, useContext, type ReactNode } from "react
 
 import { BoardPanel } from "@/components/BoardPanel";
 import { MailPanel } from "@/components/MailPanel";
+import { MemoryPanel } from "@/components/MemoryPanel";
+import { RoutinesPanel } from "@/components/RoutinesPanel";
 import { CrewPanel } from "@/components/CrewPanel";
 import { PreviewPanel } from "@/components/PreviewPanel";
 import { RepoPanel } from "@/components/RepoPanel";
@@ -110,6 +112,18 @@ export const PANELS: PanelEntry[] = [
         label: "Mail",
         hint: "what the crew tells each other",
         Component: ({ active }) => <MailPanel active={active} />,
+    },
+    {
+        id: "memory",
+        label: "Memory",
+        hint: "what the crew has learned, once you approve it",
+        Component: ({ active }) => <MemoryPanel active={active} />,
+    },
+    {
+        id: "routines",
+        label: "Routines",
+        hint: "the same brief, on a timer",
+        Component: ({ active }) => <RoutinesPanel active={active} />,
     },
     {
         id: "skills",

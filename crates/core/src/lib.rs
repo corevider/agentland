@@ -2,6 +2,7 @@ pub mod approvals;
 pub mod auth;
 pub mod bench;
 pub mod board;
+pub mod brief;
 pub mod context;
 pub mod crew;
 pub mod db;
