@@ -1029,3 +1029,55 @@ genuinely does not exist yet.
 Still to build: the supervisor. Today nothing watches whether a delegated step ever landed, nothing
 detects that a worker finished, and nothing wakes X when it did. That is part three, and the
 other tool's design notes are a good map of the failures to skip.
+
+## The supervisor
+
+Thirty fixes failed before they moved the follow-up out of the
+renderer, where a reload vaporised every timer, and into the main process with a journal on disk.
+Ours starts where theirs ended up: in the core, in SQLite.
+
+**What it watches.** Assigning a card that belongs to a plan step opens a watch — plan, step, card,
+agent, session, and a fingerprint of the brief. Every ten seconds it looks: is the session alive,
+what does the pane show, is the worktree changed, did the card get evidence.
+
+**What it decides.** The brief is only *delivered* once the pane echoes it; if the grace period
+passes without that, it types it again, twice at most, and then says the brief never reached the
+agent rather than waiting forever. A step is finished when the pane prints `DONE:<step>`, or the
+session exits, or the card gains evidence, or the agent is waiting at an empty prompt with a changed
+worktree. Settling attaches the reason to the card and puts the news in a queue for the commander.
+
+**How it wakes the commander.** Only when it is safe: no turn running, an empty composer now, and an
+empty composer a moment ago. If the leader is busy the news waits and is delivered later as *while
+you were working*, with backoff and a cap on attempts.
+
+Three defects that only measurement could have found, each one the difference between working and
+silently doing nothing:
+
+- **Byte-idleness never settles.** A live TUI redraws its footer forever: across a real session the
+  agent's idle counter cycled between 6 and 64 seconds and never once crossed ninety, so "quiet for
+  90s" would have marked nothing finished, ever. The rule now reads the prompt instead — a stable
+  empty composer with no turn running — and byte-idleness is only the fallback for plain shells.
+- **"esc to interrupt" is not how this engine says it is busy.** In the recorded sessions that
+  string appears once; the spinner line — `✶ Skedaddling… (3s · thinking)` — appears 547 times.
+  Keying on the hint alone would have typed into running turns all day.
+- **Two identical reads never happen.** The pane log is append-only and the footer redraws, so
+  demanding a still buffer meant the leader could never be woken. What is compared now is the
+  composer line, which is what the guard is actually protecting.
+
+A fourth came from a real frame: the engine prints redraw fragments *after* the prompt, so reading
+the last line concludes there is no composer at all. The composer is the last prompt in the visible
+chrome, not the last line. Four fixture files recorded from real sessions hold all of this.
+
+**The whole loop, run once end to end.** X planned `/health` into three steps; a step went to Ada;
+Ada wrote the endpoint, the test and the README note; the supervisor noticed on its own — *ada
+finished and left 4 changed file(s)* — and woke X, which read the evidence and closed the plan. Its
+notes are what the skill asked for and not what an agent claimed:
+
+> Verified by X on ada-tree @ e1e1872: `PORT=4190 node server.js`, curl /health → HTTP 200,
+> content-type application/json … Deviation from brief: uptime is `Date.now()-started_at` floored
+> rather than `process.uptime()`; equivalent for the goal.
+
+> X ran `npm test` in the ada-tree worktree: 6 tests, 6 pass, 0 fail.
+
+Still missing from the other tool's design: ghost-pane reaping, and delivery verification through a
+transcript rather than the visible buffer.

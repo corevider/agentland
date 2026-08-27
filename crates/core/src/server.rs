@@ -33,6 +33,7 @@ use crate::metrics::{MetricsStore, Sample};
 use crate::repo::{Commit, PullRequest, RepoRegistry, Repository, Review, Worktree, WorktreeStatus};
 use crate::services::{Service, ServiceRegistry};
 use crate::skills::{Skill, SkillLibrary};
+use crate::supervisor::{judge, safe_to_type, Observation, Supervisor, Verdict, Watch};
 use crate::workspaces::{CreateWorkspace, Workspace, Workspaces};
 use crate::pty::{PtyManager, PtySpawnSpec, SessionInfo, SessionStats};
 
@@ -72,6 +73,7 @@ struct AppState {
     tokens: Arc<TokenStore>,
     skills: Arc<SkillLibrary>,
     plans: Arc<Plans>,
+    supervisor: Arc<Supervisor>,
     embedder: Arc<parking_lot::Mutex<EmbedderSettings>>,
     data_dir: Arc<PathBuf>,
     workspaces: Arc<Workspaces>,
@@ -143,6 +145,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         tokens: Arc::new(TokenStore::new(token_for_store, data_dir.clone())),
         skills: Arc::new(SkillLibrary::new(data_dir.clone())),
         plans: Arc::new(Plans::new(data_dir.clone())),
+        supervisor: Arc::new(Supervisor::new(data_dir.clone())),
         embedder: Arc::new(parking_lot::Mutex::new(crate::embed::load(&data_dir))),
         data_dir: Arc::new(data_dir.clone()),
         workspaces: Arc::new(Workspaces::new(data_dir.clone())),
@@ -150,6 +153,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
     };
 
     spawn_routine_ticker(state.clone());
+    spawn_supervisor(state.clone());
 
     let app = Router::new()
         .route("/sessions", get(list_sessions).post(spawn_session))
@@ -200,6 +204,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/plans/{id}", get(read_plan).delete(abandon_plan))
         .route("/plans/{id}/steps/{step}", post(mark_step))
         .route("/plans/ready", get(ready_steps))
+        .route("/supervisor", get(supervisor_status))
         .route("/skills", get(list_skills).post(write_skill))
         .route("/skills/{id}", delete(remove_skill))
         .route(
@@ -387,6 +392,199 @@ async fn start_agent_with_brief(state: &AppState, agent: &Agent, base: &str) -> 
         .crew
         .start(&agent.id, &worktree.path, false, Some(&brief))?;
     Ok(())
+}
+
+fn strip_ansi(raw: &[u8]) -> String {
+    let text = String::from_utf8_lossy(raw);
+    let mut out = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+
+    while let Some(character) = characters.next() {
+        if character != '\u{1b}' {
+            out.push(character);
+            continue;
+        }
+
+        match characters.next() {
+            Some('[') => {
+                for inner in characters.by_ref() {
+                    if inner.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                for inner in characters.by_ref() {
+                    if inner == '\u{7}' {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    out.replace('\r', "\n")
+}
+
+fn look_at(state: &AppState, watch: &Watch, previous_frame: &str, now: u64) -> Observation {
+    let session = state.manager.get(&watch.session_id);
+    let alive = session.as_ref().map(|entry| entry.alive()).unwrap_or(false);
+    let stats = session.as_ref().map(|entry| entry.stats());
+
+    let idle = stats
+        .map(|held| now.saturating_sub(held.last_output_at))
+        .unwrap_or(0);
+
+    let tail = state
+        .manager
+        .read_log(&watch.session_id, 8 * 1024)
+        .map(|raw| strip_ansi(&raw))
+        .unwrap_or_default();
+
+    let quiet_turn = !tail.is_empty() && safe_to_type(previous_frame, &tail);
+    let looks_done = !alive || quiet_turn || idle >= state.supervisor.rules.idle_before_finished;
+    let changed_files = if looks_done {
+        state
+            .repos
+            .review(&watch.repository_id, &watch.worktree)
+            .map(|review| review.files)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    Observation {
+        session_alive: alive,
+        quiet_turn,
+        idle_seconds: idle,
+        tail,
+        changed_files,
+        card_has_evidence: state
+            .board
+            .get(&watch.task_id)
+            .map(|task| !task.evidence.is_empty())
+            .unwrap_or(false),
+        age_seconds: now.saturating_sub(watch.started_at),
+    }
+}
+
+fn news_text(news: &[Watch]) -> String {
+    let mut text = String::from("While you were working:");
+    for watch in news {
+        text.push_str(&format!(
+            "\n- {} ({}) — {}",
+            watch.step_id,
+            watch.task_id,
+            watch.reason.as_deref().unwrap_or("settled")
+        ));
+    }
+    text.push_str("\nRead the evidence, then plan_step_done for each one you accept.");
+    text
+}
+
+fn spawn_supervisor(state: AppState) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+        let mut last_frames: BTreeMap<String, String> = BTreeMap::new();
+
+        loop {
+            interval.tick().await;
+            let now = now_secs();
+
+            for watch in state.supervisor.working() {
+                let previous = last_frames.get(&watch.session_id).cloned().unwrap_or_default();
+                let seen = look_at(&state, &watch, &previous, now);
+
+                if !watch.delivered
+                    && !seen.tail.is_empty()
+                    && seen.tail.to_lowercase().contains(&watch.fingerprint.to_lowercase())
+                {
+                    state.supervisor.mark_delivered(&watch.id);
+                }
+
+                match judge(&watch, &seen, &state.supervisor.rules) {
+                    Verdict::Working => {}
+                    Verdict::Resend => {
+                        if safe_to_type(&previous, &seen.tail) {
+                            let sent = state
+                                .manager
+                                .get(&watch.session_id)
+                                .map(|session| {
+                                    session.write_input(format!("{}\r", watch.fingerprint).as_bytes())
+                                });
+
+                            if !matches!(sent, Some(Ok(()))) {
+                                continue;
+                            }
+                            state.supervisor.count_resend(&watch.id);
+                            tracing::info!(watch = %watch.id, agent = %watch.agent_id, "the brief never landed; sent again");
+                        }
+                    }
+                    Verdict::Finished(reason) => {
+                        tracing::info!(watch = %watch.id, %reason, "a step settled");
+                        let _ = state.board.attach(
+                            &watch.task_id,
+                            Evidence::Note {
+                                text: format!("supervisor: {reason}"),
+                            },
+                        );
+                        state.supervisor.settle(&watch.id, reason, now);
+                    }
+                    Verdict::LostIt(reason) => {
+                        tracing::warn!(watch = %watch.id, %reason, "giving up on a step");
+                        state.supervisor.give_up(&watch.id, reason, now);
+                    }
+                }
+
+                last_frames.insert(watch.session_id.clone(), seen.tail);
+            }
+
+            if state.supervisor.wake_is_due(now) {
+                let news = state.supervisor.news_for_leader();
+                if news.is_empty() {
+                    continue;
+                }
+
+                let leader = state
+                    .crew
+                    .list()
+                    .into_iter()
+                    .find(|agent| agent.role == "commander" && agent.session_id.is_some());
+
+                let Some(leader) = leader else {
+                    continue;
+                };
+                let Some(session_id) = leader.session_id.clone() else {
+                    continue;
+                };
+
+                let frame = state
+                    .manager
+                    .read_log(&session_id, 8 * 1024)
+                    .map(|raw| strip_ansi(&raw))
+                    .unwrap_or_default();
+                let previous = last_frames.get(&session_id).cloned().unwrap_or_default();
+                last_frames.insert(session_id.clone(), frame.clone());
+
+                if !safe_to_type(&previous, &frame) {
+                    continue;
+                }
+
+                let text = news_text(&news);
+                let delivered = state
+                    .manager
+                    .get(&session_id)
+                    .map(|session| session.write_input(format!("{text}\r").as_bytes()));
+
+                if matches!(delivered, Some(Ok(()))) {
+                    let ids: Vec<String> = news.iter().map(|watch| watch.id.clone()).collect();
+                    state.supervisor.leader_was_told(&ids, now);
+                    tracing::info!(count = ids.len(), leader = %leader.name, "woke the commander");
+                }
+            }
+        }
+    });
 }
 
 fn spawn_routine_ticker(state: AppState) {
@@ -700,6 +898,22 @@ async fn assign_task(
     let updated = state
         .board
         .record_assignment(&id, &agent.id, &worktree.name, &worktree.branch)?;
+
+    if let Some((plan, step)) = state.plans.plan_of_task(&id) {
+        if let Some(session_id) = state.crew.list().into_iter().find(|entry| entry.id == agent.id).and_then(|entry| entry.session_id) {
+            state.supervisor.watch(
+                &plan.id,
+                &step.id,
+                &id,
+                &agent.id,
+                &session_id,
+                &agent.repository_id,
+                &agent.worktree,
+                task.title.trim(),
+                now_secs(),
+            );
+        }
+    }
 
     Ok(Json(updated))
 }
@@ -1397,6 +1611,10 @@ struct ReadyStep {
     goal: String,
     repository_id: String,
     step: crate::plans::Step,
+}
+
+async fn supervisor_status(State(state): State<AppState>) -> Json<Vec<Watch>> {
+    Json(state.supervisor.list())
 }
 
 async fn list_plans(State(state): State<AppState>) -> Json<Vec<Plan>> {

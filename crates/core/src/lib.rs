@@ -21,6 +21,7 @@ pub mod pty;
 pub mod server;
 pub mod workspaces;
 pub mod skills;
+pub mod supervisor;
 
 pub use approvals::{AnswerApproval, Approval, Approvals, RequestApproval};
 pub use auth::{Scope as TokenScope, ScopedToken, TokenStore};
@@ -32,6 +33,7 @@ pub use db::Database;
 pub use plans::{DraftPlan, Plan, PlanState, Plans, Step, StepState};
 pub use embed::{EmbedderReport, EmbedderSettings};
 pub use skills::{Skill, SkillLibrary};
+pub use supervisor::{Observation, Supervisor, Verdict, Watch};
 pub use workspaces::{CreateWorkspace, Workspace, Workspaces};
 pub use dispatch::{decide, Caps, Decision, Dispatch, DispatchState};
 pub use gateway::{CallRequest, ConnectRequest, Gateway, Integration};
