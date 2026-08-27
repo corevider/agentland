@@ -818,3 +818,29 @@ them. Nothing was redesigned; the same panels give back the room they were wasti
 
 Measured on the same window: the board panel that showed one clipped card now shows the card, its
 assignee control and its delete button; the crew panel that fit one agent row fits two and a half.
+
+## Anything, anywhere
+
+Four slots were still four slots, seven panels were a hardcoded union, and a panel could only exist
+in one place at a time. Three limits, one shape underneath: the layout knew the panels by name.
+
+**The layout is a tree.** A node is either a stack of tabs or a split of two nodes, with a fraction
+between them. Every stack header carries `⊞` and `⊟`, which split it beside or below and drop a
+panel into the new half; there is no ceiling on depth, and a test pushes it to fifteen stacks to say
+so. When the last tab leaves a stack, the stack collapses and its sibling takes the room — except
+for the final one, which stays empty so there is always somewhere to drop.
+
+**Panels are a registry.** `workspace/registry.tsx` holds one entry per panel — id, label, hint, and
+the component — and everything else reads from it: the rail, the tab strips, the add menu, what a
+saved layout is allowed to restore. Adding a panel is one entry in that array. Panels take what they
+need from a workspace context rather than a prop chain, so a new one does not touch `App.tsx` at
+all.
+
+**A panel can be open more than once.** A tab is an instance, not a panel name: two Preview panels
+sit side by side on different ports, each with its own state, and closing one leaves the other. That
+is what the wedge actually needs — eight agents means more than one running result to look at.
+
+A layout saved by any earlier version still opens: the four-slot shape is converted, a panel that no
+longer exists is dropped rather than left rendering nothing, and a stored value that is nonsense
+falls back to the default. Fourteen tests cover the tree — splitting, moving, closing, collapsing,
+the upgrade path and the clamped divider.

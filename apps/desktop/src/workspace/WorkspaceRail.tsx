@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { list_agents, list_repos, type Agent, type Repository } from "@/lib/core";
 import { PRESENCE_COLOR } from "@/island/geometry";
-import { PANELS, type PanelId } from "@/workspace/layout";
+import type { PanelId } from "@/workspace/layout";
+import { PANELS } from "@/workspace/registry";
 
 interface Props {
     visible: PanelId[];

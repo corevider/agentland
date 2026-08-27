@@ -1,116 +1,349 @@
-export type PanelId = "island" | "panes" | "board" | "repos" | "crew" | "skills" | "preview";
+export type PanelId = string;
 
-export interface PanelMeta {
-    id: PanelId;
-    label: string;
-    hint: string;
+export interface Tab {
+    instance: string;
+    panel: PanelId;
 }
 
-export const PANELS: PanelMeta[] = [
-    { id: "island", label: "Island", hint: "the crew at a glance" },
-    { id: "panes", label: "Terminals", hint: "what the agents are doing" },
-    { id: "board", label: "Board", hint: "cards and their evidence" },
-    { id: "preview", label: "Preview", hint: "a worktree's localhost" },
-    { id: "repos", label: "Repositories", hint: "worktrees, ports, servers" },
-    { id: "crew", label: "Crew", hint: "hire, start, stop" },
-    { id: "skills", label: "Skills", hint: "what the crew knows how to do" },
-];
-
-export const SLOTS = ["left_top", "left_bottom", "right_top", "right_bottom"] as const;
-export type SlotId = (typeof SLOTS)[number];
-
-export interface Slot {
-    panels: PanelId[];
+export interface Stack {
+    kind: "stack";
+    id: string;
+    tabs: Tab[];
     active: number;
 }
 
-export interface Layout {
-    slots: Record<SlotId, Slot>;
-    maximised?: SlotId | null;
-    column_fraction: number;
-    left_row_fraction: number;
-    right_row_fraction: number;
+export interface Split {
+    kind: "split";
+    id: string;
+    direction: "row" | "column";
+    fraction: number;
+    first: Node;
+    second: Node;
 }
 
-export const DEFAULT_LAYOUT: Layout = {
-    slots: {
-        left_top: { panels: ["island"], active: 0 },
-        left_bottom: { panels: ["board"], active: 0 },
-        right_top: { panels: ["panes"], active: 0 },
-        right_bottom: { panels: [], active: 0 },
-    },
-    maximised: null,
-    column_fraction: 0.38,
-    left_row_fraction: 0.58,
-    right_row_fraction: 0.62,
-};
+export type Node = Stack | Split;
+
+export interface Layout {
+    root: Node;
+    maximised: string | null;
+    next_id: number;
+}
 
 const STORAGE_KEY = "agentland-layout";
 
-interface LegacyLayout {
-    left?: PanelId | null;
-    right?: PanelId | null;
-    bottom?: PanelId | null;
-    left_fraction?: number;
-    bottom_fraction?: number;
+export function clamp_fraction(value: number): number {
+    return Math.min(0.86, Math.max(0.14, value));
 }
 
-function is_legacy(value: unknown): value is LegacyLayout {
-    return typeof value === "object" && value !== null && !("slots" in value);
-}
-
-function slot_of(panel: PanelId | null | undefined): Slot {
-    return panel ? { panels: [panel], active: 0 } : { panels: [], active: 0 };
-}
-
-export function upgrade_layout(stored: unknown): Layout {
-    if (is_legacy(stored)) {
-        return {
-            slots: {
-                left_top: slot_of(stored.left),
-                left_bottom: slot_of(stored.bottom),
-                right_top: slot_of(stored.right),
-                right_bottom: { panels: [], active: 0 },
-            },
-            column_fraction: stored.left_fraction ?? DEFAULT_LAYOUT.column_fraction,
-            left_row_fraction: stored.bottom_fraction
-                ? 1 - stored.bottom_fraction
-                : DEFAULT_LAYOUT.left_row_fraction,
-            right_row_fraction: DEFAULT_LAYOUT.right_row_fraction,
-        };
-    }
-
-    const layout = stored as Partial<Layout>;
-    const slots = {} as Record<SlotId, Slot>;
-    const known = new Set<string>(PANELS.map((panel) => panel.id));
-
-    for (const id of SLOTS) {
-        const slot = layout.slots?.[id];
-        const panels = (slot?.panels ?? []).filter((panel) => known.has(panel));
-        slots[id] = {
-            panels,
-            active: Math.min(Math.max(slot?.active ?? 0, 0), Math.max(panels.length - 1, 0)),
-        };
-    }
-
+function stack(id: string, panels: PanelId[], counter: { next: number }): Stack {
     return {
-        slots,
-        maximised: SLOTS.includes(layout.maximised as SlotId) ? (layout.maximised as SlotId) : null,
-        column_fraction: layout.column_fraction ?? DEFAULT_LAYOUT.column_fraction,
-        left_row_fraction: layout.left_row_fraction ?? DEFAULT_LAYOUT.left_row_fraction,
-        right_row_fraction: layout.right_row_fraction ?? DEFAULT_LAYOUT.right_row_fraction,
+        kind: "stack",
+        id,
+        tabs: panels.map((panel) => ({ instance: `${panel}-${counter.next++}`, panel })),
+        active: 0,
     };
 }
 
-export function load_layout(): Layout {
+export function default_layout(): Layout {
+    const counter = { next: 1 };
+    const root: Split = {
+        kind: "split",
+        id: "s1",
+        direction: "row",
+        fraction: 0.38,
+        first: {
+            kind: "split",
+            id: "s2",
+            direction: "column",
+            fraction: 0.58,
+            first: stack("k1", ["island"], counter),
+            second: stack("k2", ["board"], counter),
+        },
+        second: stack("k3", ["panes"], counter),
+    };
+
+    return { root, maximised: null, next_id: counter.next };
+}
+
+export function stacks(node: Node): Stack[] {
+    return node.kind === "stack" ? [node] : [...stacks(node.first), ...stacks(node.second)];
+}
+
+export function find_stack(layout: Layout, id: string): Stack | null {
+    return stacks(layout.root).find((entry) => entry.id === id) ?? null;
+}
+
+export function visible_panels(layout: Layout): PanelId[] {
+    return stacks(layout.root)
+        .map((entry) => entry.tabs[entry.active]?.panel)
+        .filter((panel): panel is PanelId => Boolean(panel));
+}
+
+export function all_panels(layout: Layout): PanelId[] {
+    return stacks(layout.root).flatMap((entry) => entry.tabs.map((tab) => tab.panel));
+}
+
+function replace(node: Node, id: string, make: (found: Node) => Node | null): Node | null {
+    if (node.id === id) {
+        return make(node);
+    }
+
+    if (node.kind === "stack") {
+        return node;
+    }
+
+    const first = replace(node.first, id, make);
+    const second = replace(node.second, id, make);
+
+    if (first === node.first && second === node.second) {
+        return node;
+    }
+
+    if (!first) {
+        return second;
+    }
+    if (!second) {
+        return first;
+    }
+
+    return { ...node, first, second };
+}
+
+function rebuilt(layout: Layout, root: Node | null): Layout {
+    const next = root ?? { kind: "stack", id: "k0", tabs: [], active: 0 };
+    const live = new Set(stacks(next).map((entry) => entry.id));
+
+    return {
+        ...layout,
+        root: next,
+        maximised: layout.maximised && live.has(layout.maximised) ? layout.maximised : null,
+    };
+}
+
+export function set_active(layout: Layout, stack_id: string, active: number): Layout {
+    return rebuilt(
+        layout,
+        replace(layout.root, stack_id, (found) =>
+            found.kind === "stack" ? { ...found, active } : found,
+        ),
+    );
+}
+
+export function set_fraction(layout: Layout, split_id: string, fraction: number): Layout {
+    return rebuilt(
+        layout,
+        replace(layout.root, split_id, (found) =>
+            found.kind === "split" ? { ...found, fraction: clamp_fraction(fraction) } : found,
+        ),
+    );
+}
+
+export function add_panel(layout: Layout, stack_id: string, panel: PanelId): Layout {
+    const instance = `${panel}-${layout.next_id}`;
+    const root = replace(layout.root, stack_id, (found) =>
+        found.kind === "stack"
+            ? { ...found, tabs: [...found.tabs, { instance, panel }], active: found.tabs.length }
+            : found,
+    );
+
+    return { ...rebuilt(layout, root), next_id: layout.next_id + 1 };
+}
+
+export function split_stack(
+    layout: Layout,
+    stack_id: string,
+    direction: "row" | "column",
+    panel: PanelId,
+): Layout {
+    const instance = `${panel}-${layout.next_id}`;
+    const fresh: Stack = {
+        kind: "stack",
+        id: `k${layout.next_id}`,
+        tabs: [{ instance, panel }],
+        active: 0,
+    };
+
+    const root = replace(layout.root, stack_id, (found) => ({
+        kind: "split",
+        id: `s${layout.next_id}`,
+        direction,
+        fraction: 0.5,
+        first: found,
+        second: fresh,
+    }));
+
+    return { ...rebuilt(layout, root), next_id: layout.next_id + 1 };
+}
+
+export function close_tab(layout: Layout, stack_id: string, instance: string): Layout {
+    const root = replace(layout.root, stack_id, (found) => {
+        if (found.kind !== "stack") {
+            return found;
+        }
+
+        const tabs = found.tabs.filter((tab) => tab.instance !== instance);
+        if (tabs.length === 0 && stacks(layout.root).length > 1) {
+            return null;
+        }
+
+        return { ...found, tabs, active: Math.min(found.active, Math.max(tabs.length - 1, 0)) };
+    });
+
+    return rebuilt(layout, root);
+}
+
+export function move_tab(layout: Layout, instance: string, into: string): Layout {
+    const source = stacks(layout.root).find((entry) =>
+        entry.tabs.some((tab) => tab.instance === instance),
+    );
+    const tab = source?.tabs.find((entry) => entry.instance === instance);
+
+    if (!source || !tab || source.id === into) {
+        return layout;
+    }
+
+    const without = replace(layout.root, source.id, (found) => {
+        if (found.kind !== "stack") {
+            return found;
+        }
+
+        const tabs = found.tabs.filter((entry) => entry.instance !== instance);
+        return tabs.length === 0
+            ? null
+            : { ...found, tabs, active: Math.min(found.active, tabs.length - 1) };
+    });
+
+    const root = replace(without ?? layout.root, into, (found) =>
+        found.kind === "stack"
+            ? { ...found, tabs: [...found.tabs, tab], active: found.tabs.length }
+            : found,
+    );
+
+    return rebuilt(layout, root);
+}
+
+export function focus_panel(layout: Layout, panel: PanelId): Layout {
+    for (const entry of stacks(layout.root)) {
+        const index = entry.tabs.findIndex((tab) => tab.panel === panel);
+        if (index >= 0) {
+            return set_active(layout, entry.id, index);
+        }
+    }
+
+    const empty = stacks(layout.root).find((entry) => entry.tabs.length === 0);
+    const target = empty ?? stacks(layout.root)[stacks(layout.root).length - 1];
+
+    return target ? add_panel(layout, target.id, panel) : layout;
+}
+
+export function upgrade_layout(stored: unknown, known: (panel: string) => boolean): Layout {
+    const fresh = default_layout();
+    if (typeof stored !== "object" || stored === null) {
+        return fresh;
+    }
+
+    const held = stored as Record<string, unknown>;
+
+    if (held.root && typeof held.root === "object") {
+        const counter = { next: Number(held.next_id) || 1 };
+        const clean = prune(held.root as Node, known, counter);
+        return clean
+            ? {
+                  root: clean,
+                  maximised: typeof held.maximised === "string" ? held.maximised : null,
+                  next_id: counter.next,
+              }
+            : fresh;
+    }
+
+    if (held.slots && typeof held.slots === "object") {
+        return from_slots(held as { slots: Record<string, { panels?: string[] }> }, known);
+    }
+
+    return fresh;
+}
+
+function prune(node: Node, known: (panel: string) => boolean, counter: { next: number }): Node | null {
+    if (!node || typeof node !== "object") {
+        return null;
+    }
+
+    if (node.kind === "stack") {
+        const tabs = (node.tabs ?? [])
+            .filter((tab) => tab && known(tab.panel))
+            .map((tab) => ({
+                panel: tab.panel,
+                instance: tab.instance || `${tab.panel}-${counter.next++}`,
+            }));
+
+        return {
+            kind: "stack",
+            id: node.id || `k${counter.next++}`,
+            tabs,
+            active: Math.min(Math.max(node.active ?? 0, 0), Math.max(tabs.length - 1, 0)),
+        };
+    }
+
+    const first = prune(node.first, known, counter);
+    const second = prune(node.second, known, counter);
+
+    if (!first) {
+        return second;
+    }
+    if (!second) {
+        return first;
+    }
+
+    return {
+        kind: "split",
+        id: node.id || `s${counter.next++}`,
+        direction: node.direction === "column" ? "column" : "row",
+        fraction: clamp_fraction(Number(node.fraction) || 0.5),
+        first,
+        second,
+    };
+}
+
+function from_slots(
+    held: { slots: Record<string, { panels?: string[] }> },
+    known: (panel: string) => boolean,
+): Layout {
+    const counter = { next: 1 };
+    const pick = (name: string) => (held.slots[name]?.panels ?? []).filter(known);
+
+    const root: Split = {
+        kind: "split",
+        id: "s1",
+        direction: "row",
+        fraction: 0.38,
+        first: {
+            kind: "split",
+            id: "s2",
+            direction: "column",
+            fraction: 0.58,
+            first: stack("k1", pick("left_top"), counter),
+            second: stack("k2", pick("left_bottom"), counter),
+        },
+        second: {
+            kind: "split",
+            id: "s3",
+            direction: "column",
+            fraction: 0.62,
+            first: stack("k3", pick("right_top"), counter),
+            second: stack("k4", pick("right_bottom"), counter),
+        },
+    };
+
+    const pruned = prune(root, known, counter);
+    return { root: pruned ?? default_layout().root, maximised: null, next_id: counter.next };
+}
+
+export function load_layout(known: (panel: string) => boolean): Layout {
     try {
         const raw = localStorage.getItem(STORAGE_KEY);
-        if (!raw) {
-            return DEFAULT_LAYOUT;
-        }
-        return upgrade_layout(JSON.parse(raw));
+        return raw ? upgrade_layout(JSON.parse(raw), known) : default_layout();
     } catch {
-        return DEFAULT_LAYOUT;
+        return default_layout();
     }
 }
 
@@ -120,157 +353,4 @@ export function save_layout(layout: Layout): void {
     } catch {
         // a layout that cannot persist is still a usable layout
     }
-}
-
-export function clamp_fraction(value: number): number {
-    return Math.min(0.82, Math.max(0.18, value));
-}
-
-export function visible_panels(layout: Layout): PanelId[] {
-    return SLOTS.flatMap((id) => {
-        const slot = layout.slots[id];
-        const panel = slot.panels[slot.active];
-        return panel ? [panel] : [];
-    });
-}
-
-export function open_panel(layout: Layout, panel: PanelId): Layout {
-    for (const id of SLOTS) {
-        const index = layout.slots[id].panels.indexOf(panel);
-        if (index >= 0) {
-            return {
-                ...layout,
-                slots: { ...layout.slots, [id]: { ...layout.slots[id], active: index } },
-            };
-        }
-    }
-
-    const empty = SLOTS.find((id) => layout.slots[id].panels.length === 0);
-    const target: SlotId = empty ?? "right_top";
-    const slot = layout.slots[target];
-
-    return {
-        ...layout,
-        slots: {
-            ...layout.slots,
-            [target]: { panels: [...slot.panels, panel], active: slot.panels.length },
-        },
-    };
-}
-
-export function move_panel(layout: Layout, panel: PanelId, into: SlotId): Layout {
-    const slots = { ...layout.slots };
-
-    for (const id of SLOTS) {
-        const panels = slots[id].panels.filter((entry) => entry !== panel);
-        if (panels.length !== slots[id].panels.length) {
-            slots[id] = {
-                panels,
-                active: Math.min(slots[id].active, Math.max(panels.length - 1, 0)),
-            };
-        }
-    }
-
-    const target = slots[into];
-    slots[into] = { panels: [...target.panels, panel], active: target.panels.length };
-
-    return { ...layout, slots };
-}
-
-export function close_panel(layout: Layout, slot_id: SlotId, panel: PanelId): Layout {
-    const slot = layout.slots[slot_id];
-    const panels = slot.panels.filter((entry) => entry !== panel);
-
-    return {
-        ...layout,
-        slots: {
-            ...layout.slots,
-            [slot_id]: { panels, active: Math.min(slot.active, Math.max(panels.length - 1, 0)) },
-        },
-    };
-}
-
-export interface Preset {
-    id: string;
-    label: string;
-    hint: string;
-    slots: Record<SlotId, PanelId[]>;
-    column_fraction: number;
-    left_row_fraction: number;
-    right_row_fraction: number;
-}
-
-export const PRESETS: Preset[] = [
-    {
-        id: "crew",
-        label: "Crew",
-        hint: "the island, the board, and who is working",
-        slots: {
-            left_top: ["island"],
-            left_bottom: ["board"],
-            right_top: ["panes"],
-            right_bottom: ["crew", "skills"],
-        },
-        column_fraction: 0.38,
-        left_row_fraction: 0.58,
-        right_row_fraction: 0.62,
-    },
-    {
-        id: "work",
-        label: "Work",
-        hint: "terminals wide, the board beside them",
-        slots: {
-            left_top: ["board"],
-            left_bottom: ["island"],
-            right_top: ["panes"],
-            right_bottom: [],
-        },
-        column_fraction: 0.31,
-        left_row_fraction: 0.55,
-        right_row_fraction: 1,
-    },
-    {
-        id: "review",
-        label: "Review",
-        hint: "the diff and the running result, side by side",
-        slots: {
-            left_top: ["repos"],
-            left_bottom: ["board"],
-            right_top: ["preview"],
-            right_bottom: ["panes"],
-        },
-        column_fraction: 0.46,
-        left_row_fraction: 0.62,
-        right_row_fraction: 0.5,
-    },
-];
-
-export function apply_preset(preset: Preset): Layout {
-    const slots = {} as Record<SlotId, Slot>;
-    for (const id of SLOTS) {
-        slots[id] = { panels: [...preset.slots[id]], active: 0 };
-    }
-
-    return {
-        slots,
-        maximised: null,
-        column_fraction: preset.column_fraction,
-        left_row_fraction: preset.left_row_fraction,
-        right_row_fraction: preset.right_row_fraction,
-    };
-}
-
-export function preset_of(layout: Layout): string | null {
-    for (const preset of PRESETS) {
-        const same = SLOTS.every(
-            (id) =>
-                layout.slots[id].panels.length === preset.slots[id].length &&
-                layout.slots[id].panels.every((panel, index) => panel === preset.slots[id][index]),
-        );
-        if (same) {
-            return preset.id;
-        }
-    }
-
-    return null;
 }

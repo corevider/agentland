@@ -1,143 +1,207 @@
 import { describe, expect, it } from "vitest";
 
 import {
-    DEFAULT_LAYOUT,
-    PRESETS,
-    apply_preset,
-    preset_of,
-    close_panel,
-    move_panel,
-    open_panel,
+    add_panel,
+    close_tab,
+    default_layout,
+    focus_panel,
+    move_tab,
+    set_fraction,
+    split_stack,
+    stacks,
     upgrade_layout,
     visible_panels,
     type Layout,
 } from "@/workspace/layout";
 
-function layout_with(panels: Partial<Record<keyof Layout["slots"], string[]>>): Layout {
-    return {
-        ...DEFAULT_LAYOUT,
-        slots: {
-            left_top: { panels: (panels.left_top ?? []) as never, active: 0 },
-            left_bottom: { panels: (panels.left_bottom ?? []) as never, active: 0 },
-            right_top: { panels: (panels.right_top ?? []) as never, active: 0 },
-            right_bottom: { panels: (panels.right_bottom ?? []) as never, active: 0 },
-        },
-    };
+const known = (panel: string) =>
+    ["island", "panes", "board", "preview", "repos", "crew", "skills"].includes(panel);
+
+function tabs_of(layout: Layout): string[][] {
+    return stacks(layout.root).map((stack) => stack.tabs.map((tab) => tab.panel));
 }
 
-describe("a layout saved by the previous version", () => {
-    it("becomes the four-slot layout without losing a panel", () => {
-        const upgraded = upgrade_layout({
-            left: "island",
-            right: "panes",
-            bottom: "board",
-            left_fraction: 0.34,
-            bottom_fraction: 0.3,
-        });
+describe("a stack can be split in either direction", () => {
+    it("puts the new panel beside or below without disturbing the old one", () => {
+        const layout = default_layout();
+        const first = stacks(layout.root)[0];
 
-        expect(upgraded.slots.left_top.panels).toEqual(["island"]);
-        expect(upgraded.slots.right_top.panels).toEqual(["panes"]);
-        expect(upgraded.slots.left_bottom.panels).toEqual(["board"]);
-        expect(upgraded.slots.right_bottom.panels).toEqual([]);
-        expect(upgraded.column_fraction).toBe(0.34);
-        expect(upgraded.left_row_fraction).toBeCloseTo(0.7);
+        const beside = split_stack(layout, first.id, "row", "skills");
+        expect(stacks(beside.root)).toHaveLength(stacks(layout.root).length + 1);
+        expect(visible_panels(beside)).toContain("island");
+        expect(visible_panels(beside)).toContain("skills");
+
+        const below = split_stack(beside, first.id, "column", "repos");
+        expect(stacks(below.root)).toHaveLength(stacks(layout.root).length + 2);
+        expect(visible_panels(below)).toContain("repos");
     });
 
-    it("drops a panel that no longer exists rather than rendering nothing", () => {
-        const upgraded = upgrade_layout({
-            slots: {
-                left_top: { panels: ["island", "seance"], active: 1 },
-                left_bottom: { panels: [], active: 0 },
-                right_top: { panels: ["panes"], active: 0 },
-                right_bottom: { panels: [], active: 0 },
+    it("keeps splitting, with no ceiling on depth", () => {
+        let layout = default_layout();
+        for (let step = 0; step < 12; step += 1) {
+            const target = stacks(layout.root)[0];
+            layout = split_stack(layout, target.id, step % 2 === 0 ? "row" : "column", "crew");
+        }
+
+        expect(stacks(layout.root)).toHaveLength(3 + 12);
+    });
+});
+
+describe("the same panel can be open more than once", () => {
+    it("gives every copy its own instance", () => {
+        const layout = default_layout();
+        const [first, second] = stacks(layout.root);
+
+        const twice = add_panel(add_panel(layout, first.id, "preview"), second.id, "preview");
+        const instances = stacks(twice.root)
+            .flatMap((stack) => stack.tabs)
+            .filter((tab) => tab.panel === "preview")
+            .map((tab) => tab.instance);
+
+        expect(instances).toHaveLength(2);
+        expect(new Set(instances).size).toBe(2);
+    });
+
+    it("closing one copy leaves the other", () => {
+        const layout = default_layout();
+        const [first, second] = stacks(layout.root);
+        const twice = add_panel(add_panel(layout, first.id, "preview"), second.id, "preview");
+
+        const doomed = stacks(twice.root)
+            .flatMap((stack) => stack.tabs)
+            .find((tab) => tab.panel === "preview");
+
+        const after = close_tab(twice, first.id, doomed!.instance);
+        const left = stacks(after.root)
+            .flatMap((stack) => stack.tabs)
+            .filter((tab) => tab.panel === "preview");
+
+        expect(left).toHaveLength(1);
+    });
+});
+
+describe("moving a tab", () => {
+    it("carries it to another stack and leaves nothing behind", () => {
+        const layout = default_layout();
+        const [source, , target] = stacks(layout.root);
+        const tab = source.tabs[0];
+
+        const moved = move_tab(layout, tab.instance, target.id);
+        const holder = stacks(moved.root).find((stack) =>
+            stack.tabs.some((entry) => entry.instance === tab.instance),
+        );
+
+        expect(holder?.id).toBe(target.id);
+        expect(tabs_of(moved).flat().filter((panel) => panel === tab.panel)).toHaveLength(1);
+    });
+
+    it("collapses a stack that its last tab left", () => {
+        const layout = default_layout();
+        const [source, , target] = stacks(layout.root);
+
+        const moved = move_tab(layout, source.tabs[0].instance, target.id);
+        expect(stacks(moved.root).some((stack) => stack.id === source.id)).toBe(false);
+    });
+});
+
+describe("closing", () => {
+    it("keeps the last stack even when it is empty, so there is somewhere to drop", () => {
+        let layout = default_layout();
+        for (const stack of stacks(layout.root).slice(1)) {
+            for (const tab of stack.tabs) {
+                layout = close_tab(layout, stack.id, tab.instance);
+            }
+        }
+
+        const last = stacks(layout.root);
+        expect(last).toHaveLength(1);
+
+        for (const tab of [...last[0].tabs]) {
+            layout = close_tab(layout, last[0].id, tab.instance);
+        }
+
+        expect(stacks(layout.root)).toHaveLength(1);
+        expect(visible_panels(layout)).toHaveLength(0);
+    });
+
+    it("drops a maximised stack that no longer exists", () => {
+        const layout = default_layout();
+        const [first, , target] = stacks(layout.root);
+        const maximised = { ...layout, maximised: first.id };
+
+        const moved = move_tab(maximised, first.tabs[0].instance, target.id);
+        expect(moved.maximised).toBeNull();
+    });
+});
+
+describe("what is restored from storage", () => {
+    it("upgrades the four-slot layout the previous version saved", () => {
+        const upgraded = upgrade_layout(
+            {
+                slots: {
+                    left_top: { panels: ["island"], active: 0 },
+                    left_bottom: { panels: ["board"], active: 0 },
+                    right_top: { panels: ["panes", "skills"], active: 1 },
+                    right_bottom: { panels: [], active: 0 },
+                },
             },
-            column_fraction: 0.4,
-        });
+            known,
+        );
 
-        expect(upgraded.slots.left_top.panels).toEqual(["island"]);
-        expect(upgraded.slots.left_top.active).toBe(0);
+        expect(tabs_of(upgraded).flat()).toEqual(["island", "board", "panes", "skills"]);
+    });
+
+    it("drops a panel that no longer exists", () => {
+        const upgraded = upgrade_layout(
+            {
+                root: {
+                    kind: "stack",
+                    id: "k1",
+                    tabs: [
+                        { panel: "island", instance: "island-1" },
+                        { panel: "seance", instance: "seance-2" },
+                    ],
+                    active: 1,
+                },
+                next_id: 3,
+            },
+            known,
+        );
+
+        expect(tabs_of(upgraded)).toEqual([["island"]]);
+        expect(stacks(upgraded.root)[0].active).toBe(0);
+    });
+
+    it("falls back to the default when the stored value is nonsense", () => {
+        expect(tabs_of(upgrade_layout("not a layout", known))).toEqual(tabs_of(default_layout()));
+        expect(tabs_of(upgrade_layout(null, known))).toEqual(tabs_of(default_layout()));
     });
 });
 
-describe("opening a panel", () => {
-    it("selects the tab it is already in instead of duplicating it", () => {
-        const layout = layout_with({ left_top: ["island", "board"], right_top: ["panes"] });
-        const next = open_panel(layout, "board");
-
-        expect(next.slots.left_top.panels).toEqual(["island", "board"]);
-        expect(next.slots.left_top.active).toBe(1);
+describe("focusing a panel", () => {
+    it("selects the copy that is already open", () => {
+        const layout = add_panel(default_layout(), stacks(default_layout().root)[0].id, "skills");
+        const focused = focus_panel(layout, "skills");
+        expect(visible_panels(focused)).toContain("skills");
     });
 
-    it("fills an empty slot before crowding a full one", () => {
-        const layout = layout_with({ left_top: ["island"], right_top: ["panes"] });
-        const next = open_panel(layout, "preview");
-
-        expect(next.slots.left_bottom.panels).toEqual(["preview"]);
+    it("opens one when there is none", () => {
+        const layout = default_layout();
+        expect(visible_panels(layout)).not.toContain("repos");
+        expect(visible_panels(focus_panel(layout, "repos"))).toContain("repos");
     });
 });
 
-describe("moving a panel between slots", () => {
-    it("leaves no copy behind", () => {
-        const layout = layout_with({ left_top: ["island", "board"], right_top: ["panes"] });
-        const next = move_panel(layout, "board", "right_bottom");
+describe("resizing", () => {
+    it("clamps a divider dragged past the edge", () => {
+        const layout = default_layout();
+        const split = layout.root.kind === "split" ? layout.root : null;
 
-        expect(next.slots.left_top.panels).toEqual(["island"]);
-        expect(next.slots.right_bottom.panels).toEqual(["board"]);
-        expect(visible_panels(next)).toContain("board");
-    });
+        const squashed = set_fraction(layout, split!.id, 0.01);
+        const stretched = set_fraction(layout, split!.id, 4);
 
-    it("keeps the source slot pointing at a tab that still exists", () => {
-        const layout = {
-            ...layout_with({ left_top: ["island", "board", "crew"] }),
-        };
-        layout.slots.left_top.active = 2;
-
-        const next = move_panel(layout, "crew", "right_top");
-        expect(next.slots.left_top.active).toBe(1);
-        expect(next.slots.left_top.panels[next.slots.left_top.active]).toBe("board");
-    });
-});
-
-describe("closing a tab", () => {
-    it("falls back to a remaining tab", () => {
-        const layout = layout_with({ left_top: ["island", "board"] });
-        layout.slots.left_top.active = 1;
-
-        const next = close_panel(layout, "left_top", "board");
-        expect(next.slots.left_top.panels).toEqual(["island"]);
-        expect(next.slots.left_top.active).toBe(0);
-    });
-
-    it("leaves an empty slot that can still receive a drop", () => {
-        const layout = layout_with({ left_bottom: ["board"] });
-        const next = close_panel(layout, "left_bottom", "board");
-
-        expect(next.slots.left_bottom.panels).toEqual([]);
-        expect(visible_panels(next)).not.toContain("board");
-    });
-});
-
-describe("layout presets", () => {
-    it("each preset places every panel at most once", () => {
-        for (const preset of PRESETS) {
-            const placed = Object.values(preset.slots).flat();
-            expect(new Set(placed).size).toBe(placed.length);
-        }
-    });
-
-    it("applying a preset is recognised as that preset", () => {
-        for (const preset of PRESETS) {
-            expect(preset_of(apply_preset(preset))).toBe(preset.id);
-        }
-    });
-
-    it("a hand-arranged layout belongs to no preset", () => {
-        const custom = apply_preset(PRESETS[0]);
-        const moved = move_panel(custom, "skills", "left_top");
-        expect(preset_of(moved)).toBeNull();
-    });
-
-    it("applying a preset clears a maximised slot", () => {
-        expect(apply_preset(PRESETS[1]).maximised).toBeNull();
+        const read = (held: Layout) => (held.root.kind === "split" ? held.root.fraction : null);
+        expect(read(squashed)).toBeGreaterThan(0.1);
+        expect(read(stretched)).toBeLessThan(0.9);
     });
 });

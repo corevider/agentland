@@ -4,17 +4,16 @@ import { BoardPanel } from "@/components/BoardPanel";
 import { ContextMenu, useContextMenu } from "@/components/ContextMenu";
 import { Workspace } from "@/workspace/Workspace";
 import {
-    PANELS,
-    PRESETS,
-    apply_preset,
+    focus_panel as focus_panel_in,
     load_layout,
-    open_panel,
-    preset_of,
     save_layout,
     visible_panels,
     type Layout,
     type PanelId,
 } from "@/workspace/layout";
+import { PANELS, ServiceProvider, is_known_panel, type WorkspaceServices } from "@/workspace/registry";
+import { PRESETS, preset_of } from "@/workspace/presets";
+import { bench_layout } from "@/workspace/bench_layout";
 import { WorkspaceRail } from "@/workspace/WorkspaceRail";
 import { WorkspaceTabs } from "@/workspace/WorkspaceTabs";
 import { PreviewPanel } from "@/components/PreviewPanel";
@@ -111,7 +110,7 @@ export default function App() {
     const frame_ref = useRef({ fps: 0, worst_frame_ms: 0 });
     const island_ref = useRef({ rendered: 0, at: 0 });
     const [focused_id, set_focused_id] = useState<string | null>(null);
-    const [layout, set_layout_state] = useState<Layout>(() => load_layout());
+    const [layout, set_layout_state] = useState<Layout>(() => load_layout(is_known_panel));
     const layout_ref = useRef(layout);
     layout_ref.current = layout;
     const pane_count = settings.panes;
@@ -150,7 +149,7 @@ export default function App() {
 
     const focus_panel = useCallback((panel: PanelId) => {
         set_layout_state((current) => {
-            const next = open_panel(current, panel);
+            const next = focus_panel_in(current, panel);
             save_layout(next);
             return next;
         });
@@ -320,16 +319,7 @@ export default function App() {
             }
 
             const wants_island = command === "bench:with-island";
-            set_layout({
-                ...layout_ref.current,
-                slots: {
-                    left_top: { panels: wants_island ? ["island"] : ["board"], active: 0 },
-                    left_bottom: { panels: [], active: 0 },
-                    right_top: { panels: ["panes"], active: 0 },
-                    right_bottom: { panels: [], active: 0 },
-                },
-                column_fraction: wants_island ? 0.38 : 0.2,
-            });
+            set_layout(bench_layout(wants_island));
 
             window.setTimeout(() => void run_benchmark(), 600);
         };
@@ -470,6 +460,28 @@ export default function App() {
         [menu, layout, focus_panel],
     );
 
+    const services = useMemo<WorkspaceServices>(
+        () => ({
+            sessions: shown_sessions,
+            crew,
+            repositories: workspace_repos,
+            open_session,
+            close_session,
+            open_shell_in: (cwd: string) => {
+                spawn_shell("bash", cwd)
+                    .then((created) => {
+                        set_sessions((held) => [...held, created]);
+                        set_focused_id(created.id);
+                    })
+                    .catch((cause) => set_error(String(cause)));
+            },
+            focus_pane: set_focused_id,
+            focused_id,
+            on_metrics,
+        }),
+        [close_session, crew, focused_id, on_metrics, open_session, shown_sessions, workspace_repos],
+    );
+
     return (
         <div
             className="relative flex h-screen flex-col bg-lagoon-deep text-linen"
@@ -505,7 +517,7 @@ export default function App() {
                             <button
                                 key={preset.id}
                                 title={preset.hint}
-                                onClick={() => set_layout(apply_preset(preset))}
+                                onClick={() => set_layout(preset.build())}
                                 className={`rounded px-2.5 py-[3px] text-[12px] ${
                                     active ? "bg-lagoon text-linen" : "text-shell hover:text-linen"
                                 }`}
@@ -608,90 +620,23 @@ export default function App() {
                     }
                 />
 
-            <Workspace
-                layout={layout}
-                on_layout={set_layout}
-                render_panel={(panel: PanelId, active: boolean) => {
-                    if (panel === "repos") {
-                        return <RepoPanel active />;
-                    }
-                    if (panel === "preview") {
-                        return <PreviewPanel active={active} />;
-                    }
-                    if (panel === "skills") {
-                        return <SkillsPanel active />;
-                    }
-                    if (panel === "crew") {
-                        return <CrewPanel active on_open_session={open_session} />;
-                    }
-                    if (panel === "board") {
-                        return <BoardPanel active repositories={workspace_repos} />;
-                    }
-                    if (panel === "island") {
-                        return (
-                            <Suspense
-                                fallback={
-                                    <div className="flex min-h-0 flex-1 items-center justify-center font-mono text-xs text-shell">
-                                        loading the island…
-                                    </div>
-                                }
-                            >
-                                <IslandPanel active on_open_session={open_session} />
-                            </Suspense>
-                        );
-                    }
-
-                    return (
-                        <main
-                            className="grid min-h-0 min-w-0 flex-1 gap-1.5 p-1.5"
-                            style={{
-                                gridTemplateColumns: `repeat(${grid_columns}, minmax(0, 1fr))`,
-                                gridAutoRows: "minmax(0, 1fr)",
-                            }}
-                        >
-                            {shown_sessions.map((session) => (
-                                <TerminalPane
-                                    key={session.id}
-                                    session={session}
-                                    label={
-                                        crew.find((agent) => agent.session_id === session.id)?.name
-                                    }
-                                    focused={
-                                        focused_id ? focused_id === session.id : session.id === sessions[0]?.id
-                                    }
-                                    on_focus={set_focused_id}
-                                    on_close={close_session}
-                                    on_zoom={(id) => set_zoomed_id((held) => (held === id ? null : id))}
-                                    zoomed={zoomed_id === session.id}
-                                    on_branch={(entry) => {
-                                        if (!entry.cwd) {
-                                            return;
-                                        }
-                                        spawn_shell("bash", entry.cwd)
-                                            .then((created) => {
-                                                set_sessions((held) => [...held, created]);
-                                                set_focused_id(created.id);
-                                            })
-                                            .catch((cause) => set_error(String(cause)));
-                                    }}
-                                    on_metrics={on_metrics}
-                                />
-                            ))}
-                        </main>
-                    );
-                }}
-                subtitle_for={(panel: PanelId) => {
-                    if (panel === "panes") {
-                        return shown_sessions.length === sessions.length
-                            ? `${sessions.length} open`
-                            : `${shown_sessions.length} of ${sessions.length}`;
-                    }
-                    if (panel === "island") {
-                        return `${pane_count} × ${rate.toLocaleString()} lps`;
-                    }
-                    return undefined;
-                }}
-            />
+            <ServiceProvider services={services}>
+                <Workspace
+                    layout={layout}
+                    on_layout={set_layout}
+                    subtitle_for={(panel: PanelId) => {
+                        if (panel === "panes") {
+                            return shown_sessions.length === sessions.length
+                                ? `${sessions.length} open`
+                                : `${shown_sessions.length} of ${sessions.length}`;
+                        }
+                        if (panel === "island") {
+                            return `${pane_count} × ${rate.toLocaleString()} lps`;
+                        }
+                        return undefined;
+                    }}
+                />
+            </ServiceProvider>
             </div>
 
         </div>
