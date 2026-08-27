@@ -147,7 +147,16 @@ function SlotView({
                         </div>
                     ))}
                 </div>
-                <div className="flex shrink-0 items-center">
+                <div className="flex shrink-0 items-center gap-0.5">
+                    <button
+                        className="rounded px-1.5 py-0.5 font-mono text-[11px] text-shell hover:text-linen"
+                        title={layout.maximised === id ? "restore the layout" : "fill the window with this panel"}
+                        onClick={() =>
+                            on_layout({ ...layout, maximised: layout.maximised === id ? null : id })
+                        }
+                    >
+                        {layout.maximised === id ? "▣" : "▢"}
+                    </button>
                     <AddPanel slot={id} layout={layout} on_layout={on_layout} />
                 </div>
             </header>
@@ -259,6 +268,20 @@ export function Workspace({ layout, on_layout, render_panel, subtitle_for }: Pro
             </div>
         );
     };
+
+    if (layout.maximised) {
+        return (
+            <div ref={frame} className="flex min-h-0 min-w-0 flex-1 p-2">
+                <SlotView
+                    id={layout.maximised}
+                    layout={layout}
+                    on_layout={on_layout}
+                    render_panel={render_panel}
+                    subtitle_for={subtitle_for}
+                />
+            </div>
+        );
+    }
 
     return (
         <div ref={frame} className="flex min-h-0 min-w-0 flex-1 gap-2 p-2">

@@ -26,6 +26,7 @@ export interface Slot {
 
 export interface Layout {
     slots: Record<SlotId, Slot>;
+    maximised?: SlotId | null;
     column_fraction: number;
     left_row_fraction: number;
     right_row_fraction: number;
@@ -38,6 +39,7 @@ export const DEFAULT_LAYOUT: Layout = {
         right_top: { panels: ["panes"], active: 0 },
         right_bottom: { panels: [], active: 0 },
     },
+    maximised: null,
     column_fraction: 0.38,
     left_row_fraction: 0.58,
     right_row_fraction: 0.62,
@@ -93,6 +95,7 @@ export function upgrade_layout(stored: unknown): Layout {
 
     return {
         slots,
+        maximised: SLOTS.includes(layout.maximised as SlotId) ? (layout.maximised as SlotId) : null,
         column_fraction: layout.column_fraction ?? DEFAULT_LAYOUT.column_fraction,
         left_row_fraction: layout.left_row_fraction ?? DEFAULT_LAYOUT.left_row_fraction,
         right_row_fraction: layout.right_row_fraction ?? DEFAULT_LAYOUT.right_row_fraction,

@@ -38,6 +38,8 @@ export interface PaneMetrics {
 
 interface Props {
     session: SessionInfo;
+    label?: string;
+    on_close?: (id: string) => void;
     focused: boolean;
     on_focus: (id: string) => void;
     on_metrics: (id: string, metrics: PaneMetrics) => void;
@@ -64,7 +66,7 @@ function collapse_to_tail(data: Uint8Array): Uint8Array {
     return result;
 }
 
-export function TerminalPane({ session, focused, on_focus, on_metrics }: Props) {
+export function TerminalPane({ session, focused, on_focus, on_metrics, label, on_close}: Props) {
     const host_ref = useRef<HTMLDivElement>(null);
     const focused_ref = useRef(focused);
     const [renderer, set_renderer] = useState("canvas");
@@ -240,42 +242,77 @@ export function TerminalPane({ session, focused, on_focus, on_metrics }: Props) 
         };
     }, [session.id, session.kind, on_metrics]);
 
+    const state = !stats
+        ? "opening"
+        : !stats.alive
+          ? "exited"
+          : now - stats.last_output_at <= 2
+            ? "working"
+            : "waiting";
+
+    const tint =
+        state === "working"
+            ? "bg-sun"
+            : state === "exited"
+              ? "bg-coral"
+              : state === "waiting"
+                ? "bg-palm"
+                : "bg-shade";
+
     return (
         <div
-            className={`flex min-h-0 flex-col border bg-lagoon-deep ${focused ? "border-turquoise" : "border-reef"}`}
+            className={`flex min-h-0 flex-col overflow-hidden rounded-lg border bg-lagoon-deep ${
+                focused ? "border-turquoise" : "border-reef"
+            }`}
             onMouseDown={() => on_focus(session.id)}
         >
-            <div className="flex items-center justify-between gap-2 border-b border-reef px-2 py-1 font-mono text-[11px] text-shell">
-                <span className="truncate">{session.id}</span>
+            <div className="flex shrink-0 items-center gap-2 border-b border-reef/70 px-2 py-1">
+                <span className={`size-[7px] shrink-0 rounded-full ${tint}`} title={state} />
+                <span className="truncate text-[12px] text-linen">{label ?? session.id}</span>
+                <span className="shrink-0 rounded bg-lagoon px-1 py-[1px] font-mono text-[9px] text-shade">
+                    {session.command.split(/\s+/)[0]}
+                </span>
 
                 {stats ? (
-                    <span className="flex items-center gap-2 tabular-nums">
-                        <span className={stats.alive ? "text-palm" : "text-shell"}>
-                            {stats.alive
-                                ? now - stats.last_output_at <= 2
-                                    ? "working"
-                                    : "waiting"
-                                : "exited"}{" "}
-                            {format_elapsed(now - stats.last_output_at)}
-                        </span>
-                        <span title={`${stats.lines.toLocaleString()} lines since start`}>
-                            {format_bytes(stats.bytes)}
-                        </span>
+                    <span className="ml-auto flex shrink-0 items-center gap-2 font-mono text-[10px] tabular-nums text-shade">
                         {stats.context_percent !== null ? (
-                            <span className="text-turquoise">{stats.context_percent}% ctx left</span>
+                            <span className="text-turquoise">{stats.context_percent}% ctx</span>
                         ) : stats.context_tokens !== null ? (
                             <span className="text-turquoise" title="what the engine reports in context">
                                 {format_tokens(stats.context_tokens)} ctx
                             </span>
                         ) : null}
+                        <span title={`${stats.lines.toLocaleString()} lines since start`}>
+                            {format_bytes(stats.bytes)}
+                        </span>
                     </span>
                 ) : null}
 
-                <span>
+                {on_close ? (
+                    <button
+                        className="shrink-0 rounded px-1 font-mono text-[11px] text-shade hover:text-coral"
+                        title="close this terminal"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            on_close(session.id);
+                        }}
+                    >
+                        ×
+                    </button>
+                ) : null}
+            </div>
+
+            <div ref={host_ref} className="min-h-0 flex-1 overflow-hidden p-1" />
+
+            <div className="flex shrink-0 items-center gap-2 border-t border-reef/70 px-2 py-[3px] font-mono text-[10px] text-shade">
+                <span className={state === "working" ? "text-sun" : state === "exited" ? "text-coral" : "text-shell"}>
+                    {state}
+                </span>
+                {stats ? <span className="tabular-nums">{format_elapsed(now - stats.last_output_at)}</span> : null}
+                <span className="ml-auto truncate">
                     {focused ? "live" : `${BACKGROUND_FLUSH_MS}ms`} · {renderer}
                 </span>
             </div>
-            <div ref={host_ref} className="min-h-0 flex-1 overflow-hidden p-1" />
         </div>
     );
 }

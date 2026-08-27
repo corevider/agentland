@@ -12,6 +12,7 @@ import {
     type Layout,
     type PanelId,
 } from "@/workspace/layout";
+import { WorkspaceRail } from "@/workspace/WorkspaceRail";
 import { PreviewPanel } from "@/components/PreviewPanel";
 import { SkillsPanel } from "@/components/SkillsPanel";
 import { CrewPanel } from "@/components/CrewPanel";
@@ -21,11 +22,14 @@ import { TerminalPane, type PaneMetrics } from "@/components/TerminalPane";
 import {
     is_tauri,
     kill_session,
+    list_agents,
+    list_tasks,
     list_sessions,
     take_ui_commands,
     report_sample,
     spawn_generator,
     spawn_shell,
+    type Agent,
     type SessionInfo,
 } from "@/lib/core";
 import { island_frames } from "@/lib/frames";
@@ -115,7 +119,23 @@ export default function App() {
 
 
     useEffect(() => {
-        list_sessions().then(set_sessions).catch((cause) => set_error(String(cause)));
+        const sync = () =>
+            list_sessions()
+                .then((current) => {
+                    set_sessions((held) => {
+                        const live = new Map(current.map((entry) => [entry.id, entry]));
+                        const kept = held.filter((entry) => live.has(entry.id)).map((entry) => live.get(entry.id)!);
+                        const known = new Set(kept.map((entry) => entry.id));
+                        const arrived = current.filter((entry) => !known.has(entry.id));
+
+                        return arrived.length === 0 && kept.length === held.length ? kept : [...kept, ...arrived];
+                    });
+                })
+                .catch((cause) => set_error(String(cause)));
+
+        sync();
+        const handle = window.setInterval(sync, 3000);
+        return () => window.clearInterval(handle);
     }, []);
 
     const set_layout = useCallback((next: Layout) => {
@@ -248,6 +268,12 @@ export default function App() {
         focus_panel("panes");
     }, [focus_panel]);
 
+    const close_session = useCallback((id: string) => {
+        set_sessions((held) => held.filter((entry) => entry.id !== id));
+        metrics_ref.current.delete(id);
+        kill_session(id).catch((cause) => set_error(String(cause)));
+    }, []);
+
     const clear = useCallback(async () => {
         const current = await list_sessions();
         await Promise.all(current.map((session) => kill_session(session.id).catch(() => undefined)));
@@ -324,6 +350,34 @@ export default function App() {
     }, [clear, pane_count]);
 
     const visible = useMemo(() => visible_panels(layout), [layout]);
+    const [rail_shut, set_rail_shut] = useState(() => {
+        try {
+            return localStorage.getItem("agentland-rail") === "shut";
+        } catch {
+            return false;
+        }
+    });
+    const [crew, set_crew] = useState<Agent[]>([]);
+    const [crew_count, set_crew_count] = useState(0);
+    const [card_count, set_card_count] = useState(0);
+
+    useEffect(() => {
+        const tick = () => {
+            list_agents()
+                .then((roster) => {
+                    set_crew(roster);
+                    set_crew_count(roster.length);
+                })
+                .catch(() => undefined);
+            list_tasks()
+                .then((cards) => set_card_count(cards.filter((card) => card.column !== "done").length))
+                .catch(() => undefined);
+        };
+
+        tick();
+        const handle = window.setInterval(tick, 5000);
+        return () => window.clearInterval(handle);
+    }, []);
     const grid_columns = useMemo(() => (sessions.length > 4 ? 4 : Math.max(sessions.length, 1)), [sessions.length]);
     const verdict = frame_stats.fps >= 55 ? "pass" : frame_stats.fps >= 30 ? "marginal" : "fail";
 
@@ -394,74 +448,54 @@ export default function App() {
                 />
             ) : null}
 
-            <header className="flex flex-wrap items-center gap-4 border-b border-reef/70 px-5 py-3">
-                <span className="font-display text-[19px] font-semibold tracking-tight text-linen">
-                    Agentland
-                </span>
-
-                <div className="flex gap-1">
-                    {PANELS.map((panel) => {
-                        const shown = visible.includes(panel.id);
-
-                        return (
-                            <button
-                                key={panel.id}
-                                title={panel.hint}
-                                className={`rounded-lg border px-3 py-1 font-mono text-xs ${
-                                    shown ? "border-turquoise text-turquoise" : "border-reef text-shell"
-                                }`}
-                                onClick={() => focus_panel(panel.id)}
-                            >
-                                {panel.label.toLowerCase()}
-                            </button>
-                        );
-                    })}
+            <header className="flex shrink-0 items-center gap-3 border-b border-reef/70 px-3 py-1.5">
+                <div className="flex items-center gap-1">
+                    <button
+                        className="rounded border border-turquoise/70 px-2 py-[3px] font-mono text-[11px] text-turquoise disabled:opacity-40"
+                        onClick={run_benchmark}
+                        disabled={busy}
+                    >
+                        run benchmark
+                    </button>
+                    <button
+                        className="rounded border border-reef px-2 py-[3px] font-mono text-[11px] text-shell hover:border-foam disabled:opacity-40"
+                        onClick={open_shells}
+                        disabled={busy}
+                    >
+                        open shells
+                    </button>
+                    <button
+                        className="rounded border border-reef px-2 py-[3px] font-mono text-[11px] text-shell hover:border-foam"
+                        onClick={clear}
+                    >
+                        clear
+                    </button>
                 </div>
 
-                <button
-                    className="border border-turquoise px-3 py-1 font-mono text-xs text-turquoise disabled:opacity-40 rounded-lg"
-                    onClick={run_benchmark}
-                    disabled={busy}
-                >
-                    run benchmark
-                </button>
-
-                <button
-                    className="border border-foam px-3 py-1 font-mono text-xs disabled:opacity-40 rounded-lg"
-                    onClick={open_shells}
-                    disabled={busy}
-                >
-                    open shells
-                </button>
-
-                <button className="border border-foam px-3 py-1 font-mono text-xs rounded-lg" onClick={clear}>
-                    clear
-                </button>
-
-                <span className="font-mono text-[11px] text-shell">
+                <span className="font-mono text-[10px] text-shade">
                     {pane_count} × {rate.toLocaleString()} lps
                 </span>
 
-                <div className="ml-auto flex items-center gap-5 font-mono text-xs tabular-nums">
+                <div className="ml-auto flex items-center gap-3 font-mono text-[10px] tabular-nums">
                     <span className={verdict === "pass" ? "text-palm" : verdict === "marginal" ? "text-sun" : "text-coral"}>
                         {frame_stats.fps} fps
                     </span>
-                    <span className="text-shell">worst {frame_stats.worst_frame_ms} ms</span>
-                    <span className="text-shell">{throughput.mb_per_second} MB/s</span>
-                    <span className="text-shell">
-                        core drop {throughput.dropped_frames} · collapsed {throughput.collapsed_mb} MB
+                    <span className="text-shade">worst {frame_stats.worst_frame_ms} ms</span>
+                    <span className="text-shade">{throughput.mb_per_second} MB/s</span>
+                    <span className="text-shade">
+                        drop {throughput.dropped_frames} · collapsed {throughput.collapsed_mb} MB
                     </span>
-                    <span className="text-shell" title={gpu.renderer}>
-                        gpu {gpu.webgl2 ? "webgl2" : gpu.renderer === "none" ? "none" : "webgl1"} · {gpu.max_contexts} ctx
+                    <span className="text-shade" title={gpu.renderer}>
+                        {gpu.webgl2 ? "webgl2" : gpu.renderer === "none" ? "none" : "webgl1"} · {gpu.max_contexts} ctx
                     </span>
 
                     <button
-                        className="border border-reef px-2 py-1 text-driftwood hover:border-turquoise hover:text-turquoise rounded-lg"
+                        className="rounded border border-reef px-1.5 py-[3px] text-driftwood hover:border-turquoise hover:text-turquoise"
                         title="Settings"
                         aria-label="Settings"
                         onClick={() => set_settings_open(true)}
                     >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <circle cx="12" cy="12" r="3" />
                             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
                         </svg>
@@ -474,6 +508,37 @@ export default function App() {
                     {error}
                 </div>
             ) : null}
+
+            <div className="flex min-h-0 min-w-0 flex-1">
+                <WorkspaceRail
+                    visible={visible}
+                    counts={{ panes: sessions.length, crew: crew_count, board: card_count }}
+                    collapsed={rail_shut}
+                    on_collapse={(next) => {
+                        set_rail_shut(next);
+                        try {
+                            localStorage.setItem("agentland-rail", next ? "shut" : "open");
+                        } catch {
+                            // a rail that cannot remember its state is still a rail
+                        }
+                    }}
+                    on_open_panel={focus_panel}
+                    on_open_agent={(agent) => {
+                        if (agent.session_id) {
+                            void open_session(agent.session_id);
+                        } else {
+                            focus_panel("island");
+                        }
+                    }}
+                    footer={
+                        <div className="flex items-center justify-between font-mono text-[10px] text-shade">
+                            <span>{sessions.length} panes</span>
+                            <span className={verdict === "pass" ? "text-palm" : verdict === "marginal" ? "text-sun" : "text-coral"}>
+                                {frame_stats.fps} fps
+                            </span>
+                        </div>
+                    }
+                />
 
             <Workspace
                 layout={layout}
@@ -520,10 +585,14 @@ export default function App() {
                                 <TerminalPane
                                     key={session.id}
                                     session={session}
+                                    label={
+                                        crew.find((agent) => agent.session_id === session.id)?.name
+                                    }
                                     focused={
                                         focused_id ? focused_id === session.id : session.id === sessions[0]?.id
                                     }
                                     on_focus={set_focused_id}
+                                    on_close={close_session}
                                     on_metrics={on_metrics}
                                 />
                             ))}
@@ -540,6 +609,7 @@ export default function App() {
                     return undefined;
                 }}
             />
+            </div>
 
         </div>
     );
