@@ -22,9 +22,10 @@ use crate::context::{read_context, ContextReading};
 use crate::board::{Board, Column, CreateTask, Evidence, MoveTask, Task};
 use crate::crew::{Agent, Crew, Engine, HireRequest};
 use crate::dispatch::{Decision, Dispatch, DispatchState};
+use crate::embed::{EmbedderReport, EmbedderSettings};
 use crate::gateway::{CallRequest, ConnectRequest, Gateway, Integration};
 use crate::mail::{MailPolicy, Mailbox, Message as MailMessage, SendMessage};
-use crate::memory::{Memory, MemoryStore, ProposeMemory, Scope};
+use crate::memory::{Memory, MemoryStore, ProposeMemory, Recalled, Scope};
 use crate::routines::{CreateRoutine, Routine, Routines};
 use crate::metrics::{MetricsStore, Sample};
 use crate::repo::{Commit, PullRequest, RepoRegistry, Repository, Review, Worktree, WorktreeStatus};
@@ -68,6 +69,8 @@ struct AppState {
     approvals: Arc<Approvals>,
     tokens: Arc<TokenStore>,
     skills: Arc<SkillLibrary>,
+    embedder: Arc<parking_lot::Mutex<EmbedderSettings>>,
+    data_dir: Arc<PathBuf>,
     workspaces: Arc<Workspaces>,
     ui_commands: Arc<parking_lot::Mutex<Vec<String>>>,
 }
@@ -136,6 +139,8 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         approvals: Arc::new(Approvals::new(data_dir.clone())),
         tokens: Arc::new(TokenStore::new(token_for_store, data_dir.clone())),
         skills: Arc::new(SkillLibrary::new(data_dir.clone())),
+        embedder: Arc::new(parking_lot::Mutex::new(crate::embed::load(&data_dir))),
+        data_dir: Arc::new(data_dir.clone()),
         workspaces: Arc::new(Workspaces::new(data_dir.clone())),
         ui_commands: Arc::new(parking_lot::Mutex::new(Vec::new())),
     };
@@ -170,6 +175,8 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/dispatch/pause", post(pause_dispatch))
         .route("/dispatch/caps", post(set_caps))
         .route("/memories", get(list_memories).post(propose_memory))
+        .route("/memories/search", get(search_memories))
+        .route("/memories/embedder", get(read_embedder).post(set_embedder))
         .route("/memories/{id}", delete(forget_memory))
         .route("/memories/{id}/approve", post(approve_memory))
         .route("/mail", get(list_mail).post(send_mail))
@@ -294,12 +301,23 @@ fn now_secs() -> u64 {
         .unwrap_or_default()
 }
 
-fn compose_brief(state: &AppState, agent: &Agent, base: &str) -> String {
+const BRIEF_MEMORIES: usize = 6;
+
+async fn compose_brief(state: &AppState, agent: &Agent, base: &str) -> String {
+    let vector = embed_text(state, base.to_owned()).await;
+
     let learned = state
         .memories
-        .approved_for(Scope::Repository, &agent.repository_id)
+        .recall(
+            Scope::Repository,
+            &agent.repository_id,
+            base,
+            vector.as_deref(),
+            state.embedder.lock().min_similarity,
+            BRIEF_MEMORIES,
+        )
         .into_iter()
-        .map(|memory| memory.text)
+        .map(|found| found.memory.text)
         .collect();
 
     let mail = state
@@ -317,7 +335,7 @@ fn compose_brief(state: &AppState, agent: &Agent, base: &str) -> String {
     })
 }
 
-fn start_agent_with_brief(state: &AppState, agent: &Agent, base: &str) -> Result<(), ApiError> {
+async fn start_agent_with_brief(state: &AppState, agent: &Agent, base: &str) -> Result<(), ApiError> {
     let worktree = state
         .repos
         .worktrees()
@@ -329,7 +347,7 @@ fn start_agent_with_brief(state: &AppState, agent: &Agent, base: &str) -> Result
         .ok_or_else(|| ApiError(anyhow::anyhow!("{}'s worktree is gone", agent.name)))?
         .worktree;
 
-    let brief = compose_brief(state, agent, base);
+    let brief = compose_brief(state, agent, base).await;
     state
         .crew
         .start(&agent.id, &worktree.path, false, Some(&brief))?;
@@ -370,7 +388,7 @@ fn spawn_routine_ticker(state: AppState) {
                                     );
                                 }
 
-                                match start_agent_with_brief(&state, &agent, &base) {
+                                match start_agent_with_brief(&state, &agent, &base).await {
                                     Ok(()) => {
                                         let _ = state.board.record_assignment(
                                             &task.id,
@@ -639,7 +657,7 @@ async fn assign_task(
         .ok_or_else(|| ApiError(anyhow::anyhow!("the agent's worktree is gone")))?
         .worktree;
 
-    let brief = compose_brief(&state, &agent, &format!("{}\n\n{}", task.title, task.body));
+    let brief = compose_brief(&state, &agent, &format!("{}\n\n{}", task.title, task.body)).await;
     state
         .crew
         .start(&agent.id, &worktree.path, false, Some(&brief))?;
@@ -712,7 +730,7 @@ async fn dispatch_task(
                 .ok_or_else(|| ApiError(anyhow::anyhow!("{}'s worktree is gone", agent.name)))?
                 .worktree;
 
-            let brief = compose_brief(&state, &agent, &format!("{}\n\n{}", task.title, task.body));
+            let brief = compose_brief(&state, &agent, &format!("{}\n\n{}", task.title, task.body)).await;
             state
                 .crew
                 .start(&agent.id, &worktree.path, false, Some(&brief))?;
@@ -909,12 +927,99 @@ struct ApproveBody {
     approved: bool,
 }
 
+#[derive(Deserialize)]
+struct SearchQuery {
+    #[serde(default)]
+    q: String,
+    #[serde(default)]
+    scope: Option<Scope>,
+    #[serde(default)]
+    scope_id: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+async fn embed_text(state: &AppState, text: String) -> Option<Vec<f32>> {
+    let settings = state.embedder.lock().clone();
+    if settings.endpoint.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        return None;
+    }
+
+    tokio::task::spawn_blocking(move || crate::embed::embed(&settings, &text))
+        .await
+        .ok()
+        .and_then(|result| match result {
+            Ok(vector) => Some(vector),
+            Err(error) => {
+                tracing::warn!(%error, "the embedder did not answer; falling back to words");
+                None
+            }
+        })
+}
+
+async fn search_memories(
+    State(state): State<AppState>,
+    Query(query): Query<SearchQuery>,
+) -> Json<Vec<Recalled>> {
+    let vector = embed_text(&state, query.q.clone()).await;
+
+    let floor = state.embedder.lock().min_similarity;
+
+    Json(state.memories.recall(
+        query.scope.unwrap_or(Scope::Workspace),
+        query.scope_id.as_deref().unwrap_or_default(),
+        &query.q,
+        vector.as_deref(),
+        floor,
+        query.limit.unwrap_or(8),
+    ))
+}
+
+async fn read_embedder(State(state): State<AppState>) -> Json<EmbedderReport> {
+    let settings = state.embedder.lock().clone();
+    Json(tokio::task::spawn_blocking(move || crate::embed::probe(&settings)).await.unwrap())
+}
+
+async fn set_embedder(
+    State(state): State<AppState>,
+    Json(settings): Json<EmbedderSettings>,
+) -> Json<EmbedderReport> {
+    *state.embedder.lock() = settings.clone();
+    crate::embed::save(&state.data_dir, &settings);
+
+    let report = tokio::task::spawn_blocking({
+        let settings = settings.clone();
+        move || crate::embed::probe(&settings)
+    })
+    .await
+    .unwrap();
+
+    if report.reachable {
+        let pending = state.memories.without_vectors();
+        for memory in pending {
+            if let Some(vector) = embed_text(&state, memory.text.clone()).await {
+                state.memories.remember_vector(&memory.id, vector);
+            }
+        }
+    }
+
+    Json(report)
+}
+
 async fn approve_memory(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<ApproveBody>,
 ) -> Result<Json<Memory>, ApiError> {
-    Ok(Json(state.memories.approve(&id, body.approved)?))
+    let memory = state.memories.approve(&id, body.approved)?;
+
+    if memory.approved {
+        if let Some(vector) = embed_text(&state, memory.text.clone()).await {
+            state.memories.remember_vector(&memory.id, vector);
+        }
+    }
+
+    Ok(Json(memory))
 }
 
 async fn forget_memory(
@@ -1135,7 +1240,7 @@ async fn start_agent(
         .ok_or_else(|| ApiError(anyhow::anyhow!("agent worktree is gone")))?
         .worktree;
 
-    let brief = compose_brief(&state, &agent, "");
+    let brief = compose_brief(&state, &agent, "").await;
 
     Ok(Json(state.crew.start(
         &id,

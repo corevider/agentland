@@ -944,3 +944,42 @@ it out for good.
 Verified the long way round: X assigned `t12` to zen with its reason, the app was closed, the row
 was read straight out of `agentland.db` with nothing running, and the same decision came back
 through the API after a restart.
+
+## Recall, hybrid
+
+Section 06 F asked for lexical scan plus embeddings, "since code memory is mostly exact-match", and
+what existed was neither: `approved_for` returned every approved memory for a scope and the brief
+carried all of them.
+
+**Where the vectors come from.** The core's `reqwest` is built without TLS, so it can only reach
+`http://` — which settles the design rather than limiting it. The embedder is a local endpoint: any
+OpenAI-compatible `/v1/embeddings`, which is what Ollama, llama.cpp's server and LM Studio all
+serve. An `https://` endpoint is refused with the reason. Nothing an agent has learned leaves the
+machine.
+
+**How the two halves are weighted.** Words first: a token match scores 1, and a token that looks
+like an identifier — it carries an underscore or a digit — scores 2, because `PORT_4103` is worth
+more than `the`. A vector only contributes when it clears a floor, 0.5 by default and adjustable
+next to the endpoint, and then only as 35% of the score. So an exact identifier wins outright, and
+the vector's job is to rescue a memory the words would have dropped.
+
+Measured, with an embedder configured:
+
+| Query | What came back |
+|---|---|
+| `PORT_4103` | one hit, score **1.00**, words 1.00, vector 0.23 — the weak vector ignored below the floor |
+| *which listener does a worktree get* | one hit, score **0.46**, words 0.40, vector **0.56** — the vector lifted it |
+| the same, embedder off | the same memory, on words alone |
+
+The brief now asks recall the same question with the card's own text, capped at six. Assigning *make
+the listener per worktree explicit* to an agent put exactly one memory in its opening brief —
+*worktrees each get their own listener at creation* — where before it would have carried all four.
+
+**What is verified and what is not.** There is no embedding model on this machine, so a stand-in
+server was written that returns a deterministic hash of the words. That proves the wire format, both
+response shapes, the storage, the floor and the ranking end to end. It proves nothing about whether
+a real model ranks these memories well. The panel says `words only` until an endpoint answers, and
+says how many dimensions it answered with when one does.
+
+One thing the work tightened: the approval gate now covers the embedder. An unapproved memory is not
+sent anywhere, not even to a model on localhost.

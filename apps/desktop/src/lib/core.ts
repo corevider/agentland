@@ -419,6 +419,41 @@ export function forget_memory(id: string): Promise<void> {
     return request<void>(`/memories/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
+export interface Recalled {
+    memory: Memory;
+    score: number;
+    lexical: number;
+    semantic: number;
+}
+
+export interface EmbedderSettings {
+    endpoint: string | null;
+    model: string;
+    min_similarity: number;
+}
+
+export interface EmbedderReport {
+    settings: EmbedderSettings;
+    reachable: boolean;
+    dimensions: number;
+    detail: string;
+}
+
+export function search_memories(query: string, limit = 8): Promise<Recalled[]> {
+    return request<Recalled[]>(`/memories/search?q=${encodeURIComponent(query)}&limit=${limit}`);
+}
+
+export function read_embedder(): Promise<EmbedderReport> {
+    return request<EmbedderReport>("/memories/embedder");
+}
+
+export function set_embedder(settings: EmbedderSettings): Promise<EmbedderReport> {
+    return request<EmbedderReport>("/memories/embedder", {
+        method: "POST",
+        body: JSON.stringify(settings),
+    });
+}
+
 export interface Routine {
     id: string;
     name: string;
