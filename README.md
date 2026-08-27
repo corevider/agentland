@@ -1115,3 +1115,30 @@ environment carries the parent's session markers. Every agent printed *transcrip
 inherited CLAUDE_CODE_CHILD_SESSION marker*: the record the supervisor wants had been silently
 switched off by us. A child now gets a clean slate of those variables, and the agent started after
 the fix wrote a transcript at the expected path with the brief in it, which the supervisor read.
+
+## A pane in a window of its own
+
+The rule: a pane may have two views — a cell in the grid and a
+separate window — but there is only ever **one pty**, and the preference lives in the main process so
+both windows agree. Get that wrong and a person switches to the separate window, puts the pane back,
+and watches it snap to a view nobody chose.
+
+`⧉` on a terminal card opens an OS window for that session. The window loads the same frontend with
+`?pane=<session>`, which renders one terminal and nothing else; it subscribes to the session the grid
+was already subscribed to, so the scrollback, the context reading and the input are the same
+terminal seen twice. The grid leaves a card in its place saying where the pane went, with **bring it
+back**; the window has **put it back**, and closing the window puts it back too.
+
+The ledger of which pane is where lives in the core, not in either window — the same reason the
+supervisor lives there. Both windows read it, so neither can believe it owns a pane the other is
+drawing.
+
+Watched end to end: the tear-out opened a second window titled *Nova*, the core's ledger read
+`{"pane-…":"window"}`, the grid showed the placeholder, and *put it back* closed the window, emptied
+the ledger and restored the terminal — with its scrollback grown from 656 KB to 1.7 MB, because the
+session had gone on working the whole time it was somewhere else.
+
+An aside from the same session, and a good sign: Nova read the crew's memories and refused one — *"the
+svc-demo dev server reads PORT_4103 from the env" — incorrect. Nothing in the repo references
+PORT_4103; the server only reads PORT.* It was right; that memory was test data I had seeded
+carelessly, and it is gone.

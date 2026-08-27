@@ -78,6 +78,7 @@ struct AppState {
     data_dir: Arc<PathBuf>,
     workspaces: Arc<Workspaces>,
     ui_commands: Arc<parking_lot::Mutex<Vec<String>>>,
+    torn_out: Arc<parking_lot::Mutex<BTreeMap<String, String>>>,
 }
 
 #[derive(Deserialize)]
@@ -150,6 +151,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         data_dir: Arc::new(data_dir.clone()),
         workspaces: Arc::new(Workspaces::new(data_dir.clone())),
         ui_commands: Arc::new(parking_lot::Mutex::new(Vec::new())),
+        torn_out: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
     };
 
     spawn_routine_ticker(state.clone());
@@ -215,6 +217,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/devices", get(list_devices).post(pair_device))
         .route("/devices/{id}", delete(revoke_device))
         .route("/ui/commands", get(take_ui_commands).post(queue_ui_command))
+        .route("/ui/windows", get(list_windows).post(set_window))
         .route("/dispatch/tasks/{id}", post(dispatch_task))
         .route("/repos/{id}/worktrees/{name}/review", get(review_worktree))
         .route("/repos/{id}/worktrees/{name}/commit", post(commit_worktree))
@@ -1138,6 +1141,37 @@ async fn queue_ui_command(
 ) -> StatusCode {
     state.ui_commands.lock().push(body.name);
     StatusCode::ACCEPTED
+}
+
+#[derive(Deserialize)]
+struct WindowState {
+    session_id: String,
+    /// Which window holds this pane now: "grid" puts it back.
+    holder: String,
+}
+
+/// Which panes are showing in a window of their own.
+///
+/// One pty can have two views; what must not happen is both views drawing the
+/// same terminal in the same breath, or the grid holding a cell for a pane that
+/// is on another screen. The ledger lives here so every window agrees.
+async fn list_windows(State(state): State<AppState>) -> Json<BTreeMap<String, String>> {
+    Json(state.torn_out.lock().clone())
+}
+
+async fn set_window(
+    State(state): State<AppState>,
+    Json(body): Json<WindowState>,
+) -> Json<BTreeMap<String, String>> {
+    let mut held = state.torn_out.lock();
+
+    if body.holder == "grid" {
+        held.remove(&body.session_id);
+    } else {
+        held.insert(body.session_id, body.holder);
+    }
+
+    Json(held.clone())
 }
 
 async fn take_ui_commands(State(state): State<AppState>) -> Json<Vec<String>> {

@@ -43,6 +43,7 @@ interface Props {
     on_zoom?: (id: string) => void;
     zoomed?: boolean;
     on_branch?: (session: SessionInfo) => void;
+    on_tear_out?: (session: SessionInfo) => void;
     focused: boolean;
     on_focus: (id: string) => void;
     on_metrics: (id: string, metrics: PaneMetrics) => void;
@@ -69,7 +70,7 @@ function collapse_to_tail(data: Uint8Array): Uint8Array {
     return result;
 }
 
-export function TerminalPane({ session, focused, on_focus, on_metrics, label, on_close, on_zoom, zoomed, on_branch}: Props) {
+export function TerminalPane({ session, focused, on_focus, on_metrics, label, on_close, on_zoom, zoomed, on_branch, on_tear_out}: Props) {
     const host_ref = useRef<HTMLDivElement>(null);
     const focused_ref = useRef(focused);
     const [renderer, set_renderer] = useState("canvas");
@@ -301,6 +302,19 @@ export function TerminalPane({ session, focused, on_focus, on_metrics, label, on
                         }}
                     >
                         +
+                    </button>
+                ) : null}
+
+                {on_tear_out ? (
+                    <button
+                        className="shrink-0 rounded px-1 font-mono text-[11px] text-shade hover:text-turquoise"
+                        title="open this terminal in its own window"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            on_tear_out(session);
+                        }}
+                    >
+                        ⧉
                     </button>
                 ) : null}
 

@@ -687,6 +687,17 @@ export function open_pull_request(
     });
 }
 
+export function list_windows(): Promise<Record<string, string>> {
+    return request<Record<string, string>>("/ui/windows");
+}
+
+export function set_window(session_id: string, holder: string): Promise<Record<string, string>> {
+    return request<Record<string, string>>("/ui/windows", {
+        method: "POST",
+        body: JSON.stringify({ session_id, holder }),
+    });
+}
+
 export function take_ui_commands(): Promise<string[]> {
     return request<string[]>("/ui/commands");
 }

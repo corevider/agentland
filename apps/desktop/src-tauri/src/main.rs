@@ -119,6 +119,56 @@ fn dirs_next_data_dir() -> Option<std::path::PathBuf> {
         })
 }
 
+#[tauri::command]
+async fn open_pane_window(
+    app: tauri::AppHandle,
+    session_id: String,
+    title: String,
+) -> Result<(), String> {
+    let label = format!("pane-{}", session_id.replace(|c: char| !c.is_alphanumeric(), "-"));
+
+    if let Some(existing) = app.get_webview_window(&label) {
+        let _ = existing.set_focus();
+        return Ok(());
+    }
+
+    let url = format!("index.html?pane={}", urlencoding(&session_id));
+
+    tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App(url.into()))
+        .title(title)
+        .inner_size(900.0, 620.0)
+        .resizable(true)
+        .build()
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn close_pane_window(app: tauri::AppHandle, session_id: String) -> Result<(), String> {
+    let label = format!("pane-{}", session_id.replace(|c: char| !c.is_alphanumeric(), "-"));
+
+    if let Some(window) = app.get_webview_window(&label) {
+        window.close().map_err(|error| error.to_string())?;
+    }
+
+    Ok(())
+}
+
+/// Enough encoding for a session id, which is alphanumeric with dashes.
+fn urlencoding(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_alphanumeric() || character == '-' || character == '_' {
+                character.to_string()
+            } else {
+                format!("%{:02X}", character as u32)
+            }
+        })
+        .collect()
+}
+
 fn main() {
     tracing_subscriber::fmt().with_target(false).init();
 
@@ -153,7 +203,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(endpoint)
-        .invoke_handler(tauri::generate_handler![core_endpoint, updater_status, save_capture])
+        .invoke_handler(tauri::generate_handler![core_endpoint, updater_status, save_capture, open_pane_window, close_pane_window])
         .setup(move |app| {
             let manager = Arc::new(PtyManager::new());
             app.manage(manager.clone());
