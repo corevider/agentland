@@ -454,6 +454,20 @@ fn look_at(state: &AppState, watch: &Watch, previous_frame: &str, now: u64) -> O
         0
     };
 
+    let worktree_path = state
+        .repos
+        .worktrees()
+        .into_iter()
+        .find(|entry| {
+            entry.worktree.repository_id == watch.repository_id
+                && entry.worktree.name == watch.worktree
+        })
+        .map(|entry| entry.worktree.path);
+
+    let transcript_says = worktree_path
+        .as_ref()
+        .and_then(|path| crate::transcript::was_told(path, &watch.fingerprint));
+
     Observation {
         session_alive: alive,
         quiet_turn,
@@ -465,6 +479,7 @@ fn look_at(state: &AppState, watch: &Watch, previous_frame: &str, now: u64) -> O
             .get(&watch.task_id)
             .map(|task| !task.evidence.is_empty())
             .unwrap_or(false),
+        transcript_says,
         age_seconds: now.saturating_sub(watch.started_at),
     }
 }
@@ -496,10 +511,15 @@ fn spawn_supervisor(state: AppState) {
                 let previous = last_frames.get(&watch.session_id).cloned().unwrap_or_default();
                 let seen = look_at(&state, &watch, &previous, now);
 
-                if !watch.delivered
-                    && !seen.tail.is_empty()
-                    && seen.tail.to_lowercase().contains(&watch.fingerprint.to_lowercase())
-                {
+                let landed = match seen.transcript_says {
+                    Some(told) => told,
+                    None => {
+                        !seen.tail.is_empty()
+                            && seen.tail.to_lowercase().contains(&watch.fingerprint.to_lowercase())
+                    }
+                };
+
+                if !watch.delivered && landed {
                     state.supervisor.mark_delivered(&watch.id);
                 }
 

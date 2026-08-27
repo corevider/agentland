@@ -57,6 +57,9 @@ pub struct Observation {
     pub tail: String,
     pub changed_files: usize,
     pub card_has_evidence: bool,
+    /// What the engine's own transcript says about the brief arriving.
+    /// `None` when the engine keeps no transcript to consult.
+    pub transcript_says: Option<bool>,
     pub age_seconds: u64,
 }
 
@@ -152,13 +155,22 @@ pub fn judge(watch: &Watch, seen: &Observation, rules: &Rules) -> Verdict {
     Verdict::Working
 }
 
+/// Whether the brief actually reached the engine.
+///
+/// The transcript wins when there is one. A pane can show a message that never
+/// arrived — text left sitting in a composer that was never submitted, or a
+/// resume picker that swallowed it — and believing the screen is how a step
+/// waits forever on an agent that was never asked.
 fn delivered_now(seen: &Observation, fingerprint: &str) -> bool {
     let needle = fingerprint.trim();
     if needle.is_empty() {
         return true;
     }
 
-    squash(&seen.tail).contains(&squash(needle))
+    match seen.transcript_says {
+        Some(told) => told,
+        None => squash(&seen.tail).contains(&squash(needle)),
+    }
 }
 
 fn done_marker(tail: &str, step_id: &str) -> Option<String> {
@@ -564,8 +576,52 @@ mod tests {
             tail: String::new(),
             changed_files: 0,
             card_has_evidence: false,
+            transcript_says: None,
             age_seconds: 0,
         }
+    }
+
+    #[test]
+    fn the_transcript_outranks_the_screen_in_both_directions() {
+        let rules = Rules::default();
+        let held = watch();
+
+        // The pane shows it, but the engine never received it: a composer that
+        // was never submitted looks exactly like this.
+        let on_screen_only = Observation {
+            age_seconds: 90,
+            tail: "❯ Prove /health with a node test".into(),
+            transcript_says: Some(false),
+            ..seen()
+        };
+        assert_eq!(
+            judge(&held, &on_screen_only, &rules),
+            Verdict::Resend,
+            "the screen is not proof of delivery"
+        );
+
+        // And the other way: the transcript has it even though the visible
+        // buffer has scrolled past.
+        let scrolled_away = Observation {
+            age_seconds: 90,
+            tail: "some later output entirely".into(),
+            transcript_says: Some(true),
+            ..seen()
+        };
+        assert_eq!(judge(&held, &scrolled_away, &rules), Verdict::Working);
+    }
+
+    #[test]
+    fn without_a_transcript_the_screen_is_still_the_best_evidence_there_is() {
+        let held = watch();
+        let echoed = Observation {
+            age_seconds: 90,
+            tail: "❯ Prove /health with a node test".into(),
+            transcript_says: None,
+            ..seen()
+        };
+
+        assert_eq!(judge(&held, &echoed, &Rules::default()), Verdict::Working);
     }
 
     #[test]

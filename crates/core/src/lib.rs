@@ -22,6 +22,7 @@ pub mod server;
 pub mod workspaces;
 pub mod skills;
 pub mod supervisor;
+pub mod transcript;
 
 pub use approvals::{AnswerApproval, Approval, Approvals, RequestApproval};
 pub use auth::{Scope as TokenScope, ScopedToken, TokenStore};

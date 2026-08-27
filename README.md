@@ -1095,5 +1095,23 @@ Watched live: zen finished its step, sat at its prompt, and forty-five seconds l
 `idle`. Ada, whose session had already exited, was left alone: there is nothing to reclaim from an
 agent that is gone, and reaping it would only have been a lie in the journal.
 
-Still missing from the other tool's design: delivery verification through a transcript rather than
-the visible buffer.
+### Delivery, verified where it counts
+
+The pane is not proof. I watched this myself earlier in the session: a goal typed into the
+commander's composer sat there unsubmitted, perfectly visible, while nothing had reached the engine
+at all. A supervisor that believes the screen waits forever on an agent that was never asked.
+
+Engines keep their own record of what they were told. The core reads it: `~/.claude/projects/` plus
+the worktree path folded into a folder name, newest `.jsonl`, and a search for the brief among the
+lines the engine marked as messages *it received* — an assistant's reply mentioning the same words
+does not count as delivery. The transcript outranks the screen in both directions: it settles a
+brief the visible buffer has scrolled past, and it refuses one the buffer shows but the engine never
+got. Where no transcript exists, the buffer is still the best evidence there is, and the code says
+so rather than pretending certainty.
+
+Building it turned up the reason it could not have worked before. Agents inherit the environment of
+whatever started Agentland, and when Agentland is itself launched from inside a coding agent, that
+environment carries the parent's session markers. Every agent printed *transcript saving is off —
+inherited CLAUDE_CODE_CHILD_SESSION marker*: the record the supervisor wants had been silently
+switched off by us. A child now gets a clean slate of those variables, and the agent started after
+the fix wrote a transcript at the expected path with the brief in it, which the supervisor read.

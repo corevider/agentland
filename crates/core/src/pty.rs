@@ -211,6 +211,26 @@ impl Session {
     }
 }
 
+/// Variables the parent must not hand down.
+///
+/// An agent inherits this process's environment, and when Agentland is itself
+/// started from inside a coding agent, that environment carries the parent's
+/// session markers. Claude Code reads them and turns its own transcript off —
+/// "inherited CLAUDE_CODE_CHILD_SESSION marker" — which silently removes the
+/// record the supervisor wants to read. A child gets a clean slate.
+fn inherited_to_drop() -> Vec<String> {
+    std::env::vars()
+        .map(|(name, _)| name)
+        .filter(|name| {
+            let upper = name.to_uppercase();
+            upper.starts_with("CLAUDE_CODE_")
+                || upper == "CLAUDECODE"
+                || upper == "CLAUDE_PID"
+                || upper == "CLAUDE_EFFORT"
+        })
+        .collect()
+}
+
 pub struct PtyManager {
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     next_id: Mutex<u64>,
@@ -281,6 +301,9 @@ impl PtyManager {
             command.cwd(cwd);
         }
         command.env("TERM", "xterm-256color");
+        for name in inherited_to_drop() {
+            command.env_remove(&name);
+        }
         for (name, value) in &spec.env {
             command.env(name, value);
         }
