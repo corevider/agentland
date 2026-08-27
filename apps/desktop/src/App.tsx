@@ -643,7 +643,7 @@ export default function App() {
 
                     return (
                         <main
-                            className="grid min-h-0 min-w-0 flex-1 gap-2 p-2"
+                            className="grid min-h-0 min-w-0 flex-1 gap-1.5 p-1.5"
                             style={{
                                 gridTemplateColumns: `repeat(${grid_columns}, minmax(0, 1fr))`,
                                 gridAutoRows: "minmax(0, 1fr)",

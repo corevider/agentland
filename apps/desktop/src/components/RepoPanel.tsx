@@ -74,16 +74,16 @@ export function RepoPanel({ active }: { active: boolean }) {
 
     return (
         <div className="flex h-full min-h-0 min-w-0 flex-1">
-            <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
+            <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-2.5 overflow-y-auto p-2.5">
                 <div className="flex flex-wrap items-center gap-2">
                     <input
-                        className="w-96 border border-reef bg-lagoon px-2 py-1 font-mono text-xs rounded-lg"
+                        className="w-96 border border-reef bg-lagoon px-2 py-1 font-mono text-[11px] rounded-lg"
                         placeholder="/path/to/a/git/repository"
                         value={path}
                         onChange={(event) => set_path(event.target.value)}
                     />
                     <button
-                        className="border border-turquoise px-3 py-1 font-mono text-xs text-turquoise disabled:opacity-40 rounded-lg"
+                        className="border border-turquoise px-3 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40 rounded-lg"
                         disabled={busy || path.trim().length === 0}
                         onClick={() =>
                             run(async () => {
@@ -97,13 +97,13 @@ export function RepoPanel({ active }: { active: boolean }) {
                 </div>
 
                 {error ? (
-                    <div className="border border-coral bg-lagoon px-3 py-2 font-mono text-xs text-coral rounded-lg">
+                    <div className="border border-coral bg-lagoon px-2 py-1 font-mono text-[11px] text-coral rounded-lg">
                         {error}
                     </div>
                 ) : null}
 
                 {repos.length === 0 ? (
-                    <p className="max-w-prose font-mono text-xs text-shell">
+                    <p className="max-w-prose font-mono text-[11px] text-shell">
                         No repositories yet. Worktrees are created outside your clone, so nothing here
                         rearranges your folders.
                     </p>
@@ -111,8 +111,8 @@ export function RepoPanel({ active }: { active: boolean }) {
 
                 {repos.map((repo) => (
                     <section key={repo.id} className="border border-reef bg-lagoon rounded-lg">
-                        <header className="flex flex-wrap items-baseline justify-between gap-3 border-b border-reef px-3 py-2">
-                            <span className="font-mono text-sm text-linen">{repo.name}</span>
+                        <header className="flex flex-wrap items-baseline justify-between gap-3 border-b border-reef px-2 py-1">
+                            <span className="font-mono text-[13px] text-linen">{repo.name}</span>
                             <span className="font-mono text-[11px] text-shell">
                                 {repo.default_branch}
                                 {repo.remotes.length > 0
@@ -121,7 +121,7 @@ export function RepoPanel({ active }: { active: boolean }) {
                             </span>
                         </header>
 
-                        <div className="flex flex-col gap-2 p-3">
+                        <div className="flex flex-col gap-2 p-2">
                             {(worktrees[repo.id] ?? []).map((entry) => {
                                 const key = `${repo.id}/${entry.name}`;
                                 const service = services[key];
@@ -129,7 +129,7 @@ export function RepoPanel({ active }: { active: boolean }) {
                                 return (
                                     <div
                                         key={entry.name}
-                                        className="flex flex-wrap items-center gap-3 border border-reef px-3 py-2 font-mono text-xs rounded-lg"
+                                        className="flex flex-wrap items-center gap-3 border border-reef px-2 py-1 font-mono text-[11px] rounded-lg"
                                     >
                                         <span className="text-linen">{entry.name}</span>
                                         <span className="text-shell">{entry.branch}</span>
@@ -202,7 +202,7 @@ export function RepoPanel({ active }: { active: boolean }) {
 
                             <div className="flex items-center gap-2">
                                 <input
-                                    className="w-48 border border-reef bg-lagoon-deep px-2 py-1 font-mono text-xs rounded-lg"
+                                    className="w-48 border border-reef bg-lagoon-deep px-2 py-1 font-mono text-[11px] rounded-lg"
                                     placeholder="work1"
                                     value={names[repo.id] ?? ""}
                                     onChange={(event) =>
@@ -210,7 +210,7 @@ export function RepoPanel({ active }: { active: boolean }) {
                                     }
                                 />
                                 <button
-                                    className="border border-foam px-3 py-1 font-mono text-xs disabled:opacity-40 rounded-lg"
+                                    className="border border-foam px-3 py-1 font-mono text-[11px] disabled:opacity-40 rounded-lg"
                                     disabled={busy || !(names[repo.id] ?? "").trim()}
                                     onClick={() =>
                                         run(async () => {
@@ -229,7 +229,7 @@ export function RepoPanel({ active }: { active: boolean }) {
 
             {preview ? (
                 <aside className="flex w-[46%] min-w-[420px] flex-col border-l border-reef">
-                    <div className="flex items-center justify-between border-b border-reef px-3 py-2 font-mono text-[11px] text-shell">
+                    <div className="flex items-center justify-between border-b border-reef px-2 py-1 font-mono text-[11px] text-shell">
                         <span>{preview}</span>
                         <button
                             className="border border-foam px-2 py-1 rounded-lg"

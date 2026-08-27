@@ -94,9 +94,9 @@ export function AgentSheet({ agent, on_close, on_open_pane, on_changed }: Props)
             onClick={(event) => event.stopPropagation()}
             onPointerDown={(event) => event.stopPropagation()}
             className="absolute inset-y-0 right-0 z-10 flex w-full max-w-[380px] flex-col border-l border-reef bg-lagoon/95 backdrop-blur">
-            <header className="flex items-start justify-between gap-3 border-b border-reef px-4 py-3">
+            <header className="flex items-start justify-between gap-3 border-b border-reef px-2.5 py-1.5">
                 <div>
-                    <div className="font-display text-lg text-linen">{agent.name}</div>
+                    <div className="font-display text-[15px] text-linen">{agent.name}</div>
                     <div className="font-mono text-[11px] text-shell">
                         {agent.role} · {agent.engine_id} · {agent.repository_id}/{agent.worktree}
                     </div>
@@ -113,28 +113,28 @@ export function AgentSheet({ agent, on_close, on_open_pane, on_changed }: Props)
                 </button>
             </header>
 
-            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
+            <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-2.5">
                 {approvals.length > 0 ? (
-                    <section className="rounded-lg border border-coral p-3">
-                        <h3 className="mb-2 font-mono text-[10px] uppercase tracking-[0.12em] text-coral">
+                    <section className="rounded-lg border border-coral p-2">
+                        <h3 className="mb-1 font-mono text-[10px] uppercase tracking-[0.12em] text-coral">
                             Waiting on you
                         </h3>
                         {approvals.map((approval) => (
-                            <div key={approval.id} className="mb-3 last:mb-0">
-                                <div className="text-sm text-linen">{approval.summary}</div>
+                            <div key={approval.id} className="mb-2 last:mb-0">
+                                <div className="text-[13px] text-linen">{approval.summary}</div>
                                 {approval.detail ? (
                                     <div className="mt-1 font-mono text-[11px] text-shell">{approval.detail}</div>
                                 ) : null}
                                 <div className="mt-2 flex gap-2">
                                     <button
-                                        className="flex-1 rounded-lg border border-palm px-2 py-1 text-xs text-palm disabled:opacity-40"
+                                        className="flex-1 rounded-lg border border-palm px-2 py-1 text-[11px] text-palm disabled:opacity-40"
                                         disabled={busy}
                                         onClick={() => run(() => answer_approval(approval.id, true), "Approved")}
                                     >
                                         Approve
                                     </button>
                                     <button
-                                        className="flex-1 rounded-lg border border-coral px-2 py-1 text-xs text-coral disabled:opacity-40"
+                                        className="flex-1 rounded-lg border border-coral px-2 py-1 text-[11px] text-coral disabled:opacity-40"
                                         disabled={busy}
                                         onClick={() => run(() => answer_approval(approval.id, false), "Rejected")}
                                     >
@@ -147,12 +147,12 @@ export function AgentSheet({ agent, on_close, on_open_pane, on_changed }: Props)
                 ) : null}
 
                 <section>
-                    <h3 className="mb-2 font-mono text-[10px] uppercase tracking-[0.12em] text-shell">
+                    <h3 className="mb-1 font-mono text-[10px] uppercase tracking-[0.12em] text-shell">
                         Give it work
                     </h3>
                     <div className="flex gap-2">
                         <input
-                            className="min-w-0 flex-1 rounded-lg border border-reef bg-lagoon-deep px-2 py-1 text-xs"
+                            className="min-w-0 flex-1 rounded-lg border border-reef bg-lagoon-deep px-2 py-1 text-[11px]"
                             placeholder="tighten the subscription guard"
                             value={instruction}
                             onChange={(event) => set_instruction(event.target.value)}
@@ -163,7 +163,7 @@ export function AgentSheet({ agent, on_close, on_open_pane, on_changed }: Props)
                             }}
                         />
                         <button
-                            className="rounded-lg border border-turquoise px-3 py-1 text-xs text-turquoise disabled:opacity-40"
+                            className="rounded-lg border border-turquoise px-3 py-1 text-[11px] text-turquoise disabled:opacity-40"
                             disabled={busy || instruction.trim().length === 0}
                             onClick={give_work}
                         >
@@ -179,13 +179,13 @@ export function AgentSheet({ agent, on_close, on_open_pane, on_changed }: Props)
                     {agent.session_id ? (
                         <>
                             <button
-                                className="rounded-lg border border-foam px-3 py-1 text-xs"
+                                className="rounded-lg border border-foam px-3 py-1 text-[11px]"
                                 onClick={() => on_open_pane(agent.session_id as string)}
                             >
                                 open its terminal
                             </button>
                             <button
-                                className="rounded-lg border border-foam px-3 py-1 text-xs disabled:opacity-40"
+                                className="rounded-lg border border-foam px-3 py-1 text-[11px] disabled:opacity-40"
                                 disabled={busy}
                                 onClick={() => run(() => stop_agent(agent.id), "Stopped")}
                             >
@@ -195,14 +195,14 @@ export function AgentSheet({ agent, on_close, on_open_pane, on_changed }: Props)
                     ) : (
                         <>
                             <button
-                                className="rounded-lg border border-foam px-3 py-1 text-xs disabled:opacity-40"
+                                className="rounded-lg border border-foam px-3 py-1 text-[11px] disabled:opacity-40"
                                 disabled={busy}
                                 onClick={() => run(() => start_agent(agent.id, false), "Started")}
                             >
                                 start
                             </button>
                             <button
-                                className="rounded-lg border border-foam px-3 py-1 text-xs disabled:opacity-40"
+                                className="rounded-lg border border-foam px-3 py-1 text-[11px] disabled:opacity-40"
                                 disabled={busy}
                                 onClick={() => run(() => start_agent(agent.id, true), "Resumed")}
                             >
@@ -215,7 +215,7 @@ export function AgentSheet({ agent, on_close, on_open_pane, on_changed }: Props)
                 {notice ? <div className="font-mono text-[11px] text-driftwood">{notice}</div> : null}
 
                 <section className="min-h-0">
-                    <h3 className="mb-2 font-mono text-[10px] uppercase tracking-[0.12em] text-shell">
+                    <h3 className="mb-1 font-mono text-[10px] uppercase tracking-[0.12em] text-shell">
                         Last words
                     </h3>
                     <pre className="max-h-72 overflow-auto rounded-lg border border-reef bg-lagoon-deep p-2 font-mono text-[10px] leading-relaxed text-driftwood">

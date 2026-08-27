@@ -125,9 +125,9 @@ export function CrewPanel({ active, on_open_session }: Props) {
     const installed = engines.filter((entry) => entry.installed);
 
     return (
-        <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-5 overflow-y-auto p-4">
+        <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-5 overflow-y-auto p-2.5">
             <section>
-                <h2 className="mb-2 font-mono text-xs uppercase tracking-[0.12em] text-shell">
+                <h2 className="mb-1 font-mono text-[11px] uppercase tracking-[0.12em] text-shell">
                     Engines on this machine
                 </h2>
                 <div className="flex flex-wrap gap-2">
@@ -147,26 +147,26 @@ export function CrewPanel({ active, on_open_session }: Props) {
                 </div>
             </section>
 
-            <section className="border border-reef bg-lagoon p-3 rounded-lg">
-                <h2 className="mb-3 font-mono text-xs uppercase tracking-[0.12em] text-shell">
+            <section className="border border-reef bg-lagoon p-2 rounded-lg">
+                <h2 className="mb-2 font-mono text-[11px] uppercase tracking-[0.12em] text-shell">
                     Hire
                 </h2>
 
                 {installed.length === 0 ? (
-                    <p className="font-mono text-xs text-sun">
+                    <p className="font-mono text-[11px] text-sun">
                         No agent CLI found on PATH. Install one — Claude Code, Codex, Gemini — and it
                         appears here.
                     </p>
                 ) : (
                     <div className="flex flex-wrap items-center gap-2">
                         <input
-                            className="w-40 border border-reef bg-lagoon-deep px-2 py-1 font-mono text-xs rounded-lg"
+                            className="w-40 border border-reef bg-lagoon-deep px-2 py-1 font-mono text-[11px] rounded-lg"
                             placeholder="name"
                             value={draft.name}
                             onChange={(event) => set_draft({ ...draft, name: event.target.value })}
                         />
                         <select
-                            className="border border-reef bg-lagoon-deep px-2 py-1 font-mono text-xs rounded-lg"
+                            className="border border-reef bg-lagoon-deep px-2 py-1 font-mono text-[11px] rounded-lg"
                             value={draft.role}
                             onChange={(event) => set_draft({ ...draft, role: event.target.value })}
                         >
@@ -177,7 +177,7 @@ export function CrewPanel({ active, on_open_session }: Props) {
                             ))}
                         </select>
                         <select
-                            className="border border-reef bg-lagoon-deep px-2 py-1 font-mono text-xs rounded-lg"
+                            className="border border-reef bg-lagoon-deep px-2 py-1 font-mono text-[11px] rounded-lg"
                             value={draft.engine_id}
                             onChange={(event) => set_draft({ ...draft, engine_id: event.target.value })}
                         >
@@ -188,7 +188,7 @@ export function CrewPanel({ active, on_open_session }: Props) {
                             ))}
                         </select>
                         <select
-                            className="border border-reef bg-lagoon-deep px-2 py-1 font-mono text-xs rounded-lg"
+                            className="border border-reef bg-lagoon-deep px-2 py-1 font-mono text-[11px] rounded-lg"
                             value={draft.target}
                             onChange={(event) => set_draft({ ...draft, target: event.target.value })}
                         >
@@ -202,7 +202,7 @@ export function CrewPanel({ active, on_open_session }: Props) {
                             })}
                         </select>
                         <button
-                            className="border border-turquoise px-3 py-1 font-mono text-xs text-turquoise disabled:opacity-40 rounded-lg"
+                            className="border border-turquoise px-2 py-0.5 font-mono text-[11px] text-turquoise disabled:opacity-40 rounded-lg"
                             disabled={busy || !draft.name.trim() || !draft.target}
                             onClick={() =>
                                 run(async () => {
@@ -225,14 +225,14 @@ export function CrewPanel({ active, on_open_session }: Props) {
             </section>
 
             {error ? (
-                <div className="border border-coral bg-lagoon px-3 py-2 font-mono text-xs text-coral rounded-lg">
+                <div className="border border-coral bg-lagoon px-2 py-1 font-mono text-[11px] text-coral rounded-lg">
                     {error}
                 </div>
             ) : null}
 
             <section className="flex flex-col gap-2">
                 {agents.length === 0 ? (
-                    <p className="font-mono text-xs text-shell">
+                    <p className="font-mono text-[11px] text-shell">
                         No crew yet. An agent is a name, a role, an engine and a worktree it owns.
                     </p>
                 ) : null}
@@ -240,7 +240,7 @@ export function CrewPanel({ active, on_open_session }: Props) {
                 {agents.map((agent) => (
                     <div
                         key={agent.id}
-                        className="flex flex-wrap items-center gap-3 border border-reef bg-lagoon px-3 py-2 font-mono text-xs rounded-lg"
+                        className="flex flex-wrap items-center gap-3 border border-reef bg-lagoon px-2 py-1 font-mono text-[11px] rounded-lg"
                     >
                         <span className="text-linen">{agent.name}</span>
                         <span className="text-shell">{agent.role}</span>
@@ -262,7 +262,7 @@ export function CrewPanel({ active, on_open_session }: Props) {
                             {agent.session_id ? (
                                 <>
                                     <button
-                                        className="border border-foam px-2 py-1 text-[11px] rounded-lg"
+                                        className="border border-foam rounded-md px-1.5 py-0.5 text-[11px]"
                                         onClick={() => on_open_session(agent.session_id as string)}
                                     >
                                         open pane
@@ -294,7 +294,7 @@ export function CrewPanel({ active, on_open_session }: Props) {
                                 </>
                             )}
                             <button
-                                className="border border-coral px-2 py-1 text-[11px] text-coral disabled:opacity-40 rounded-lg"
+                                className="border border-coral rounded-md px-1.5 py-0.5 text-[11px] text-coral disabled:opacity-40"
                                 disabled={busy}
                                 onClick={() => run(() => dismiss_agent(agent.id))}
                             >

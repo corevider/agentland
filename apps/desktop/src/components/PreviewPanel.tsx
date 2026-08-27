@@ -82,7 +82,7 @@ export function PreviewPanel({ active }: Props) {
                     className="min-h-0 min-w-0 flex-1 border-0 bg-white"
                 />
             ) : (
-                <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 p-4 text-center">
+                <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 p-2.5 text-center">
                     <p className="font-mono text-[11px] text-shell">No dev server is running.</p>
                     <p className="font-mono text-[10px] text-shade">
                         Start one from the Repositories panel and it appears here, on its own port.

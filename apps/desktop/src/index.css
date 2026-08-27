@@ -84,3 +84,14 @@ input::placeholder {
 .xterm .xterm-viewport {
     border-radius: 8px;
 }
+
+input,
+select,
+textarea {
+    font-size: 12px;
+    padding: 3px 7px;
+}
+
+button {
+    font-size: 12px;
+}

@@ -798,3 +798,23 @@ The first measurement I trusted here was wrong twice — once blaming the engine
 production build that could not reach the core and was therefore doing nothing (`TypeError: Load
 failed` in the corner of the screenshot, which is what caught it). Both times the fix was another
 measurement rather than another theory.
+
+## A density pass
+
+The reference layouts fit more on a screen than this one did, so the spacing was re-cut against
+them. Nothing was redesigned; the same panels give back the room they were wasting.
+
+- Native controls carry one base rule — 12px text, 3px/7px padding — instead of each call site
+  choosing. The hire form went from two rows to one, and the board's title, brief and repository
+  now share a row rather than stacking three deep.
+- Panel padding dropped a step (`p-4` → `p-2.5`, `p-3` → `p-2`), tab strips and the frame gaps with
+  it, and section headings lost a line of margin.
+- The board's columns stopped being a five-way grid that squeezed cards until their buttons were
+  clipped. They are a fixed 150px each in a strip that scrolls sideways, so a card stays readable
+  when the panel is narrow.
+- The island's unassigned column went from 288px to 208px, which is what it needs for a card.
+- The crew rail lost two pixels a row, and the crew panel's action buttons went from `px-3 py-1` to
+  `px-1.5 py-0.5`.
+
+Measured on the same window: the board panel that showed one clipped card now shows the card, its
+assignee control and its delete button; the crew panel that fit one agent row fits two and a half.

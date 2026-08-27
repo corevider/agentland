@@ -102,22 +102,22 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
 
     return (
         <div className="flex h-full min-h-0 min-w-0 flex-1">
-            <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-3 p-4">
+            <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-3 p-2.5">
                 <div className="flex flex-wrap items-center gap-2">
                     <input
-                        className="w-72 border border-reef bg-lagoon px-2 py-1 font-mono text-xs rounded-lg"
+                        className="min-w-[110px] flex-1 rounded-md border border-reef bg-lagoon px-2 py-1 font-mono text-[11px]"
                         placeholder="task title"
                         value={draft.title}
                         onChange={(event) => set_draft({ ...draft, title: event.target.value })}
                     />
                     <input
-                        className="w-96 border border-reef bg-lagoon px-2 py-1 font-mono text-xs rounded-lg"
+                        className="min-w-[130px] flex-[2] rounded-md border border-reef bg-lagoon px-2 py-1 font-mono text-[11px]"
                         placeholder="brief for the agent"
                         value={draft.body}
                         onChange={(event) => set_draft({ ...draft, body: event.target.value })}
                     />
                     <select
-                        className="border border-reef bg-lagoon px-2 py-1 font-mono text-xs rounded-lg"
+                        className="border border-reef bg-lagoon px-2 py-1 font-mono text-[11px] rounded-lg"
                         value={draft.repository_id}
                         onChange={(event) => set_draft({ ...draft, repository_id: event.target.value })}
                     >
@@ -128,7 +128,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                         ))}
                     </select>
                     <button
-                        className="border border-turquoise px-3 py-1 font-mono text-xs text-turquoise disabled:opacity-40 rounded-lg"
+                        className="shrink-0 rounded-md border border-turquoise px-2 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40"
                         disabled={busy || !draft.title.trim() || !draft.repository_id}
                         onClick={() =>
                             run(async () => {
@@ -142,16 +142,16 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                 </div>
 
                 {error ? (
-                    <div className="border border-coral bg-lagoon px-3 py-2 font-mono text-xs text-coral rounded-lg">
+                    <div className="border border-coral bg-lagoon px-2 py-1 font-mono text-[11px] text-coral rounded-lg">
                         {error}
                     </div>
                 ) : null}
 
-                <div className="grid min-h-0 flex-1 grid-cols-5 gap-2">
+                <div className="flex min-h-0 flex-1 gap-1.5 overflow-x-auto">
                     {COLUMNS.map((column) => (
                         <div
                             key={column}
-                            className="flex min-h-0 flex-col border border-reef bg-lagoon rounded-lg"
+                            className="flex min-h-0 w-[150px] shrink-0 flex-col rounded-md border border-reef bg-lagoon"
                             onDragOver={(event) => event.preventDefault()}
                             onDrop={(event) => {
                                 const id = event.dataTransfer.getData("text/plain");
@@ -177,7 +177,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                                             className="cursor-grab border border-reef bg-lagoon p-2 rounded-lg"
                                         >
                                             <div className="flex items-baseline justify-between gap-2">
-                                                <span className="text-xs text-linen">{task.title}</span>
+                                                <span className="text-[11px] text-linen">{task.title}</span>
                                                 <span className="font-mono text-[10px] text-shade">
                                                     {task.id}
                                                 </span>
@@ -248,7 +248,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
 
             {review ? (
                 <aside className="flex w-[46%] min-w-[440px] flex-col border-l border-reef">
-                    <header className="flex items-center justify-between gap-2 border-b border-reef px-3 py-2">
+                    <header className="flex items-center justify-between gap-2 border-b border-reef px-2 py-1">
                         <div className="font-mono text-[11px] text-shell">
                             {review.data.branch} vs {review.data.base} · {review.data.files} files ·{" "}
                             <span className="text-palm">+{review.data.insertions}</span>{" "}
@@ -284,7 +284,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                     </header>
 
                     {review.data.commits.length > 0 ? (
-                        <div className="border-b border-reef px-3 py-2 font-mono text-[11px] text-driftwood">
+                        <div className="border-b border-reef px-2 py-1 font-mono text-[11px] text-driftwood">
                             {review.data.commits.map((commit) => (
                                 <div key={commit.sha}>
                                     <span className="text-turquoise">{commit.sha}</span> {commit.subject}
@@ -293,7 +293,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                         </div>
                     ) : null}
 
-                    <pre className="min-h-0 flex-1 overflow-auto p-3 font-mono text-[11px] leading-relaxed">
+                    <pre className="min-h-0 flex-1 overflow-auto p-2 font-mono text-[11px] leading-relaxed">
                         {review.data.patch.split("\n").map((line, index) => (
                             <div key={index} className={patch_line_color(line)}>
                                 {line || " "}

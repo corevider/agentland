@@ -117,7 +117,7 @@ export function SkillsPanel({ active }: Props) {
                                         : "border-transparent hover:border-reef"
                                 }`}
                             >
-                                <div className="truncate text-xs text-linen">{skill.name}</div>
+                                <div className="truncate text-[11px] text-linen">{skill.name}</div>
                                 <div className="mt-0.5 flex items-center gap-2 font-mono text-[10px] text-shade">
                                     <span>{skill.builtin ? "built in" : "yours"}</span>
                                     {holders > 0 ? (
@@ -142,16 +142,16 @@ export function SkillsPanel({ active }: Props) {
                 </button>
             </div>
 
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto p-3">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto p-2">
                 {notice ? (
-                    <div className="mb-2 rounded-lg border border-coral px-2 py-1 font-mono text-[11px] text-coral">
+                    <div className="mb-1 rounded-lg border border-coral px-2 py-1 font-mono text-[11px] text-coral">
                         {notice}
                     </div>
                 ) : null}
 
                 {drafting ? (
                     <>
-                        <p className="mb-2 font-mono text-[11px] text-shell">
+                        <p className="mb-1 font-mono text-[11px] text-shell">
                             A skill is a folder with a SKILL.md. This is that file.
                         </p>
                         <textarea
@@ -162,13 +162,13 @@ export function SkillsPanel({ active }: Props) {
                         />
                         <div className="mt-2 flex gap-2">
                             <button
-                                className="rounded-lg border border-turquoise px-3 py-1 text-xs text-turquoise"
+                                className="rounded-lg border border-turquoise px-3 py-1 text-[11px] text-turquoise"
                                 onClick={save_draft}
                             >
                                 save it
                             </button>
                             <button
-                                className="rounded-lg border border-foam px-3 py-1 text-xs"
+                                className="rounded-lg border border-foam px-3 py-1 text-[11px]"
                                 onClick={() => set_drafting(false)}
                             >
                                 cancel
@@ -179,8 +179,8 @@ export function SkillsPanel({ active }: Props) {
                     <>
                         <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
-                                <div className="font-display text-lg text-linen">{current.name}</div>
-                                <div className="mt-0.5 text-xs text-shell">{current.description}</div>
+                                <div className="font-display text-[15px] text-linen">{current.name}</div>
+                                <div className="mt-0.5 text-[11px] text-shell">{current.description}</div>
                                 <div className="mt-0.5 font-mono text-[11px] text-driftwood">
                                     Use it when: {current.when_to_use}
                                 </div>
@@ -195,7 +195,7 @@ export function SkillsPanel({ active }: Props) {
                             )}
                         </div>
 
-                        <section className="mt-3">
+                        <section className="mt-2">
                             <h3 className="mb-1 font-mono text-[10px] uppercase tracking-[0.12em] text-shell">
                                 Give it to
                             </h3>
@@ -227,7 +227,7 @@ export function SkillsPanel({ active }: Props) {
                             </p>
                         </section>
 
-                        <section className="mt-3 min-h-0">
+                        <section className="mt-2 min-h-0">
                             <h3 className="mb-1 font-mono text-[10px] uppercase tracking-[0.12em] text-shell">
                                 What it tells them
                             </h3>

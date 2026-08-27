@@ -122,7 +122,7 @@ function SlotView({
                                     slots: { ...layout.slots, [id]: { ...slot, active: index } },
                                 })
                             }
-                            className={`group flex cursor-pointer items-center gap-1.5 border-b-2 px-3 py-1.5 ${
+                            className={`group flex cursor-pointer items-center gap-1.5 border-b-2 px-2.5 py-1 ${
                                 index === slot.active
                                     ? "border-turquoise text-linen"
                                     : "border-transparent text-shell hover:text-linen"
@@ -239,7 +239,7 @@ export function Workspace({ layout, on_layout, render_panel, subtitle_for }: Pro
         const props = { layout, on_layout, render_panel, subtitle_for };
 
         return (
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1.5">
                 <div
                     className="flex min-h-0 min-w-0"
                     style={has_bottom ? { height: `${fraction * 100}%` } : { flex: 1 }}
@@ -284,7 +284,7 @@ export function Workspace({ layout, on_layout, render_panel, subtitle_for }: Pro
     }
 
     return (
-        <div ref={frame} className="flex min-h-0 min-w-0 flex-1 gap-2 p-2">
+        <div ref={frame} className="flex min-h-0 min-w-0 flex-1 gap-1.5 p-1.5">
             <div
                 style={{ width: `${layout.column_fraction * 100}%` }}
                 className="flex min-h-0 min-w-0"

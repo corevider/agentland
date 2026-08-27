@@ -230,16 +230,15 @@ export function IslandPanel({ active, on_open_session }: Props) {
 
     return (
         <div className="flex h-full min-h-0 min-w-0 flex-1">
-            <aside className="flex w-72 shrink-0 flex-col border-r border-reef">
-                <header className="border-b border-reef px-3 py-2 font-mono text-[11px] uppercase tracking-[0.1em] text-shell">
+            <aside className="flex w-52 shrink-0 flex-col border-r border-reef">
+                <header className="border-b border-reef px-2 py-1 font-mono text-[9px] uppercase tracking-[0.14em] text-shade">
                     Unassigned · drag onto a station
                 </header>
 
-                <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
+                <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-1 overflow-y-auto p-1.5">
                     {tasks.length === 0 ? (
-                        <p className="font-mono text-[11px] text-shade">
-                            Nothing waiting. Cards created on the board appear here until they have an
-                            owner.
+                        <p className="font-mono text-[10px] text-shade">
+                            Nothing waiting. Cards land here until they have an owner.
                         </p>
                     ) : null}
 
@@ -248,9 +247,9 @@ export function IslandPanel({ active, on_open_session }: Props) {
                             key={task.id}
                             draggable
                             onDragStart={(event) => event.dataTransfer.setData("text/plain", task.id)}
-                            className="cursor-grab border border-reef bg-lagoon p-2 rounded-lg"
+                            className="cursor-grab rounded-md border border-reef bg-lagoon px-1.5 py-1"
                         >
-                            <div className="text-xs text-linen">{task.title}</div>
+                            <div className="text-[11px] text-linen">{task.title}</div>
                             <div className="mt-1 font-mono text-[10px] text-shade">
                                 {task.id} · {task.repository_id}
                             </div>
@@ -258,7 +257,7 @@ export function IslandPanel({ active, on_open_session }: Props) {
                     ))}
                 </div>
 
-                <footer className="flex flex-col gap-2 border-t border-reef px-3 py-2 font-mono text-[10px] text-shade">
+                <footer className="flex flex-col gap-1 border-t border-reef px-2 py-1 font-mono text-[10px] text-shade">
                     <span>
                         {agents.length} crew · {tier.label}
                     </span>
@@ -367,7 +366,7 @@ export function IslandPanel({ active, on_open_session }: Props) {
                     />
                 ) : (
                     <div className="flex h-full flex-col items-center justify-center gap-3 p-6">
-                        <p className="max-w-sm text-center font-mono text-xs text-sun">
+                        <p className="max-w-sm text-center font-mono text-[11px] text-sun">
                             This webview grants no WebGL context, so the island falls back to a list. The
                             same states are shown.
                         </p>
@@ -411,13 +410,13 @@ export function IslandPanel({ active, on_open_session }: Props) {
                 </div>
 
                 {message ? (
-                    <div data-overlay className="absolute bottom-3 left-3 border border-reef bg-lagoon px-3 py-2 font-mono text-[11px] text-driftwood rounded-lg">
+                    <div data-overlay className="absolute bottom-3 left-3 border border-reef bg-lagoon px-2 py-1 font-mono text-[11px] text-driftwood rounded-lg">
                         {message}
                     </div>
                 ) : null}
 
                 {hovered ? (
-                    <div className="absolute right-3 top-3 border border-turquoise bg-shallow px-3 py-2 font-mono text-[11px] text-turquoise rounded-lg">
+                    <div className="absolute right-3 top-3 border border-turquoise bg-shallow px-2 py-1 font-mono text-[11px] text-turquoise rounded-lg">
                         {hovered === "__dispatch__" ? "drop to hand to X" : `drop to assign → ${hovered}`}
                     </div>
                 ) : null}
