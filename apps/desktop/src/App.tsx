@@ -160,6 +160,15 @@ export default function App() {
             take_ui_commands()
                 .then((commands) => {
                     for (const command of commands) {
+                        if (command.startsWith("preset:")) {
+                            const wanted = command.slice("preset:".length);
+                            const preset = PRESETS.find((entry) => entry.id === wanted);
+                            if (preset) {
+                                set_layout(preset.build());
+                            }
+                            continue;
+                        }
+
                         if (command.startsWith("view:")) {
                             const target = command.slice("view:".length);
                             if (PANELS.some((panel) => panel.id === target)) {
