@@ -250,14 +250,22 @@ function NodeView({ node, layout, on_layout, subtitle_for }: Props & { node: Nod
     const dragging = useRef(false);
     const [resizing, set_resizing] = useState(false);
 
-    useEffect(() => {
-        if (node.kind !== "split") {
-            return;
-        }
+    // Every move rewrites the layout, so the effect below must not depend on it:
+    // re-subscribing on each move tore the listeners down mid-drag and the
+    // divider let go after a single step. The live values come from refs, and
+    // the effect is set up once per divider.
+    const latest = useRef({ layout, on_layout, node });
+    latest.current = { layout, on_layout, node };
 
+    useEffect(() => {
         const move = (event: PointerEvent) => {
+            if (!dragging.current) {
+                return;
+            }
+
             const bounds = frame.current?.getBoundingClientRect();
-            if (!bounds || !dragging.current) {
+            const held = latest.current.node;
+            if (!bounds || held.kind !== "split") {
                 return;
             }
 
@@ -266,11 +274,11 @@ function NodeView({ node, layout, on_layout, subtitle_for }: Props & { node: Nod
             event.preventDefault();
 
             const fraction =
-                node.direction === "row"
+                held.direction === "row"
                     ? (event.clientX - bounds.left) / bounds.width
                     : (event.clientY - bounds.top) / bounds.height;
 
-            on_layout(set_fraction(layout, node.id, fraction));
+            latest.current.on_layout(set_fraction(latest.current.layout, held.id, fraction));
         };
 
         const stop = () => {
@@ -294,9 +302,8 @@ function NodeView({ node, layout, on_layout, subtitle_for }: Props & { node: Nod
             window.removeEventListener("pointerup", stop);
             window.removeEventListener("pointercancel", stop);
             window.removeEventListener("blur", stop);
-            stop();
         };
-    }, [layout, node, on_layout]);
+    }, []);
 
     if (node.kind === "stack") {
         return <StackView stack={node} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} />;

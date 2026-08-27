@@ -1214,3 +1214,11 @@ swallow pointer moves: the moment the cursor crossed one, the divider stopped fo
 now takes pointer capture and a transparent sheet covers the window while dragging, so every move
 reaches the window that is listening. The divider also stays lit while it is being dragged, which is
 the small thing that makes the gesture feel answered.
+
+**And then it let go after one step**, which was my own doing. The drag listeners were set up in an
+effect that depended on the layout — and every pointer move rewrites the layout, so the effect tore
+itself down and rebuilt mid-gesture, ending the drag it was serving. One move, then release, exactly
+as it was reported. The listeners are installed once per divider now and read the live layout from a
+ref, so the gesture outlives its own consequences. Verified by dragging a divider through seven
+steps and back, and a horizontal one through five: the panel follows the whole way and stops when
+the button does.
