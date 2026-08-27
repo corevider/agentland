@@ -1157,3 +1157,60 @@ over the commander on the left, the terminals over the board in the middle, the 
 over the memory stack on the right, with the rest as tabs beside them. One click and the whole
 machine is on screen — four live agents, a dev server rendering its own page, a plan mid-flight, and
 the supervisor's record of who finished what.
+
+## Smoothness, measured
+
+Aperant was offered as the reference for how a window like this should feel. Its README says nothing
+about animation, so the answer was in its dependencies: `motion`, `@tanstack/react-virtual`, xterm's
+WebGL and serialize addons, and fifteen Radix primitives — 69 packages against our 23. That is a
+recipe, not a verdict, so each part was measured here before being adopted.
+
+**Folding a panel away.** Panels now carry window controls: a dash folds the panel down to a bar at
+the bottom, the square fills the window, the cross closes a tab. A folded stack keeps its tabs and
+its panels keep running; it just gives back its share of the screen, and its sibling takes the room
+rather than leaving a hole. Five tests hold the arithmetic, including that a stack which disappears
+is dropped from the bar rather than haunting it.
+
+**Motion.** Tab underlines travel between tabs instead of jumping, menus open, the agent sheet
+slides, folded chips settle into the bar. Measured cost: none. The benchmark reads 62 fps median
+with and without it — the 54 fps I first recorded was a cold start, and running it twice said so.
+
+**The renderer.** M0 left an open question: why xterm declined the WebGL context. It no longer does —
+every sample now reads `renderer: webgl`. What the same line exposes is a limit: this webview
+advertises four contexts, and eight panes plus the island want more. So I reserved WebGL for the
+pane being read and gave the rest canvas, which sounded obviously right and **made it worse**: 62 fps
+became 49 with a 1357 ms stall. Reverted. Eight WebGL panes hold 62 fps with a 46 ms worst frame, so
+whatever the probe counts, it is not what binds.
+
+**What was actually slow.** With every panel on screen the window sat at 39 fps and stuttered at
+122 ms. Two measurements found it, neither of them a library:
+
+| | fps | worst frame |
+|---|---|---|
+| everything open, as it was | 39 | 122 ms |
+| hidden tabs unmounted | **50** | 52 ms |
+| board columns virtualised as well | **62** | 27 ms |
+
+A hidden tab was still mounted and still drawing — a board of 325 cards behind another tab cost
+frames for something nobody could see. Only panels that own live state (the terminals, which hold
+ptys, and the island) stay mounted when their tab is in the background. That alone was 39 → 50.
+
+The rest was the visible board: 325 cards, every one in the DOM. `@tanstack/react-virtual` draws the
+few that fit plus a handful either side, and the same layout went to 62 fps with a 27 ms worst frame
+— matching an empty board. That is where the dependency earns its place, and the measurement is why
+it was added rather than because the reference had it.
+
+## Dragging a divider
+
+Two things went wrong while resizing, both reported from real use and both classic:
+
+**Everything got selected.** Dragging across labels started a text selection and the whole window
+turned blue. The pointer handler now calls `preventDefault`, the body gets `user-select: none` for
+the length of the drag, and chrome — headers, the rail, buttons — is not selectable at all. Panel
+content still is, because that text is the work.
+
+**The drag stuck.** A pane can hold an iframe (the localhost preview) or a terminal canvas, and both
+swallow pointer moves: the moment the cursor crossed one, the divider stopped following. The handle
+now takes pointer capture and a transparent sheet covers the window while dragging, so every move
+reaches the window that is listening. The divider also stays lit while it is being dragged, which is
+the small thing that makes the gesture feel answered.

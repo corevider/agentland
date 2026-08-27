@@ -95,3 +95,14 @@ textarea {
 button {
     font-size: 12px;
 }
+
+/* Chrome is for pointing at, not for reading: a tab label or a rail row that
+   turns blue mid-drag is never what anyone wanted. Panel content stays
+   selectable, because that text is the work. */
+header,
+nav,
+button,
+[data-chrome] {
+    -webkit-user-select: none;
+    user-select: none;
+}

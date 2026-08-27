@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { motion } from "motion/react";
 
 import {
     answer_approval,
@@ -89,7 +90,10 @@ export function AgentSheet({ agent, on_close, on_open_pane, on_changed }: Props)
     }, [agent.id, agent.name, agent.repository_id, instruction, run]);
 
     return (
-        <aside
+        <motion.aside
+            initial={{ x: 24, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            transition={{ type: "spring", stiffness: 460, damping: 40 }}
             data-overlay
             onClick={(event) => event.stopPropagation()}
             onPointerDown={(event) => event.stopPropagation()}
@@ -223,6 +227,6 @@ export function AgentSheet({ agent, on_close, on_open_pane, on_changed }: Props)
                     </pre>
                 </section>
             </div>
-        </aside>
+        </motion.aside>
     );
 }

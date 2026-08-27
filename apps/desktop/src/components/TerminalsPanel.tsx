@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { AnimatePresence, motion } from "motion/react";
 
 import { TerminalPane } from "@/components/TerminalPane";
 import { is_tauri, list_windows, set_window } from "@/lib/core";
@@ -54,10 +55,16 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                 gridAutoRows: "minmax(0, 1fr)",
             }}
         >
+            <AnimatePresence initial={false}>
             {shown.map((session) =>
                 elsewhere[session.id] ? (
-                    <article
+                    <motion.article
                         key={session.id}
+                        layout
+                        initial={{ opacity: 0, scale: 0.98 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.98 }}
+                        transition={{ duration: 0.14, ease: [0.2, 0, 0, 1] }}
                         className="flex min-h-0 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-reef bg-lagoon-deep p-3 text-center"
                     >
                         <span className="text-[12px] text-shell">
@@ -82,7 +89,7 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                         >
                             bring it back
                         </button>
-                    </article>
+                    </motion.article>
                 ) : (
                 <TerminalPane
                     key={session.id}
@@ -110,6 +117,7 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                 />
                 ),
             )}
+            </AnimatePresence>
         </main>
     );
 }

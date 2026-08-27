@@ -28,6 +28,11 @@ export interface PanelEntry {
     id: string;
     label: string;
     hint: string;
+    /// Whether the panel must stay mounted while its tab is in the background.
+    /// Only what holds live state needs this — a terminal owns a pty and an
+    /// xterm buffer, and remounting it would lose both. Everything else is
+    /// cheaper to rebuild than to keep drawing.
+    keep_mounted?: boolean;
     Component: (props: PanelProps) => ReactNode;
 }
 
@@ -68,6 +73,7 @@ export const PANELS: PanelEntry[] = [
         id: "island",
         label: "Island",
         hint: "the crew at a glance",
+        keep_mounted: true,
         Component: ({ active }) => (
             <Suspense
                 fallback={
@@ -84,6 +90,7 @@ export const PANELS: PanelEntry[] = [
         id: "panes",
         label: "Terminals",
         hint: "what the agents are doing",
+        keep_mounted: true,
         Component: ({ active }) => <TerminalsPanel active={active} />,
     },
     {

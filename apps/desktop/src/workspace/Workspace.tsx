@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 
 import { PanelBoundary } from "@/workspace/Panel";
 import { PANELS, panel_entry } from "@/workspace/registry";
@@ -6,7 +7,10 @@ import {
     add_panel,
     close_tab,
     find_stack,
+    is_minimised,
+    minimise,
     move_tab,
+    restore,
     set_active,
     set_fraction,
     split_stack,
@@ -57,8 +61,13 @@ function AddMenu({
                 ⊟
             </button>
 
+            <AnimatePresence>
             {open ? (
-                <div
+                <motion.div
+                    initial={{ opacity: 0, y: -4, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -4, scale: 0.98 }}
+                    transition={{ duration: 0.12, ease: [0.2, 0, 0, 1] }}
                     className="absolute right-0 top-full z-30 mt-1 w-52 rounded-md border border-reef bg-lagoon-deep p-1 shadow-lg"
                     onMouseLeave={() => set_open(null)}
                 >
@@ -82,8 +91,9 @@ function AddMenu({
                             <span className="ml-1 font-mono text-[9px] text-shade">{panel.hint}</span>
                         </button>
                     ))}
-                </div>
+                </motion.div>
             ) : null}
+            </AnimatePresence>
         </div>
     );
 }
@@ -117,7 +127,7 @@ function StackView({ stack, layout, on_layout, subtitle_for }: Props & { stack: 
             onDragLeave={() => set_over(false)}
             onDrop={accept}
         >
-            <header className="flex shrink-0 items-stretch gap-1 border-b border-reef/70 pr-1">
+            <header data-chrome className="flex shrink-0 items-stretch gap-1 border-b border-reef/70 pr-1">
                 <div className="flex min-w-0 flex-1 items-stretch overflow-x-auto">
                     {stack.tabs.map((tab, index) => {
                         const meta = panel_entry(tab.panel);
@@ -130,12 +140,17 @@ function StackView({ stack, layout, on_layout, subtitle_for }: Props & { stack: 
                                     event.dataTransfer.effectAllowed = "move";
                                 }}
                                 onClick={() => on_layout(set_active(layout, stack.id, index))}
-                                className={`group flex cursor-pointer items-center gap-1.5 border-b-2 px-2.5 py-1 ${
-                                    index === stack.active
-                                        ? "border-turquoise text-linen"
-                                        : "border-transparent text-shell hover:text-linen"
+                                className={`group relative flex cursor-pointer items-center gap-1.5 px-2.5 py-1 ${
+                                    index === stack.active ? "text-linen" : "text-shell hover:text-linen"
                                 }`}
                             >
+                                {index === stack.active ? (
+                                    <motion.span
+                                        layoutId={`tab-underline-${stack.id}`}
+                                        className="absolute inset-x-0 bottom-0 h-[2px] rounded bg-turquoise"
+                                        transition={{ type: "spring", stiffness: 520, damping: 40 }}
+                                    />
+                                ) : null}
                                 <span className="whitespace-nowrap text-[12px]">
                                     {meta?.label ?? tab.panel}
                                 </span>
@@ -160,6 +175,13 @@ function StackView({ stack, layout, on_layout, subtitle_for }: Props & { stack: 
                 </div>
 
                 <div className="flex shrink-0 items-center gap-0.5">
+                    <button
+                        className="rounded px-1 font-mono text-[13px] leading-none text-shade hover:text-linen"
+                        title="fold this panel down to the bar"
+                        onClick={() => on_layout(minimise(layout, stack.id))}
+                    >
+                        –
+                    </button>
                     <button
                         className="rounded px-1 font-mono text-[11px] text-shade hover:text-linen"
                         title={layout.maximised === stack.id ? "restore the layout" : "fill the window"}
@@ -191,6 +213,14 @@ function StackView({ stack, layout, on_layout, subtitle_for }: Props & { stack: 
                             }
 
                             const showing = tab.instance === active_tab?.instance;
+
+                            // A hidden tab that keeps drawing costs frames for
+                            // something nobody is looking at. Only panels that
+                            // own live state stay mounted behind their tab.
+                            if (!showing && !meta.keep_mounted) {
+                                return null;
+                            }
+
                             return (
                                 <div
                                     key={tab.instance}
@@ -209,9 +239,16 @@ function StackView({ stack, layout, on_layout, subtitle_for }: Props & { stack: 
     );
 }
 
+function folded_away(node: Node, layout: Layout): boolean {
+    return node.kind === "stack"
+        ? is_minimised(layout, node.id)
+        : folded_away(node.first, layout) && folded_away(node.second, layout);
+}
+
 function NodeView({ node, layout, on_layout, subtitle_for }: Props & { node: Node }) {
     const frame = useRef<HTMLDivElement>(null);
     const dragging = useRef(false);
+    const [resizing, set_resizing] = useState(false);
 
     useEffect(() => {
         if (node.kind !== "split") {
@@ -224,6 +261,10 @@ function NodeView({ node, layout, on_layout, subtitle_for }: Props & { node: Nod
                 return;
             }
 
+            // Without this the browser starts selecting every label the pointer
+            // crosses, and the whole window ends up highlighted mid-drag.
+            event.preventDefault();
+
             const fraction =
                 node.direction === "row"
                     ? (event.clientX - bounds.left) / bounds.width
@@ -233,23 +274,47 @@ function NodeView({ node, layout, on_layout, subtitle_for }: Props & { node: Nod
         };
 
         const stop = () => {
+            if (!dragging.current) {
+                return;
+            }
+
             dragging.current = false;
+            set_resizing(false);
             document.body.style.cursor = "";
+            document.body.style.userSelect = "";
         };
 
-        window.addEventListener("pointermove", move);
+        window.addEventListener("pointermove", move, { passive: false });
         window.addEventListener("pointerup", stop);
         window.addEventListener("pointercancel", stop);
+        window.addEventListener("blur", stop);
 
         return () => {
             window.removeEventListener("pointermove", move);
             window.removeEventListener("pointerup", stop);
             window.removeEventListener("pointercancel", stop);
+            window.removeEventListener("blur", stop);
+            stop();
         };
     }, [layout, node, on_layout]);
 
     if (node.kind === "stack") {
         return <StackView stack={node} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} />;
+    }
+
+    const first_folded = folded_away(node.first, layout);
+    const second_folded = folded_away(node.second, layout);
+
+    // A split whose half is folded gives the whole space to the other half
+    // rather than leaving a gap where the panel used to be.
+    if (first_folded && !second_folded) {
+        return <NodeView node={node.second} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} />;
+    }
+    if (second_folded && !first_folded) {
+        return <NodeView node={node.first} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} />;
+    }
+    if (first_folded && second_folded) {
+        return null;
     }
 
     const row = node.direction === "row";
@@ -268,14 +333,28 @@ function NodeView({ node, layout, on_layout, subtitle_for }: Props & { node: Nod
             </div>
 
             <div
-                className={`shrink-0 rounded bg-reef/60 hover:bg-turquoise ${
-                    row ? "w-1 cursor-col-resize" : "h-1 cursor-row-resize"
-                }`}
-                onPointerDown={() => {
+                className={`shrink-0 rounded transition-colors ${
+                    resizing ? "bg-turquoise" : "bg-reef/60 hover:bg-turquoise"
+                } ${row ? "w-1 cursor-col-resize" : "h-1 cursor-row-resize"}`}
+                onPointerDown={(event) => {
+                    event.preventDefault();
+                    event.currentTarget.setPointerCapture?.(event.pointerId);
                     dragging.current = true;
+                    set_resizing(true);
                     document.body.style.cursor = row ? "col-resize" : "row-resize";
+                    document.body.style.userSelect = "none";
                 }}
             />
+
+            {resizing ? (
+                // A pane can hold an iframe or a terminal canvas, and those swallow
+                // pointer moves — the drag would stick the moment the cursor crossed
+                // one. This sheet keeps every move coming to the window.
+                <div
+                    className="fixed inset-0 z-40"
+                    style={{ cursor: row ? "col-resize" : "row-resize" }}
+                />
+            ) : null}
 
             <div className="flex min-h-0 min-w-0 flex-1">
                 <NodeView node={node.second} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} />
@@ -286,14 +365,57 @@ function NodeView({ node, layout, on_layout, subtitle_for }: Props & { node: Nod
 
 export function Workspace({ layout, on_layout, subtitle_for }: Props) {
     const maximised = layout.maximised ? find_stack(layout, layout.maximised) : null;
+    const folded = stacks(layout.root).filter((entry) => is_minimised(layout, entry.id));
+    const everything_folded = folded.length === stacks(layout.root).length;
 
     return (
-        <div className="flex min-h-0 min-w-0 flex-1 p-1.5">
-            {maximised ? (
-                <StackView stack={maximised} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} />
-            ) : (
-                <NodeView node={layout.root} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} />
-            )}
+        <LayoutGroup>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <div className="flex min-h-0 min-w-0 flex-1 p-1.5">
+                {maximised ? (
+                    <StackView stack={maximised} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} />
+                ) : everything_folded ? (
+                    <div className="flex flex-1 items-center justify-center font-mono text-[11px] text-shade">
+                        every panel is folded down — pick one from the bar
+                    </div>
+                ) : (
+                    <NodeView node={layout.root} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} />
+                )}
+            </div>
+
+            {folded.length > 0 ? (
+                <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    transition={{ duration: 0.16, ease: [0.2, 0, 0, 1] }}
+                    className="flex shrink-0 flex-wrap items-center gap-1 overflow-hidden border-t border-reef/70 px-2 py-1"
+                >
+                    <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-shade">
+                        folded
+                    </span>
+                    {folded.map((entry) => {
+                        const label = entry.tabs
+                            .map((tab) => panel_entry(tab.panel)?.label ?? tab.panel)
+                            .join(" · ");
+
+                        return (
+                            <motion.button
+                                key={entry.id}
+                                layout
+                                initial={{ opacity: 0, y: 6 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ type: "spring", stiffness: 480, damping: 38 }}
+                                className="rounded-md border border-reef px-2 py-0.5 text-[11px] text-shell hover:border-turquoise hover:text-linen"
+                                title="put it back"
+                                onClick={() => on_layout(restore(layout, entry.id))}
+                            >
+                                {label || "empty"} ⌃
+                            </motion.button>
+                        );
+                    })}
+                </motion.div>
+            ) : null}
         </div>
+        </LayoutGroup>
     );
 }

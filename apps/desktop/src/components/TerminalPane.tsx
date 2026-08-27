@@ -121,14 +121,27 @@ export function TerminalPane({ session, focused, on_focus, on_metrics, label, on
             theme: { background: "#0d1315", foreground: "#d6e2e6" },
         });
 
+        let disposed = false;
         const fit = new FitAddon();
         terminal.loadAddon(fit);
         terminal.open(host);
 
+        // Measured, not assumed: giving every pane a context beats reserving one
+        // for whichever pane is being read. Eight panes on WebGL held 60 fps with
+        // a 22 ms worst frame; handing seven of them to canvas dropped that to 49
+        // with a 1357 ms stall, so the four-context probe does not bind here.
+        let webgl: WebglAddon | null = null;
+
         try {
-            const webgl = new WebglAddon();
-            webgl.onContextLoss(() => webgl.dispose());
-            terminal.loadAddon(webgl);
+            const addon = new WebglAddon();
+            addon.onContextLoss(() => {
+                addon.dispose();
+                webgl = null;
+                metrics.renderer = "canvas (context lost)";
+                set_renderer("canvas");
+            });
+            terminal.loadAddon(addon);
+            webgl = addon;
             metrics.renderer = "webgl";
             set_renderer("webgl");
         } catch (cause) {
@@ -142,7 +155,6 @@ export function TerminalPane({ session, focused, on_focus, on_metrics, label, on
         let queue: Uint8Array[] = [];
         let queued_bytes = 0;
         let writing = false;
-        let disposed = false;
         let frame_handle = 0;
         let last_background_flush = 0;
 
@@ -240,6 +252,7 @@ export function TerminalPane({ session, focused, on_focus, on_metrics, label, on
             cancelAnimationFrame(frame_handle);
             window.clearInterval(flush_metrics);
             observer.disconnect();
+            webgl?.dispose();
             input_disposable.dispose();
             socket?.close();
             terminal.dispose();

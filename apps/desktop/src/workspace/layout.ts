@@ -26,6 +26,10 @@ export type Node = Stack | Split;
 export interface Layout {
     root: Node;
     maximised: string | null;
+    /// Stacks folded down to the bar, the way a window minimises to the taskbar.
+    /// They keep their tabs and their panels keep running; they just give back
+    /// their share of the screen until they are asked for again.
+    minimised: string[];
     next_id: number;
 }
 
@@ -62,7 +66,7 @@ export function default_layout(): Layout {
         second: stack("k3", ["panes"], counter),
     };
 
-    return { root, maximised: null, next_id: counter.next };
+    return { root, maximised: null, minimised: [], next_id: counter.next };
 }
 
 export function stacks(node: Node): Stack[] {
@@ -74,7 +78,7 @@ export function find_stack(layout: Layout, id: string): Stack | null {
 }
 
 export function visible_panels(layout: Layout): PanelId[] {
-    return stacks(layout.root)
+    return visible_stacks(layout)
         .map((entry) => entry.tabs[entry.active]?.panel)
         .filter((panel): panel is PanelId => Boolean(panel));
 }
@@ -117,7 +121,36 @@ function rebuilt(layout: Layout, root: Node | null): Layout {
         ...layout,
         root: next,
         maximised: layout.maximised && live.has(layout.maximised) ? layout.maximised : null,
+        minimised: (layout.minimised ?? []).filter((id) => live.has(id)),
     };
+}
+
+export function minimise(layout: Layout, stack_id: string): Layout {
+    const held = layout.minimised ?? [];
+    if (held.includes(stack_id)) {
+        return layout;
+    }
+
+    // Folding the last visible stack would leave an empty window with no way
+    // back except the bar, which is fine — the bar is the way back.
+    return {
+        ...layout,
+        minimised: [...held, stack_id],
+        maximised: layout.maximised === stack_id ? null : layout.maximised,
+    };
+}
+
+export function restore(layout: Layout, stack_id: string): Layout {
+    return { ...layout, minimised: (layout.minimised ?? []).filter((id) => id !== stack_id) };
+}
+
+export function is_minimised(layout: Layout, stack_id: string): boolean {
+    return (layout.minimised ?? []).includes(stack_id);
+}
+
+/// The stacks that still take up room.
+export function visible_stacks(layout: Layout): Stack[] {
+    return stacks(layout.root).filter((entry) => !is_minimised(layout, entry.id));
 }
 
 export function set_active(layout: Layout, stack_id: string, active: number): Layout {
@@ -251,6 +284,9 @@ export function upgrade_layout(stored: unknown, known: (panel: string) => boolea
             ? {
                   root: clean,
                   maximised: typeof held.maximised === "string" ? held.maximised : null,
+                  minimised: Array.isArray(held.minimised)
+                      ? held.minimised.filter((id): id is string => typeof id === "string")
+                      : [],
                   next_id: counter.next,
               }
             : fresh;
@@ -335,7 +371,12 @@ function from_slots(
     };
 
     const pruned = prune(root, known, counter);
-    return { root: pruned ?? default_layout().root, maximised: null, next_id: counter.next };
+    return {
+        root: pruned ?? default_layout().root,
+        maximised: null,
+        minimised: [],
+        next_id: counter.next,
+    };
 }
 
 export function load_layout(known: (panel: string) => boolean): Layout {

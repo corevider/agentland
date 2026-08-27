@@ -24,7 +24,7 @@ function stack_of(id: string, panels: string[], take: () => number): Stack {
 function build(root: (take: () => number) => Node): Layout {
     const take = counter();
     const tree = root(take);
-    return { root: tree, maximised: null, next_id: take() };
+    return { root: tree, maximised: null, minimised: [], next_id: take() };
 }
 
 export const PRESETS: Preset[] = [

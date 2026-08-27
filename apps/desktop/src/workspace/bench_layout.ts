@@ -25,6 +25,7 @@ export function bench_layout(with_island: boolean): Layout {
             },
         },
         maximised: null,
+        minimised: [],
         next_id: 3,
     };
 }

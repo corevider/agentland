@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
     add_panel,
+    is_minimised,
+    minimise,
+    restore,
+    visible_stacks,
     close_tab,
     default_layout,
     focus_panel,
@@ -203,5 +207,59 @@ describe("resizing", () => {
         const read = (held: Layout) => (held.root.kind === "split" ? held.root.fraction : null);
         expect(read(squashed)).toBeGreaterThan(0.1);
         expect(read(stretched)).toBeLessThan(0.9);
+    });
+});
+
+describe("folding a panel down to the bar", () => {
+    it("gives its room to the panel beside it and keeps its tabs", () => {
+        const layout = default_layout();
+        const [first] = stacks(layout.root);
+
+        const folded = minimise(layout, first.id);
+        expect(is_minimised(folded, first.id)).toBe(true);
+        expect(visible_stacks(folded)).toHaveLength(stacks(layout.root).length - 1);
+        expect(stacks(folded.root)).toHaveLength(stacks(layout.root).length);
+        expect(visible_panels(folded)).not.toContain("island");
+
+        const back = restore(folded, first.id);
+        expect(visible_panels(back)).toContain("island");
+    });
+
+    it("folding twice changes nothing", () => {
+        const layout = default_layout();
+        const [first] = stacks(layout.root);
+        const once = minimise(layout, first.id);
+
+        expect(minimise(once, first.id).minimised).toEqual(once.minimised);
+    });
+
+    it("a maximised panel that is folded stops being maximised", () => {
+        const layout = default_layout();
+        const [first] = stacks(layout.root);
+
+        const both = minimise({ ...layout, maximised: first.id }, first.id);
+        expect(both.maximised).toBeNull();
+    });
+
+    it("every panel can be folded, and the bar is the way back", () => {
+        let layout = default_layout();
+        for (const stack of stacks(layout.root)) {
+            layout = minimise(layout, stack.id);
+        }
+
+        expect(visible_stacks(layout)).toHaveLength(0);
+        expect(visible_panels(layout)).toHaveLength(0);
+        expect(layout.minimised).toHaveLength(stacks(layout.root).length);
+    });
+
+    it("a stack that disappears is dropped from the bar rather than haunting it", () => {
+        const layout = default_layout();
+        const [source, , target] = stacks(layout.root);
+
+        const folded = minimise(layout, source.id);
+        const moved = move_tab(folded, source.tabs[0].instance, target.id);
+
+        expect(stacks(moved.root).some((stack) => stack.id === source.id)).toBe(false);
+        expect(moved.minimised).not.toContain(source.id);
     });
 });
