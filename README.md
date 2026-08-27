@@ -1079,5 +1079,21 @@ notes are what the skill asked for and not what an agent claimed:
 
 > X ran `npm test` in the ada-tree worktree: 6 tests, 6 pass, 0 fail.
 
-Still missing from the other tool's design: ghost-pane reaping, and delivery verification through a
-transcript rather than the visible buffer.
+### Ghost panes
+
+A finished agent does not exit. The engine sits at its prompt holding a worktree and a slot under
+the caps, so the next step cannot start and somebody has to close it by hand — which is exactly the
+chore the other tool's supervisor removes.
+
+The core takes the pane back itself, and only when that is safe: the work is settled, forty-five
+seconds have passed, the session is still alive, no turn is running, nobody has typed into the
+composer, and the agent has not been given something new in the meantime. The last guard is the same
+one that protects the leader — a person at that pane mid-sentence is not a ghost.
+
+Watched live: zen finished its step, sat at its prompt, and forty-five seconds later the log said
+*took back a pane its work had finished with · agent=zen* while the agent went from `working` to
+`idle`. Ada, whose session had already exited, was left alone: there is nothing to reclaim from an
+agent that is gone, and reaping it would only have been a lie in the journal.
+
+Still missing from the other tool's design: delivery verification through a transcript rather than
+the visible buffer.

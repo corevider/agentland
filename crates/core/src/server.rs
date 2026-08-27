@@ -33,7 +33,7 @@ use crate::metrics::{MetricsStore, Sample};
 use crate::repo::{Commit, PullRequest, RepoRegistry, Repository, Review, Worktree, WorktreeStatus};
 use crate::services::{Service, ServiceRegistry};
 use crate::skills::{Skill, SkillLibrary};
-use crate::supervisor::{judge, safe_to_type, Observation, Supervisor, Verdict, Watch};
+use crate::supervisor::{judge, safe_to_type, should_reap, Observation, Supervisor, Verdict, Watch};
 use crate::workspaces::{CreateWorkspace, Workspace, Workspaces};
 use crate::pty::{PtyManager, PtySpawnSpec, SessionInfo, SessionStats};
 
@@ -538,6 +538,34 @@ fn spawn_supervisor(state: AppState) {
                 }
 
                 last_frames.insert(watch.session_id.clone(), seen.tail);
+            }
+
+            for watch in state.supervisor.settled() {
+                let previous = last_frames.get(&watch.session_id).cloned().unwrap_or_default();
+                let seen = look_at(&state, &watch, &previous, now);
+                last_frames.insert(watch.session_id.clone(), seen.tail.clone());
+
+                let busy_with_new_work = state
+                    .supervisor
+                    .working()
+                    .iter()
+                    .any(|other| other.session_id == watch.session_id);
+
+                if !should_reap(&watch, &seen, &state.supervisor.rules, busy_with_new_work, now) {
+                    continue;
+                }
+
+                match state.crew.stop(&watch.agent_id) {
+                    Ok(()) => {
+                        state.supervisor.mark_reaped(&watch.id);
+                        tracing::info!(
+                            watch = %watch.id,
+                            agent = %watch.agent_id,
+                            "took back a pane its work had finished with"
+                        );
+                    }
+                    Err(error) => tracing::warn!(%error, agent = %watch.agent_id, "cannot reap the pane"),
+                }
             }
 
             if state.supervisor.wake_is_due(now) {

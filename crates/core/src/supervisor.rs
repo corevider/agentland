@@ -41,6 +41,8 @@ pub struct Watch {
     pub wake_attempts: u32,
     #[serde(default)]
     pub last_wake: u64,
+    #[serde(default)]
+    pub reaped: bool,
 }
 
 /// What the core can see about a watched agent at one moment.
@@ -65,6 +67,8 @@ pub struct Rules {
     pub max_resends: u32,
     pub wake_backoff: u64,
     pub max_wakes: u32,
+    /// How long a settled agent may sit at its prompt before the pane is taken back.
+    pub reap_after: u64,
 }
 
 impl Default for Rules {
@@ -75,6 +79,7 @@ impl Default for Rules {
             max_resends: 2,
             wake_backoff: 60,
             max_wakes: 5,
+            reap_after: 45,
         }
     }
 }
@@ -169,6 +174,29 @@ fn squash(text: &str) -> String {
         .filter(|character| !character.is_whitespace())
         .flat_map(|character| character.to_lowercase())
         .collect()
+}
+
+/// Whether a settled agent's pane should be handed back.
+///
+/// A finished agent does not exit: the engine sits at its prompt holding a
+/// worktree and a slot under the caps, so the next step cannot start. Taking the
+/// pane back is only safe when the work is settled, the engine is not mid-turn,
+/// nobody has typed into it, and it has not been given something new.
+pub fn should_reap(watch: &Watch, seen: &Observation, rules: &Rules, busy_with_new_work: bool, now: u64) -> bool {
+    if watch.state == WatchState::Working || watch.reaped {
+        return false;
+    }
+
+    if busy_with_new_work || !seen.session_alive {
+        return false;
+    }
+
+    if now.saturating_sub(watch.settled_at) < rules.reap_after {
+        return false;
+    }
+
+    // The same guard that protects the leader protects a person at this pane.
+    safe_to_type(&seen.tail, &seen.tail)
 }
 
 /// Whether it is safe to type into a TUI right now.
@@ -371,6 +399,7 @@ impl Supervisor {
             told_leader: false,
             wake_attempts: 0,
             last_wake: 0,
+            reaped: false,
         };
 
         state.watches.insert(watch.id.clone(), watch.clone());
@@ -450,6 +479,25 @@ impl Supervisor {
         self.persist(&state);
     }
 
+    pub fn mark_reaped(&self, id: &str) {
+        let mut state = self.state.lock();
+        if let Some(watch) = state.watches.get_mut(id) {
+            watch.reaped = true;
+            self.persist(&state);
+        }
+    }
+
+    /// Watches that have finished but whose pane may still be held.
+    pub fn settled(&self) -> Vec<Watch> {
+        self.state
+            .lock()
+            .watches
+            .values()
+            .filter(|watch| watch.state != WatchState::Working && !watch.reaped)
+            .cloned()
+            .collect()
+    }
+
     pub fn wake_is_due(&self, now: u64) -> bool {
         let state = self.state.lock();
         if state.pending_for_leader.is_empty() {
@@ -504,6 +552,7 @@ mod tests {
             told_leader: false,
             wake_attempts: 0,
             last_wake: 0,
+            reaped: false,
         }
     }
 
@@ -654,6 +703,67 @@ mod tests {
         assert!(safe_to_type("$ ls\n❯ ", "$ ls\n❯ "));
         assert!(!safe_to_type("$ ls\n❯ half a sentence", "$ ls\n❯ half a sentence"));
         assert!(!safe_to_type("no prompt at all", "no prompt at all"), "unclear means no");
+    }
+
+    #[test]
+    fn a_finished_agent_hands_its_pane_back_but_only_when_nobody_is_using_it() {
+        let rules = Rules::default();
+        let mut held = watch();
+        held.state = WatchState::Settled;
+        held.settled_at = 100;
+
+        let idle_frame = "╭────╮\n│ >  │\n╰────╯\n  ? for shortcuts";
+        let waiting = Observation { session_alive: true, tail: idle_frame.into(), ..seen() };
+
+        assert!(!should_reap(&held, &waiting, &rules, false, 120), "give it a moment first");
+        assert!(should_reap(&held, &waiting, &rules, false, 200), "then take the pane back");
+
+        assert!(
+            !should_reap(&held, &waiting, &rules, true, 200),
+            "not while it is working on something new"
+        );
+
+        let typing = Observation {
+            session_alive: true,
+            tail: "╭──────────────╮\n│ > wait, look │\n╰──────────────╯".into(),
+            ..seen()
+        };
+        assert!(!should_reap(&held, &typing, &rules, false, 200), "somebody is at this pane");
+
+        let mid_turn = Observation {
+            session_alive: true,
+            tail: "✻ Cooking… (4s)\n╭────╮\n│ >  │\n╰────╯".into(),
+            ..seen()
+        };
+        assert!(!should_reap(&held, &mid_turn, &rules, false, 200), "a turn is running");
+    }
+
+    #[test]
+    fn a_pane_is_reaped_once_and_a_working_watch_never_is() {
+        let rules = Rules::default();
+        let idle_frame = "╭────╮\n│ >  │\n╰────╯";
+        let waiting = Observation { session_alive: true, tail: idle_frame.into(), ..seen() };
+
+        let mut working = watch();
+        working.settled_at = 0;
+        assert!(!should_reap(&working, &waiting, &rules, false, 999), "it is still working");
+
+        let mut done = watch();
+        done.state = WatchState::Settled;
+        done.settled_at = 0;
+        assert!(should_reap(&done, &waiting, &rules, false, 999));
+
+        done.reaped = true;
+        assert!(!should_reap(&done, &waiting, &rules, false, 999), "once is enough");
+    }
+
+    #[test]
+    fn an_agent_that_already_exited_needs_no_reaping() {
+        let mut held = watch();
+        held.state = WatchState::Settled;
+        let gone = Observation { session_alive: false, ..seen() };
+
+        assert!(!should_reap(&held, &gone, &Rules::default(), false, 999));
     }
 
     fn store(name: &str) -> Supervisor {
