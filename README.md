@@ -894,3 +894,20 @@ nothing to say is told nothing rather than handed an empty line, a plain start s
 the crew knows, a task keeps the first word, and the sections stay in the order that puts the work
 before the housekeeping. Verified in the running app: a memory proposed and approved in the panel
 appeared in the opening brief of an agent started with no task at all.
+
+### X gets a desk
+
+Dispatch was the last capability with an API and no face. The panel shows whether X is on duty or
+holding everything, the two caps it decides by, the cards still waiting for an owner, and every
+decision it has made with the reason attached.
+
+`ask X` on a card runs the same policy the board and the MCP tools run, and the answer comes back in
+the panel's own words: *assign to Ada · Ada is the free agent on agentland-svc-demo with the closest
+role (implementer)*. Dropping **per repository** to 1 and asking again turned the next card amber —
+*queue · 1 of 1 allowed agents are already working on agentland-svc-demo* — and the header started
+counting `1 queued: t5`. The caps are not decoration; they are the policy, and now they are visible
+and adjustable where the decisions are read.
+
+Adding it found a smaller thing: `lib/core.ts` already carried a thinner dispatch client from an
+earlier milestone — no caps call, a loosely typed decision, an unencoded id in the path. Two
+declarations of the same thing is one too many, so the older one is gone.

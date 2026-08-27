@@ -457,6 +457,59 @@ export function delete_routine(id: string): Promise<void> {
     return request<void>(`/routines/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
+export interface DispatchEvent {
+    seq: number;
+    agent_id: string;
+    task_id: string;
+    reason: string;
+}
+
+export interface DispatchCaps {
+    per_repository: number;
+    per_engine: number;
+}
+
+export interface DispatchState {
+    paused: boolean;
+    caps: DispatchCaps;
+    queue: string[];
+    events: DispatchEvent[];
+    next_seq: number;
+}
+
+export type DispatchDecision =
+    | { outcome: "assign"; agent_id: string; reason: string }
+    | { outcome: "queue"; reason: string }
+    | { outcome: "refuse"; reason: string };
+
+export interface DispatchReport {
+    state: DispatchState;
+    decision: DispatchDecision;
+    task: Task | null;
+}
+
+export function dispatch_status(): Promise<DispatchState> {
+    return request<DispatchState>("/dispatch");
+}
+
+export function pause_dispatch(paused: boolean): Promise<DispatchState> {
+    return request<DispatchState>("/dispatch/pause", {
+        method: "POST",
+        body: JSON.stringify({ paused }),
+    });
+}
+
+export function set_dispatch_caps(caps: DispatchCaps): Promise<DispatchState> {
+    return request<DispatchState>("/dispatch/caps", {
+        method: "POST",
+        body: JSON.stringify(caps),
+    });
+}
+
+export function dispatch_task(id: string): Promise<DispatchReport> {
+    return request<DispatchReport>(`/dispatch/tasks/${encodeURIComponent(id)}`, { method: "POST" });
+}
+
 export function list_skills(): Promise<Skill[]> {
     return request<Skill[]>("/skills");
 }
@@ -597,42 +650,6 @@ export function open_pull_request(
         method: "POST",
         body: JSON.stringify({ title, body, task_id }),
     });
-}
-
-export interface DispatchEvent {
-    seq: number;
-    agent_id: string;
-    task_id: string;
-    reason: string;
-}
-
-export interface DispatchState {
-    paused: boolean;
-    caps: { per_repository: number; per_engine: number };
-    queue: string[];
-    events: DispatchEvent[];
-    next_seq: number;
-}
-
-export interface DispatchReport {
-    state: DispatchState;
-    decision: { outcome: "assign" | "queue" | "refuse"; agent_id?: string; reason: string };
-    task: Task | null;
-}
-
-export function dispatch_status(): Promise<DispatchState> {
-    return request<DispatchState>("/dispatch");
-}
-
-export function pause_dispatch(paused: boolean): Promise<DispatchState> {
-    return request<DispatchState>("/dispatch/pause", {
-        method: "POST",
-        body: JSON.stringify({ paused }),
-    });
-}
-
-export function dispatch_task(id: string): Promise<DispatchReport> {
-    return request<DispatchReport>(`/dispatch/tasks/${id}`, { method: "POST" });
 }
 
 export function take_ui_commands(): Promise<string[]> {

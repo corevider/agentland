@@ -5,6 +5,7 @@ import { MailPanel } from "@/components/MailPanel";
 import { MemoryPanel } from "@/components/MemoryPanel";
 import { RoutinesPanel } from "@/components/RoutinesPanel";
 import { CrewPanel } from "@/components/CrewPanel";
+import { DispatchPanel } from "@/components/DispatchPanel";
 import { PreviewPanel } from "@/components/PreviewPanel";
 import { RepoPanel } from "@/components/RepoPanel";
 import { SkillsPanel } from "@/components/SkillsPanel";
@@ -112,6 +113,12 @@ export const PANELS: PanelEntry[] = [
         label: "Mail",
         hint: "what the crew tells each other",
         Component: ({ active }) => <MailPanel active={active} />,
+    },
+    {
+        id: "dispatch",
+        label: "Dispatch",
+        hint: "what X decided, and why",
+        Component: ({ active }) => <DispatchPanel active={active} />,
     },
     {
         id: "memory",
