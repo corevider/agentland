@@ -1,6 +1,7 @@
 import { Suspense, createContext, lazy, useContext, type ReactNode } from "react";
 
 import { BoardPanel } from "@/components/BoardPanel";
+import { MailPanel } from "@/components/MailPanel";
 import { CrewPanel } from "@/components/CrewPanel";
 import { PreviewPanel } from "@/components/PreviewPanel";
 import { RepoPanel } from "@/components/RepoPanel";
@@ -103,6 +104,12 @@ export const PANELS: PanelEntry[] = [
         label: "Crew",
         hint: "hire, start, stop",
         Component: ({ active }) => <CrewPanel active={active} on_open_session={use_services().open_session} />,
+    },
+    {
+        id: "mail",
+        label: "Mail",
+        hint: "what the crew tells each other",
+        Component: ({ active }) => <MailPanel active={active} />,
     },
     {
         id: "skills",

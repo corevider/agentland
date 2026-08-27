@@ -344,6 +344,42 @@ export function remove_workspace(id: string): Promise<void> {
     return request<void>(`/workspaces/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
+export interface MailMessage {
+    id: string;
+    from: string;
+    to: string;
+    text: string;
+    delivered: boolean;
+}
+
+export interface MailPolicy {
+    paused: boolean;
+    allow_unlisted: boolean;
+    grants: Record<string, string[]>;
+}
+
+export function list_mail(): Promise<MailMessage[]> {
+    return request<MailMessage[]>("/mail");
+}
+
+export function send_mail(from: string, to: string, text: string): Promise<MailMessage> {
+    return request<MailMessage>("/mail", {
+        method: "POST",
+        body: JSON.stringify({ from, to, text }),
+    });
+}
+
+export function mail_policy(): Promise<MailPolicy> {
+    return request<MailPolicy>("/mail/policy");
+}
+
+export function set_mail_policy(policy: MailPolicy): Promise<MailPolicy> {
+    return request<MailPolicy>("/mail/policy", {
+        method: "POST",
+        body: JSON.stringify(policy),
+    });
+}
+
 export function list_skills(): Promise<Skill[]> {
     return request<Skill[]>("/skills");
 }

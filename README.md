@@ -844,3 +844,25 @@ A layout saved by any earlier version still opens: the four-slot shape is conver
 longer exists is dropped rather than left rendering nothing, and a stored value that is nonsense
 falls back to the default. Fourteen tests cover the tree — splitting, moving, closing, collapsing,
 the upgrade path and the clamped divider.
+
+### The claim, tested
+
+"Adding a panel is one entry in one array" is easy to write and easy to be wrong about, so a panel
+was added to find out. Mail was the honest choice: M6 built it — messages, grants, a global pause —
+and it had no interface at all, so an agent could be told something and nobody could see it.
+
+Three files changed. `MailPanel.tsx`, new. `registry.tsx`, one import and one entry. `lib/core.ts`,
+the four calls that reach `/mail` — an HTTP client for a new endpoint, which has nothing to do with
+the layout.
+
+Untouched: `App.tsx`, `Workspace.tsx`, `WorkspaceRail.tsx`, `layout.ts`, `presets.ts`. The panel
+appeared in the rail's view list, in every stack's add menu, and answered `view:mail` on the command
+channel without any of those files knowing it exists.
+
+Then it was used rather than admired: a message typed into the panel and sent arrived in the core as
+`msg1 ada → kai delivered=false`, and the pause button flipped the stored policy to
+`{"paused":true}`. A registry test now guards the shape every entry has to have.
+
+One thing the exercise cost: the registry test imports the panels, the panels import xterm, and
+xterm's bundle wants `self` at import time. A three-line setup file gives the test runner that
+global instead of pulling in a DOM implementation.

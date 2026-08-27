@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 
 export default defineConfig({
     test: {
+        setupFiles: ["./vitest.setup.ts"],
         include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
         exclude: ["**/node_modules/**", "src-tauri/**"],
     },
