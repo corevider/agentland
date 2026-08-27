@@ -56,7 +56,13 @@ pub fn permits(scope: Scope, method: &str, path: &str) -> bool {
     match method {
         "GET" => matches!(
             path,
-            "/agents" | "/tasks" | "/approvals" | "/memories" | "/dispatch" | "/routines"
+            "/agents"
+                | "/tasks"
+                | "/approvals"
+                | "/memories"
+                | "/dispatch"
+                | "/routines"
+                | "/skills"
         ),
         "POST" => {
             path.starts_with("/approvals/")
@@ -163,6 +169,13 @@ mod tests {
         assert!(permits(Scope::Approve, "GET", "/approvals"));
         assert!(permits(Scope::Approve, "POST", "/approvals/a1"));
         assert!(permits(Scope::Approve, "POST", "/memories/m1/approve"));
+    }
+
+    #[test]
+    fn an_approval_token_can_read_the_skills_library() {
+        assert!(permits(Scope::Approve, "GET", "/skills"));
+        assert!(!permits(Scope::Approve, "POST", "/skills"));
+        assert!(!permits(Scope::Approve, "GET", "/skills/tdd"));
     }
 
     #[test]
