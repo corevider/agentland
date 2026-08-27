@@ -687,6 +687,74 @@ export function open_pull_request(
     });
 }
 
+export type StepState = "waiting" | "assigned" | "done" | "blocked";
+
+export interface PlanStep {
+    id: string;
+    title: string;
+    brief: string;
+    needs: string[];
+    task_id: string | null;
+    note: string | null;
+    state: StepState;
+}
+
+export interface Plan {
+    id: string;
+    goal: string;
+    repository_id: string;
+    created_by: string;
+    state: "running" | "done" | "abandoned";
+    steps: PlanStep[];
+}
+
+export interface ReadyStep {
+    plan_id: string;
+    goal: string;
+    repository_id: string;
+    step: PlanStep;
+}
+
+export interface Watch {
+    id: string;
+    plan_id: string;
+    step_id: string;
+    task_id: string;
+    agent_id: string;
+    session_id: string;
+    delivered: boolean;
+    resends: number;
+    state: "working" | "settled" | "abandoned";
+    reason: string | null;
+    told_leader: boolean;
+    wake_attempts: number;
+    reaped: boolean;
+}
+
+export function list_plans(): Promise<Plan[]> {
+    return request<Plan[]>("/plans");
+}
+
+export function ready_steps(): Promise<ReadyStep[]> {
+    return request<ReadyStep[]>("/plans/ready");
+}
+
+export function mark_step(
+    plan_id: string,
+    step_id: string,
+    state: StepState,
+    note?: string,
+): Promise<Plan> {
+    return request<Plan>(`/plans/${encodeURIComponent(plan_id)}/steps/${encodeURIComponent(step_id)}`, {
+        method: "POST",
+        body: JSON.stringify({ state, note }),
+    });
+}
+
+export function supervisor_watches(): Promise<Watch[]> {
+    return request<Watch[]>("/supervisor");
+}
+
 export function list_windows(): Promise<Record<string, string>> {
     return request<Record<string, string>>("/ui/windows");
 }

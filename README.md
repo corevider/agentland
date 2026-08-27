@@ -1142,3 +1142,18 @@ An aside from the same session, and a good sign: Nova read the crew's memories a
 svc-demo dev server reads PORT_4103 from the env" — incorrect. Nothing in the repo references
 PORT_4103; the server only reads PORT.* It was right; that memory was test data I had seeded
 carelessly, and it is gone.
+
+## Everything at once
+
+Two things were missing before the whole product could be shown on one screen. The first was a face
+for the newest work: plans and the supervisor lived in the core with routes and no panel, so the
+commander's reasoning was only visible through curl. The **Commander** panel shows the plans with
+their steps and what each step waits for, what is ready to start, and every watch the supervisor is
+following with the reason it settled — *ada finished and left 4 changed file(s)*, *the pane printed
+DONE:p1s3 · pane reclaimed*, *nova stopped without changing anything*.
+
+The second was a layout that fits thirteen panels. **Everything** is a fourth preset: the island
+over the commander on the left, the terminals over the board in the middle, the localhost preview
+over the memory stack on the right, with the rest as tabs beside them. One click and the whole
+machine is on screen — four live agents, a dev server rendering its own page, a plan mid-flight, and
+the supervisor's record of who finished what.

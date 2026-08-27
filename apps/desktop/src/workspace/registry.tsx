@@ -5,6 +5,7 @@ import { BoardPanel } from "@/components/BoardPanel";
 import { MailPanel } from "@/components/MailPanel";
 import { MemoryPanel } from "@/components/MemoryPanel";
 import { RoutinesPanel } from "@/components/RoutinesPanel";
+import { CommanderPanel } from "@/components/CommanderPanel";
 import { CrewPanel } from "@/components/CrewPanel";
 import { DispatchPanel } from "@/components/DispatchPanel";
 import { PreviewPanel } from "@/components/PreviewPanel";
@@ -84,6 +85,12 @@ export const PANELS: PanelEntry[] = [
         label: "Terminals",
         hint: "what the agents are doing",
         Component: ({ active }) => <TerminalsPanel active={active} />,
+    },
+    {
+        id: "commander",
+        label: "Commander",
+        hint: "X's plans and what the supervisor is following",
+        Component: ({ active }) => <CommanderPanel active={active} />,
     },
     {
         id: "board",
