@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
     DEFAULT_LAYOUT,
+    PRESETS,
+    apply_preset,
+    preset_of,
     close_panel,
     move_panel,
     open_panel,
@@ -111,5 +114,30 @@ describe("closing a tab", () => {
 
         expect(next.slots.left_bottom.panels).toEqual([]);
         expect(visible_panels(next)).not.toContain("board");
+    });
+});
+
+describe("layout presets", () => {
+    it("each preset places every panel at most once", () => {
+        for (const preset of PRESETS) {
+            const placed = Object.values(preset.slots).flat();
+            expect(new Set(placed).size).toBe(placed.length);
+        }
+    });
+
+    it("applying a preset is recognised as that preset", () => {
+        for (const preset of PRESETS) {
+            expect(preset_of(apply_preset(preset))).toBe(preset.id);
+        }
+    });
+
+    it("a hand-arranged layout belongs to no preset", () => {
+        const custom = apply_preset(PRESETS[0]);
+        const moved = move_panel(custom, "skills", "left_top");
+        expect(preset_of(moved)).toBeNull();
+    });
+
+    it("applying a preset clears a maximised slot", () => {
+        expect(apply_preset(PRESETS[1]).maximised).toBeNull();
     });
 });

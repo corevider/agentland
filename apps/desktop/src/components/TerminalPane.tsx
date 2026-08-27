@@ -40,6 +40,9 @@ interface Props {
     session: SessionInfo;
     label?: string;
     on_close?: (id: string) => void;
+    on_zoom?: (id: string) => void;
+    zoomed?: boolean;
+    on_branch?: (session: SessionInfo) => void;
     focused: boolean;
     on_focus: (id: string) => void;
     on_metrics: (id: string, metrics: PaneMetrics) => void;
@@ -66,7 +69,7 @@ function collapse_to_tail(data: Uint8Array): Uint8Array {
     return result;
 }
 
-export function TerminalPane({ session, focused, on_focus, on_metrics, label, on_close}: Props) {
+export function TerminalPane({ session, focused, on_focus, on_metrics, label, on_close, on_zoom, zoomed, on_branch}: Props) {
     const host_ref = useRef<HTMLDivElement>(null);
     const focused_ref = useRef(focused);
     const [renderer, set_renderer] = useState("canvas");
@@ -286,6 +289,32 @@ export function TerminalPane({ session, focused, on_focus, on_metrics, label, on
                             {format_bytes(stats.bytes)}
                         </span>
                     </span>
+                ) : null}
+
+                {on_branch && session.cwd ? (
+                    <button
+                        className="shrink-0 rounded px-1 font-mono text-[11px] text-shade hover:text-turquoise"
+                        title="open another shell in the same worktree"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            on_branch(session);
+                        }}
+                    >
+                        +
+                    </button>
+                ) : null}
+
+                {on_zoom ? (
+                    <button
+                        className="shrink-0 rounded px-1 font-mono text-[11px] text-shade hover:text-turquoise"
+                        title={zoomed ? "back to the grid" : "fill the panel with this terminal"}
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            on_zoom(session.id);
+                        }}
+                    >
+                        {zoomed ? "▤" : "⤢"}
+                    </button>
                 ) : null}
 
                 {on_close ? (

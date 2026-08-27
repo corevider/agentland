@@ -134,6 +134,8 @@ pub struct SessionInfo {
     pub command: String,
     pub cols: u16,
     pub rows: u16,
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 struct PtyHandles {
@@ -298,6 +300,7 @@ impl PtyManager {
             command: spec.command.clone(),
             cols: spec.cols,
             rows: spec.rows,
+            cwd: spec.cwd.clone(),
         };
 
         let session = Arc::new(Session {
@@ -326,6 +329,7 @@ impl PtyManager {
             command: format!("generator {} lines/s", spec.lines_per_second),
             cols: default_cols(),
             rows: default_rows(),
+            cwd: None,
         };
 
         crate::bench::spawn_generator(spec, broadcaster.clone());

@@ -30,6 +30,7 @@ use crate::metrics::{MetricsStore, Sample};
 use crate::repo::{Commit, PullRequest, RepoRegistry, Repository, Review, Worktree, WorktreeStatus};
 use crate::services::{Service, ServiceRegistry};
 use crate::skills::{Skill, SkillLibrary};
+use crate::workspaces::{CreateWorkspace, Workspace, Workspaces};
 use crate::pty::{PtyManager, PtySpawnSpec, SessionInfo, SessionStats};
 
 #[derive(Clone)]
@@ -67,6 +68,7 @@ struct AppState {
     approvals: Arc<Approvals>,
     tokens: Arc<TokenStore>,
     skills: Arc<SkillLibrary>,
+    workspaces: Arc<Workspaces>,
     ui_commands: Arc<parking_lot::Mutex<Vec<String>>>,
 }
 
@@ -134,6 +136,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         approvals: Arc::new(Approvals::new(data_dir.clone())),
         tokens: Arc::new(TokenStore::new(token_for_store, data_dir.clone())),
         skills: Arc::new(SkillLibrary::new(data_dir.clone())),
+        workspaces: Arc::new(Workspaces::new(data_dir.clone())),
         ui_commands: Arc::new(parking_lot::Mutex::new(Vec::new())),
     };
 
@@ -179,6 +182,9 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/integrations/call", post(call_integration))
         .route("/approvals", get(list_approvals).post(request_approval))
         .route("/approvals/{id}", post(answer_approval))
+        .route("/workspaces", get(list_workspaces).post(create_workspace))
+        .route("/workspaces/{id}", delete(remove_workspace).post(set_workspace_repos))
+        .route("/workspaces/active", post(activate_workspace))
         .route("/skills", get(list_skills).post(write_skill))
         .route("/skills/{id}", delete(remove_skill))
         .route(
@@ -1179,6 +1185,60 @@ struct WriteSkill {
 #[derive(Deserialize)]
 struct InstallSkill {
     skill_id: String,
+}
+
+#[derive(Serialize)]
+struct WorkspaceList {
+    workspaces: Vec<Workspace>,
+    active: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ActivateWorkspace {
+    #[serde(default)]
+    id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct WorkspaceRepos {
+    repository_ids: Vec<String>,
+}
+
+async fn list_workspaces(State(state): State<AppState>) -> Json<WorkspaceList> {
+    Json(WorkspaceList {
+        workspaces: state.workspaces.list(),
+        active: state.workspaces.active().map(|entry| entry.id),
+    })
+}
+
+async fn create_workspace(
+    State(state): State<AppState>,
+    Json(body): Json<CreateWorkspace>,
+) -> Result<Json<Workspace>, ApiError> {
+    Ok(Json(state.workspaces.create(body)?))
+}
+
+async fn activate_workspace(
+    State(state): State<AppState>,
+    Json(body): Json<ActivateWorkspace>,
+) -> Result<Json<Option<Workspace>>, ApiError> {
+    Ok(Json(state.workspaces.activate(body.id.as_deref())?))
+}
+
+async fn set_workspace_repos(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<WorkspaceRepos>,
+) -> Result<Json<Workspace>, ApiError> {
+    Ok(Json(state.workspaces.set_repositories(&id, body.repository_ids)?))
+}
+
+async fn remove_workspace(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.workspaces.remove(&id)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_skills(State(state): State<AppState>) -> Json<Vec<Skill>> {

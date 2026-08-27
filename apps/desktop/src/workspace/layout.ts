@@ -189,3 +189,88 @@ export function close_panel(layout: Layout, slot_id: SlotId, panel: PanelId): La
         },
     };
 }
+
+export interface Preset {
+    id: string;
+    label: string;
+    hint: string;
+    slots: Record<SlotId, PanelId[]>;
+    column_fraction: number;
+    left_row_fraction: number;
+    right_row_fraction: number;
+}
+
+export const PRESETS: Preset[] = [
+    {
+        id: "crew",
+        label: "Crew",
+        hint: "the island, the board, and who is working",
+        slots: {
+            left_top: ["island"],
+            left_bottom: ["board"],
+            right_top: ["panes"],
+            right_bottom: ["crew", "skills"],
+        },
+        column_fraction: 0.38,
+        left_row_fraction: 0.58,
+        right_row_fraction: 0.62,
+    },
+    {
+        id: "work",
+        label: "Work",
+        hint: "terminals wide, the board beside them",
+        slots: {
+            left_top: ["board"],
+            left_bottom: ["island"],
+            right_top: ["panes"],
+            right_bottom: [],
+        },
+        column_fraction: 0.31,
+        left_row_fraction: 0.55,
+        right_row_fraction: 1,
+    },
+    {
+        id: "review",
+        label: "Review",
+        hint: "the diff and the running result, side by side",
+        slots: {
+            left_top: ["repos"],
+            left_bottom: ["board"],
+            right_top: ["preview"],
+            right_bottom: ["panes"],
+        },
+        column_fraction: 0.46,
+        left_row_fraction: 0.62,
+        right_row_fraction: 0.5,
+    },
+];
+
+export function apply_preset(preset: Preset): Layout {
+    const slots = {} as Record<SlotId, Slot>;
+    for (const id of SLOTS) {
+        slots[id] = { panels: [...preset.slots[id]], active: 0 };
+    }
+
+    return {
+        slots,
+        maximised: null,
+        column_fraction: preset.column_fraction,
+        left_row_fraction: preset.left_row_fraction,
+        right_row_fraction: preset.right_row_fraction,
+    };
+}
+
+export function preset_of(layout: Layout): string | null {
+    for (const preset of PRESETS) {
+        const same = SLOTS.every(
+            (id) =>
+                layout.slots[id].panels.length === preset.slots[id].length &&
+                layout.slots[id].panels.every((panel, index) => panel === preset.slots[id][index]),
+        );
+        if (same) {
+            return preset.id;
+        }
+    }
+
+    return null;
+}

@@ -10,6 +10,7 @@ export interface SessionInfo {
     command: string;
     cols: number;
     rows: number;
+    cwd: string | null;
     started_at: number;
     last_output_at: number;
     bytes: number;
@@ -301,6 +302,46 @@ export interface Skill {
     when_to_use: string;
     body: string;
     builtin: boolean;
+}
+
+export interface Workspace {
+    id: string;
+    name: string;
+    repository_ids: string[];
+}
+
+export interface WorkspaceList {
+    workspaces: Workspace[];
+    active: string | null;
+}
+
+export function list_workspaces(): Promise<WorkspaceList> {
+    return request<WorkspaceList>("/workspaces");
+}
+
+export function create_workspace(name: string, repository_ids: string[]): Promise<Workspace> {
+    return request<Workspace>("/workspaces", {
+        method: "POST",
+        body: JSON.stringify({ name, repository_ids }),
+    });
+}
+
+export function activate_workspace(id: string | null): Promise<Workspace | null> {
+    return request<Workspace | null>("/workspaces/active", {
+        method: "POST",
+        body: JSON.stringify({ id }),
+    });
+}
+
+export function set_workspace_repos(id: string, repository_ids: string[]): Promise<Workspace> {
+    return request<Workspace>(`/workspaces/${encodeURIComponent(id)}`, {
+        method: "POST",
+        body: JSON.stringify({ repository_ids }),
+    });
+}
+
+export function remove_workspace(id: string): Promise<void> {
+    return request<void>(`/workspaces/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export function list_skills(): Promise<Skill[]> {

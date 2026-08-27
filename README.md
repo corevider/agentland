@@ -725,3 +725,29 @@ Tapping a crew card on the phone opens what that agent carries: each skill's nam
 to be used, and what it is for. An agent with none says so and points at where to give it one. The
 list is fetched when the card is opened rather than on every five-second refresh, because a phone on
 a tailnet should not pay for what nobody is looking at.
+
+### The three the references still had
+
+Held up against the two reference layouts again, three things were missing. Each one is a feature
+underneath, not an icon.
+
+**Terminals carry their own actions.** A card's header now has `+`, which opens another shell in the
+same worktree — a session reports its working directory for that, which it did not before — and `⤢`,
+which fills the panel with one terminal and drops back to the grid. Plus the close button that was
+already there.
+
+**A mode switch, meaning layout presets.** *Crew* puts the island and the board beside the
+terminals; *Work* narrows to the board and gives the terminals the window; *Review* pairs the
+repositories with the preview and keeps a terminal underneath. The switch highlights the preset you
+are in, and stops highlighting the moment you drag a tab somewhere else, because then you are not in
+it any more.
+
+**Workspaces, which the data model always had.** Section 08 of the PRD specified a workspace that
+groups repositories, and nothing had been built. Now the top bar carries the workspaces as tabs with
+the number of agents in each, `All` for everything, and `+` to make one; clicking the active tab
+opens its repository list. Choosing a workspace narrows the rail, the board and the terminals to its
+repositories — the panes subtitle reads `1 of 2` rather than pretending the hidden one is not there.
+A repository that is removed leaves every workspace that held it.
+
+The reference layouts are still denser than this one, and that is the next thing to sit with rather
+than guess at.

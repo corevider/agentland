@@ -16,6 +16,7 @@ pub mod routines;
 pub mod services;
 pub mod pty;
 pub mod server;
+pub mod workspaces;
 pub mod skills;
 
 pub use approvals::{AnswerApproval, Approval, Approvals, RequestApproval};
@@ -26,6 +27,7 @@ pub use crew::{Agent, Crew, Engine, HireRequest};
 pub use context::{read_context, ContextReading};
 pub use db::Database;
 pub use skills::{Skill, SkillLibrary};
+pub use workspaces::{CreateWorkspace, Workspace, Workspaces};
 pub use dispatch::{decide, Caps, Decision, DispatchState};
 pub use gateway::{CallRequest, ConnectRequest, Gateway, Integration};
 pub use mail::{Mailbox, MailPolicy, Message, SendMessage};

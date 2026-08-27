@@ -5,14 +5,18 @@ import { ContextMenu, useContextMenu } from "@/components/ContextMenu";
 import { Workspace } from "@/workspace/Workspace";
 import {
     PANELS,
+    PRESETS,
+    apply_preset,
     load_layout,
     open_panel,
+    preset_of,
     save_layout,
     visible_panels,
     type Layout,
     type PanelId,
 } from "@/workspace/layout";
 import { WorkspaceRail } from "@/workspace/WorkspaceRail";
+import { WorkspaceTabs } from "@/workspace/WorkspaceTabs";
 import { PreviewPanel } from "@/components/PreviewPanel";
 import { SkillsPanel } from "@/components/SkillsPanel";
 import { CrewPanel } from "@/components/CrewPanel";
@@ -24,6 +28,7 @@ import {
     kill_session,
     list_agents,
     list_tasks,
+    list_workspaces,
     list_sessions,
     take_ui_commands,
     report_sample,
@@ -350,6 +355,10 @@ export default function App() {
     }, [clear, pane_count]);
 
     const visible = useMemo(() => visible_panels(layout), [layout]);
+    const current_preset = useMemo(() => preset_of(layout), [layout]);
+    const [workspace_id, set_workspace_id] = useState<string | null>(null);
+    const [workspace_repos, set_workspace_repos] = useState<string[] | null>(null);
+    const [workspace_counts, set_workspace_counts] = useState<Record<string, number>>({});
     const [rail_shut, set_rail_shut] = useState(() => {
         try {
             return localStorage.getItem("agentland-rail") === "shut";
@@ -372,13 +381,42 @@ export default function App() {
             list_tasks()
                 .then((cards) => set_card_count(cards.filter((card) => card.column !== "done").length))
                 .catch(() => undefined);
+            Promise.all([list_workspaces(), list_agents()])
+                .then(([listed, roster]) => {
+                    const counts: Record<string, number> = {};
+                    for (const workspace of listed.workspaces) {
+                        counts[workspace.id] = roster.filter((agent) =>
+                            workspace.repository_ids.includes(agent.repository_id),
+                        ).length;
+                    }
+                    set_workspace_counts(counts);
+                })
+                .catch(() => undefined);
         };
 
         tick();
         const handle = window.setInterval(tick, 5000);
         return () => window.clearInterval(handle);
     }, []);
-    const grid_columns = useMemo(() => (sessions.length > 4 ? 4 : Math.max(sessions.length, 1)), [sessions.length]);
+    const [zoomed_id, set_zoomed_id] = useState<string | null>(null);
+    const shown_sessions = useMemo(() => {
+        if (zoomed_id) {
+            return sessions.filter((entry) => entry.id === zoomed_id);
+        }
+
+        if (!workspace_repos) {
+            return sessions;
+        }
+
+        return sessions.filter((entry) => {
+            const owner = crew.find((agent) => agent.session_id === entry.id);
+            return owner ? workspace_repos.includes(owner.repository_id) : true;
+        });
+    }, [crew, sessions, workspace_repos, zoomed_id]);
+    const grid_columns = useMemo(
+        () => (shown_sessions.length > 4 ? 4 : Math.max(shown_sessions.length, 1)),
+        [shown_sessions.length],
+    );
     const verdict = frame_stats.fps >= 55 ? "pass" : frame_stats.fps >= 30 ? "marginal" : "fail";
 
     const update_settings = useCallback((next: Settings) => {
@@ -449,6 +487,35 @@ export default function App() {
             ) : null}
 
             <header className="flex shrink-0 items-center gap-3 border-b border-reef/70 px-3 py-1.5">
+                <WorkspaceTabs
+                    active={workspace_id}
+                    on_active={(id, repositories) => {
+                        set_workspace_id(id);
+                        set_workspace_repos(repositories);
+                    }}
+                    counts={workspace_counts}
+                />
+
+                <span className="h-4 w-px bg-reef" />
+
+                <div className="flex items-center gap-0.5 rounded-lg border border-reef p-0.5">
+                    {PRESETS.map((preset) => {
+                        const active = current_preset === preset.id;
+                        return (
+                            <button
+                                key={preset.id}
+                                title={preset.hint}
+                                onClick={() => set_layout(apply_preset(preset))}
+                                className={`rounded px-2.5 py-[3px] text-[12px] ${
+                                    active ? "bg-lagoon text-linen" : "text-shell hover:text-linen"
+                                }`}
+                            >
+                                {preset.label}
+                            </button>
+                        );
+                    })}
+                </div>
+
                 <div className="flex items-center gap-1">
                     <button
                         className="rounded border border-turquoise/70 px-2 py-[3px] font-mono text-[11px] text-turquoise disabled:opacity-40"
@@ -512,6 +579,7 @@ export default function App() {
             <div className="flex min-h-0 min-w-0 flex-1">
                 <WorkspaceRail
                     visible={visible}
+                    repositories={workspace_repos}
                     counts={{ panes: sessions.length, crew: crew_count, board: card_count }}
                     collapsed={rail_shut}
                     on_collapse={(next) => {
@@ -557,7 +625,7 @@ export default function App() {
                         return <CrewPanel active on_open_session={open_session} />;
                     }
                     if (panel === "board") {
-                        return <BoardPanel active />;
+                        return <BoardPanel active repositories={workspace_repos} />;
                     }
                     if (panel === "island") {
                         return (
@@ -581,7 +649,7 @@ export default function App() {
                                 gridAutoRows: "minmax(0, 1fr)",
                             }}
                         >
-                            {sessions.map((session) => (
+                            {shown_sessions.map((session) => (
                                 <TerminalPane
                                     key={session.id}
                                     session={session}
@@ -593,6 +661,19 @@ export default function App() {
                                     }
                                     on_focus={set_focused_id}
                                     on_close={close_session}
+                                    on_zoom={(id) => set_zoomed_id((held) => (held === id ? null : id))}
+                                    zoomed={zoomed_id === session.id}
+                                    on_branch={(entry) => {
+                                        if (!entry.cwd) {
+                                            return;
+                                        }
+                                        spawn_shell("bash", entry.cwd)
+                                            .then((created) => {
+                                                set_sessions((held) => [...held, created]);
+                                                set_focused_id(created.id);
+                                            })
+                                            .catch((cause) => set_error(String(cause)));
+                                    }}
                                     on_metrics={on_metrics}
                                 />
                             ))}
@@ -601,7 +682,9 @@ export default function App() {
                 }}
                 subtitle_for={(panel: PanelId) => {
                     if (panel === "panes") {
-                        return `${sessions.length} open`;
+                        return shown_sessions.length === sessions.length
+                            ? `${sessions.length} open`
+                            : `${shown_sessions.length} of ${sessions.length}`;
                     }
                     if (panel === "island") {
                         return `${pane_count} × ${rate.toLocaleString()} lps`;

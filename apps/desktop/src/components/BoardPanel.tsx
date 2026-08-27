@@ -35,8 +35,11 @@ function patch_line_color(line: string): string {
     return "text-driftwood";
 }
 
-export function BoardPanel({ active }: { active: boolean }) {
-    const [tasks, set_tasks] = useState<Task[]>([]);
+export function BoardPanel({ active, repositories }: { active: boolean; repositories: string[] | null }) {
+    const [all_tasks, set_tasks] = useState<Task[]>([]);
+    const tasks = repositories
+        ? all_tasks.filter((task) => repositories.includes(task.repository_id))
+        : all_tasks;
     const [agents, set_agents] = useState<Agent[]>([]);
     const [repos, set_repos] = useState<Repository[]>([]);
     const [draft, set_draft] = useState({ title: "", body: "", repository_id: "" });

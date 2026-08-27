@@ -6,6 +6,7 @@ import { PANELS, type PanelId } from "@/workspace/layout";
 
 interface Props {
     visible: PanelId[];
+    repositories: string[] | null;
     counts: Partial<Record<PanelId, number>>;
     collapsed: boolean;
     on_collapse: (next: boolean) => void;
@@ -25,6 +26,7 @@ function Dot({ presence }: { presence: string }) {
 
 export function WorkspaceRail({
     visible,
+    repositories,
     counts,
     collapsed,
     on_collapse,
@@ -41,6 +43,11 @@ export function WorkspaceRail({
         set_repos(listed);
         set_agents(crew);
     }, []);
+
+    const shown_repos = useMemo(
+        () => (repositories ? repos.filter((repo) => repositories.includes(repo.id)) : repos),
+        [repos, repositories],
+    );
 
     useEffect(() => {
         refresh().catch(() => undefined);
@@ -130,11 +137,13 @@ export function WorkspaceRail({
                 <h2 className="px-1 pb-1 pt-4 font-mono text-[9px] uppercase tracking-[0.16em] text-shade">
                     Workspaces
                 </h2>
-                {repos.length === 0 ? (
-                    <p className="px-2 font-mono text-[10px] text-shade">No repository yet.</p>
+                {shown_repos.length === 0 ? (
+                    <p className="px-2 font-mono text-[10px] text-shade">
+                        {repositories ? "This workspace holds no repository yet." : "No repository yet."}
+                    </p>
                 ) : null}
 
-                {repos.map((repo) => {
+                {shown_repos.map((repo) => {
                     const crew = by_repo.get(repo.id) ?? [];
                     const shut = folded[repo.id] ?? false;
 
