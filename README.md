@@ -911,3 +911,19 @@ and adjustable where the decisions are read.
 Adding it found a smaller thing: `lib/core.ts` already carried a thinner dispatch client from an
 earlier milestone — no caps call, a loosely typed decision, an unencoded id in the path. Two
 declarations of the same thing is one too many, so the older one is gone.
+
+### Approvals, with the answer attached
+
+The last one. Approvals were visible per agent in the island's sheet and on the phone, but there was
+nowhere to see everyone who is blocked at once — and nothing in the interface used the field the
+endpoint has always accepted: a note back.
+
+The panel lists who is waiting with the detail they attached, offers approve and reject with a note,
+and keeps the answered ones with what you said. A blocked agent's terminal is one click away, since
+the next question is usually *what is it actually doing*.
+
+The note is not decoration either: `approval_status`, the MCP tool an agent polls, returns the whole
+approval including `answered_note`, so *yes, but push the branch first* reaches the agent that
+asked. Verified by answering from the panel and reading it back the way an agent would.
+
+Two files this time — the panel and one registry entry. The client calls already existed.

@@ -1,5 +1,6 @@
 import { Suspense, createContext, lazy, useContext, type ReactNode } from "react";
 
+import { ApprovalsPanel } from "@/components/ApprovalsPanel";
 import { BoardPanel } from "@/components/BoardPanel";
 import { MailPanel } from "@/components/MailPanel";
 import { MemoryPanel } from "@/components/MemoryPanel";
@@ -113,6 +114,12 @@ export const PANELS: PanelEntry[] = [
         label: "Mail",
         hint: "what the crew tells each other",
         Component: ({ active }) => <MailPanel active={active} />,
+    },
+    {
+        id: "approvals",
+        label: "Approvals",
+        hint: "the agents that are blocked on you",
+        Component: ({ active }) => <ApprovalsPanel active={active} />,
     },
     {
         id: "dispatch",
