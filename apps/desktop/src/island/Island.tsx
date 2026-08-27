@@ -446,7 +446,7 @@ export function Island({
     return (
         <Canvas
             frameloop="demand"
-            shadows
+            shadows="percentage"
             gl={{ preserveDrawingBuffer: true }}
             camera={{ position: [8, 5, 8], fov: 46 }}
             onCreated={({ scene, camera, invalidate }) => on_scene(scene, camera, invalidate)}

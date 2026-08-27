@@ -751,3 +751,50 @@ A repository that is removed leaves every workspace that held it.
 
 The reference layouts are still denser than this one, and that is the next thing to sit with rather
 than guess at.
+
+## The app was dying every forty minutes
+
+It stopped twice on its own. Not a crash — a kill:
+
+```
+Unable to shrink memory footprint of process (4211 MB)
+below the kill thresold (4096 MB). Killed
+```
+
+The webview was growing about 65 MB a minute while the app sat idle, so the watchdog reached it in
+well under an hour. Six measurements, each cutting one suspect:
+
+| What was measured | Growth |
+|---|---|
+| The island rendering | 66 → 64 MB/min without it. Not the island. |
+| Panel count | One simple panel, still 66 MB/min. |
+| Poll traffic | Every interval slowed fivefold: 66 → 59. Not the requests. |
+| Compositing | `WEBKIT_DISABLE_COMPOSITING_MODE=1`, four minutes: 64 MB/min. |
+| The same app in Chrome | Flat after warm-up. |
+| A page with no script at all, same webview | **171 MB, flat for three minutes.** |
+
+That last row killed my own hypothesis. I had said this looked like a WebKitGTK leak; the blank page
+proved the engine holds still, so the growth was ours.
+
+Chrome's console said the rest: **801 identical `THREE.WebGLShadowMap: PCFSoftShadowMap has been
+deprecated` warnings in seventy seconds** — one per rendered frame, each retained with its stack.
+R3F's bare `shadows` prop selects the deprecated soft shadow map; `shadows="percentage"` pins the
+supported one and the warnings stop.
+
+That was not the whole of it. With the warning gone the dev server still leaked, so the last
+comparison was the one that mattered: the same app, the same island, the same webview, built rather
+than served by Vite.
+
+| Bundle | Memory over five minutes |
+|---|---|
+| Vite dev server | 425 → 990 MB, climbing |
+| `vite build` output | 339 → 351 MB, flat |
+
+**The shipped product does not have this leak; the dev server does.** It costs a restart every half
+hour while developing and nothing to anyone who installs the app. `npm run dev:built` runs the shell
+against a built bundle for long sessions.
+
+The first measurement I trusted here was wrong twice — once blaming the engine, once comparing a
+production build that could not reach the core and was therefore doing nothing (`TypeError: Load
+failed` in the corner of the screenshot, which is what caught it). Both times the fix was another
+measurement rather than another theory.
