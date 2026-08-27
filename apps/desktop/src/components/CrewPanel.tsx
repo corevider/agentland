@@ -16,7 +16,7 @@ import {
     type SessionInfo,
 } from "@/lib/core";
 
-const ROLES = ["implementer", "reviewer", "tester", "researcher", "ops"];
+const ROLES = ["implementer", "reviewer", "tester", "researcher", "ops", "commander"];
 
 const PRESENCE_COLOR: Record<string, string> = {
     done: "text-palm",

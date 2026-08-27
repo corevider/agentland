@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -26,6 +27,7 @@ use crate::embed::{EmbedderReport, EmbedderSettings};
 use crate::gateway::{CallRequest, ConnectRequest, Gateway, Integration};
 use crate::mail::{MailPolicy, Mailbox, Message as MailMessage, SendMessage};
 use crate::memory::{Memory, MemoryStore, ProposeMemory, Recalled, Scope};
+use crate::plans::{DraftPlan, Plan, Plans, StepState};
 use crate::routines::{CreateRoutine, Routine, Routines};
 use crate::metrics::{MetricsStore, Sample};
 use crate::repo::{Commit, PullRequest, RepoRegistry, Repository, Review, Worktree, WorktreeStatus};
@@ -69,6 +71,7 @@ struct AppState {
     approvals: Arc<Approvals>,
     tokens: Arc<TokenStore>,
     skills: Arc<SkillLibrary>,
+    plans: Arc<Plans>,
     embedder: Arc<parking_lot::Mutex<EmbedderSettings>>,
     data_dir: Arc<PathBuf>,
     workspaces: Arc<Workspaces>,
@@ -139,6 +142,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         approvals: Arc::new(Approvals::new(data_dir.clone())),
         tokens: Arc::new(TokenStore::new(token_for_store, data_dir.clone())),
         skills: Arc::new(SkillLibrary::new(data_dir.clone())),
+        plans: Arc::new(Plans::new(data_dir.clone())),
         embedder: Arc::new(parking_lot::Mutex::new(crate::embed::load(&data_dir))),
         data_dir: Arc::new(data_dir.clone()),
         workspaces: Arc::new(Workspaces::new(data_dir.clone())),
@@ -192,6 +196,10 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/workspaces", get(list_workspaces).post(create_workspace))
         .route("/workspaces/{id}", delete(remove_workspace).post(set_workspace_repos))
         .route("/workspaces/active", post(activate_workspace))
+        .route("/plans", get(list_plans).post(create_plan))
+        .route("/plans/{id}", get(read_plan).delete(abandon_plan))
+        .route("/plans/{id}/steps/{step}", post(mark_step))
+        .route("/plans/ready", get(ready_steps))
         .route("/skills", get(list_skills).post(write_skill))
         .route("/skills/{id}", delete(remove_skill))
         .route(
@@ -301,6 +309,32 @@ fn now_secs() -> u64 {
         .unwrap_or_default()
 }
 
+fn identity_for(state: &AppState, agent: &Agent) -> Option<String> {
+    if agent.role != "commander" {
+        return None;
+    }
+
+    let crew: Vec<String> = state
+        .crew
+        .list()
+        .into_iter()
+        .filter(|entry| entry.id != agent.id)
+        .map(|entry| format!("{} ({}, {})", entry.name, entry.role, entry.engine_id))
+        .collect();
+
+    let roster = if crew.is_empty() {
+        "Nobody is hired yet — say so rather than planning work for agents that do not exist."
+            .to_owned()
+    } else {
+        format!("The crew you can hand steps to: {}.", crew.join("; "))
+    };
+
+    Some(format!(
+        "You are {}, the commander of this crew. You plan and delegate; you do not edit code.\n         {roster}\n         Your tools are plan_create, plan_ready, plan_status, plan_step_done and crew_delegate.          Start by reading the board with task_list.",
+        agent.name
+    ))
+}
+
 const BRIEF_MEMORIES: usize = 6;
 
 async fn compose_brief(state: &AppState, agent: &Agent, base: &str) -> String {
@@ -328,6 +362,7 @@ async fn compose_brief(state: &AppState, agent: &Agent, base: &str) -> String {
         .collect();
 
     crate::brief::compose(crate::brief::Ingredients {
+        identity: identity_for(state, agent),
         base,
         learned,
         skills: state.skills.brief_section(&agent.id),
@@ -1214,7 +1249,16 @@ async fn hire_agent(
         )));
     }
 
-    Ok(Json(state.crew.hire(request)?))
+    let commander = request.role == "commander";
+    let agent = state.crew.hire(request)?;
+
+    if commander {
+        if let Err(error) = state.skills.install(&agent.id, "commanding-a-crew") {
+            tracing::warn!(%error, "a commander was hired without its brief");
+        }
+    }
+
+    Ok(Json(agent))
 }
 
 async fn start_agent(
@@ -1330,6 +1374,100 @@ async fn remove_workspace(
 ) -> Result<StatusCode, ApiError> {
     state.workspaces.remove(&id)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct MarkStep {
+    state: StepState,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
+    task_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AbandonPlan {
+    #[serde(default)]
+    why: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ReadyStep {
+    plan_id: String,
+    goal: String,
+    repository_id: String,
+    step: crate::plans::Step,
+}
+
+async fn list_plans(State(state): State<AppState>) -> Json<Vec<Plan>> {
+    Json(state.plans.list())
+}
+
+async fn create_plan(
+    State(state): State<AppState>,
+    Json(draft): Json<DraftPlan>,
+) -> Result<Json<Plan>, ApiError> {
+    Ok(Json(state.plans.create(draft)?))
+}
+
+async fn read_plan(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Plan>, ApiError> {
+    state
+        .plans
+        .get(&id)
+        .map(Json)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("there is no plan called {id}")))
+}
+
+async fn mark_step(
+    State(state): State<AppState>,
+    Path((id, step)): Path<(String, String)>,
+    Json(body): Json<MarkStep>,
+) -> Result<Json<Plan>, ApiError> {
+    if let Some(task_id) = body.task_id {
+        state.plans.attach_task(&id, &step, &task_id)?;
+    }
+
+    Ok(Json(state.plans.mark(&id, &step, body.state, body.note)?))
+}
+
+async fn abandon_plan(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    body: Option<Json<AbandonPlan>>,
+) -> Result<Json<Plan>, ApiError> {
+    let why = body
+        .and_then(|Json(value)| value.why)
+        .unwrap_or_else(|| "abandoned".to_owned());
+
+    Ok(Json(state.plans.abandon(&id, &why)?))
+}
+
+async fn ready_steps(State(state): State<AppState>) -> Json<Vec<ReadyStep>> {
+    let plans: BTreeMap<String, Plan> = state
+        .plans
+        .list()
+        .into_iter()
+        .map(|plan| (plan.id.clone(), plan))
+        .collect();
+
+    Json(
+        state
+            .plans
+            .ready_everywhere()
+            .into_iter()
+            .filter_map(|(plan_id, step)| {
+                plans.get(&plan_id).map(|plan| ReadyStep {
+                    plan_id: plan_id.clone(),
+                    goal: plan.goal.clone(),
+                    repository_id: plan.repository_id.clone(),
+                    step,
+                })
+            })
+            .collect(),
+    )
 }
 
 async fn list_skills(State(state): State<AppState>) -> Json<Vec<Skill>> {

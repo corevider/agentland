@@ -983,3 +983,49 @@ says how many dimensions it answered with when one does.
 
 One thing the work tightened: the approval gate now covers the embedder. An unapproved memory is not
 sent anywhere, not even to a model on localhost.
+
+## The commander, part one
+
+The AppImage was opened again — this time without running it: the ELF header gives the offset of the
+embedded filesystem, and `unsquashfs` reads it in place. What that showed is that the other tool's
+leader is not a service. It is **a real CLI agent in a pane**, with a supervisor in the main process
+that writes into that agent's terminal only when its input box is idle, journals every delegation to
+disk, and detects completion from several signals at once. Their own comments say why: thirty fixes
+failed because the follow-up logic lived in the renderer, and a reload vaporised it.
+
+Ours was a forty-line dispatcher: role affinity, caps, a reason. This is the first of three parts.
+
+**A plan is a first-class thing.** A goal, a repository, and steps that name what they need — by
+another step's title or its id. Steps with no dependency start at once; a step whose needs are done
+becomes ready; a plan closes itself when its last step does. Two steps that wait for each other are
+refused at creation with the names of the steps that are stuck, because a cycle is not a plan. Nine
+tests hold the model, including that what is ready survives a restart.
+
+**X has an identity.** Hiring an agent with the role `commander` installs a built-in skill that says
+what commanding is: take the goal apart before handing anything out, a step is one agent's work,
+name what waits on what, then work the plan and never report a step done because an agent said so.
+The brief now opens with who the agent is and who is on the crew — the other tool's own requirement
+list calls this the identity carrier, without which you cannot tell a pane "you are the leader".
+
+**Four tools.** `plan_create`, `plan_ready`, `plan_status`, `plan_step_done`, beside the delegation
+and board tools X already had.
+
+Given a real goal — *give svc-demo a /health endpoint with a test and a readme line* — X wrote:
+
+| Step | Waits for |
+|---|---|
+| Serve /health from server.js | — |
+| Prove /health with a node test | Serve /health |
+| Note /health in the README | — |
+
+Two can start at once and one waits for the endpoint it tests. That is the reasoning the feature
+exists for, and it was the engine's, not a fixture's.
+
+One honest note from the same session: the first goal I gave X was already finished in the
+repository, and X refused to plan it — it read the code, moved the card to review and asked whether
+a plan was still wanted. That is the right answer, and it is why the run above uses a goal that
+genuinely does not exist yet.
+
+Still to build: the supervisor. Today nothing watches whether a delegated step ever landed, nothing
+detects that a worker finished, and nothing wakes X when it did. That is part three, and the
+other tool's design notes are a good map of the failures to skip.

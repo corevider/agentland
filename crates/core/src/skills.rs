@@ -8,6 +8,10 @@ use serde::{Deserialize, Serialize};
 
 const BUILTIN: &[(&str, &str)] = &[
     (
+        "commanding-a-crew",
+        include_str!("../../../skills/commanding-a-crew/SKILL.md"),
+    ),
+    (
         "systematic-debugging",
         include_str!("../../../skills/systematic-debugging/SKILL.md"),
     ),

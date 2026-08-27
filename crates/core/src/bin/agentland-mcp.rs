@@ -153,6 +153,58 @@ fn tools() -> Value {
             }
         },
         {
+            "name": "plan_create",
+            "description": "Take a goal apart into steps other agents can finish. A step names what it needs, by the title or the id of another step in the same plan; steps with no dependency start at once. Refused if two steps wait for each other.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "goal": { "type": "string" },
+                    "repository_id": { "type": "string" },
+                    "steps": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": { "type": "string" },
+                                "brief": { "type": "string", "description": "what the agent taking this step is told" },
+                                "needs": { "type": "array", "items": { "type": "string" } }
+                            },
+                            "required": ["title"]
+                        }
+                    }
+                },
+                "required": ["goal", "repository_id", "steps"]
+            }
+        },
+        {
+            "name": "plan_status",
+            "description": "Read every plan with its steps, or one plan by id. Says what is done, what is running and what each waiting step is waiting for.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "plan_id": { "type": "string" } }
+            }
+        },
+        {
+            "name": "plan_ready",
+            "description": "The steps that can start right now across every running plan: their dependencies are done and nobody holds them.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "plan_step_done",
+            "description": "Mark a step finished after reading its evidence, which releases whatever was waiting on it. Use state \"blocked\" with a note when it cannot proceed.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "plan_id": { "type": "string" },
+                    "step_id": { "type": "string" },
+                    "state": { "type": "string", "enum": ["waiting", "assigned", "done", "blocked"] },
+                    "note": { "type": "string" },
+                    "task_id": { "type": "string", "description": "the card this step became" }
+                },
+                "required": ["plan_id", "step_id"]
+            }
+        },
+        {
             "name": "request_approval",
             "description": "Ask the human to approve something before you do it. Returns an approval id; poll approval_status for the answer.",
             "inputSchema": {
@@ -195,6 +247,34 @@ fn call_tool(core: &Core, name: &str, arguments: &Value) -> Result<Value, String
 
     match name {
         "task_list" => core.call("GET", "/tasks", None),
+        "plan_create" => core.call(
+            "POST",
+            "/plans",
+            Some(json!({
+                "goal": text("goal")?,
+                "repository_id": text("repository_id")?,
+                "created_by": arguments.get("created_by").and_then(Value::as_str).unwrap_or("x"),
+                "steps": arguments.get("steps").cloned().unwrap_or(Value::Array(vec![])),
+            })),
+        ),
+        "plan_status" => match arguments.get("plan_id").and_then(Value::as_str) {
+            Some(id) => core.call("GET", &format!("/plans/{id}"), None),
+            None => core.call("GET", "/plans", None),
+        },
+        "plan_ready" => core.call("GET", "/plans/ready", None),
+        "plan_step_done" => {
+            let plan_id = text("plan_id")?;
+            let step_id = text("step_id")?;
+            core.call(
+                "POST",
+                &format!("/plans/{plan_id}/steps/{step_id}"),
+                Some(json!({
+                    "state": arguments.get("state").and_then(Value::as_str).unwrap_or("done"),
+                    "note": arguments.get("note").and_then(Value::as_str),
+                    "task_id": arguments.get("task_id").and_then(Value::as_str),
+                })),
+            )
+        }
         "task_create" => core.call(
             "POST",
             "/tasks",
