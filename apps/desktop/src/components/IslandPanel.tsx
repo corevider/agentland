@@ -1,26 +1,68 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 
 import { AgentSheet } from "@/components/AgentSheet";
 import { Island } from "@/island/Island";
 import { PRESENCE_COLOR, tier_for } from "@/island/geometry";
+import { color_of, plan_to_show, type FlowStep } from "@/island/plan_flow";
 import {
     assign_task,
     dispatch_status,
     dispatch_task,
+    list_plans,
+    supervisor_watches,
     list_agents,
     list_tasks,
     pause_dispatch,
     type Agent,
     type DispatchState,
+    type Plan,
     type Task,
+    type Watch,
 } from "@/lib/core";
 import { probe_gpu } from "@/lib/gpu";
+import { spread_labels, type Label } from "@/lib/labels";
 import { is_tauri } from "@/lib/core";
 
 interface Props {
     active: boolean;
     on_open_session: (session_id: string) => void;
+}
+
+/// A step's title is a sentence; on a marker there is room for a few words.
+function short(title: string, most = 20): string {
+    const trimmed = title.trim();
+    return trimmed.length <= most ? trimmed : `${trimmed.slice(0, most - 1)}…`;
+}
+
+/// A projected station can land outside the canvas — behind the camera, or past
+/// an edge while the view turns. Its label is only worth showing where the scene
+/// itself is.
+export function on_the_canvas(
+    mark: { x: number; y: number; visible: boolean },
+    width: number,
+    height: number,
+): boolean {
+    return (
+        mark.visible &&
+        mark.x >= 0 &&
+        mark.x <= width &&
+        mark.y >= 0 &&
+        mark.y <= height
+    );
+}
+
+/// A label is centred on what it names, which puts half of it past the edge when
+/// the thing it names is near one. The scene is narrow in most arrangements, so
+/// the label slides back inside rather than being cut in half.
+export function keep_inside(centre: number, label_width: number, canvas_width: number): number {
+    const half = label_width / 2;
+
+    if (label_width >= canvas_width) {
+        return canvas_width / 2;
+    }
+
+    return Math.min(Math.max(centre, half + 2), canvas_width - half - 2);
 }
 
 export function IslandPanel({ active, on_open_session }: Props) {
@@ -30,6 +72,8 @@ export function IslandPanel({ active, on_open_session }: Props) {
     const [message, set_message] = useState<string | null>(null);
     const [webgl] = useState(() => probe_gpu(1).renderer !== "none");
     const [dispatch, set_dispatch] = useState<DispatchState | null>(null);
+    const [plans, set_plans] = useState<Plan[]>([]);
+    const [watches, set_watches] = useState<Watch[]>([]);
     const [shots, set_shots] = useState<Array<{ seq: number; agent_id: string }>>([]);
     const [selected, set_selected] = useState<string | null>(null);
     const label_layer = useRef<HTMLDivElement>(null);
@@ -41,14 +85,18 @@ export function IslandPanel({ active, on_open_session }: Props) {
     const raycaster = useRef(new THREE.Raycaster());
 
     const refresh = useCallback(async () => {
-        const [crew, board, manager] = await Promise.all([
+        const [crew, board, manager, held, watching] = await Promise.all([
             list_agents(),
             list_tasks(),
             dispatch_status(),
+            list_plans(),
+            supervisor_watches(),
         ]);
         set_agents(crew);
         set_tasks(board.filter((task) => !task.assignee));
         set_dispatch(manager);
+        set_plans(held);
+        set_watches(watching);
 
         const fresh = (manager.events ?? []).filter((event) => event.seq > seen_seq.current);
         if (fresh.length > 0) {
@@ -205,6 +253,21 @@ export function IslandPanel({ active, on_open_session }: Props) {
         };
     }, [capture, agent_at]);
 
+    const select_agent = useCallback((id: string) => set_selected(id), []);
+
+    const finish_shot = useCallback(
+        (seq: number) => set_shots((current) => current.filter((shot) => shot.seq !== seq)),
+        [],
+    );
+
+    const hold_scene = useCallback(
+        (scene: THREE.Scene, camera: THREE.Camera, invalidate: () => void) => {
+            scene_ref.current = { scene, camera };
+            invalidate_ref.current = invalidate;
+        },
+        [],
+    );
+
     const place_labels = useCallback(
         (marks: Array<{ id: string; x: number; y: number; visible: boolean }>) => {
             const layer = label_layer.current;
@@ -212,18 +275,84 @@ export function IslandPanel({ active, on_open_session }: Props) {
                 return;
             }
 
+            // A label belongs to the scene, not to the panel: one whose station
+            // has drifted past the edge of the canvas would otherwise be drawn
+            // over the cards beside it.
+            const width = layer.clientWidth;
+            const height = layer.clientHeight;
+
+            // Measured first, moved second: two stations close together put
+            // their tags in the same place, and the one drawn last wins — which
+            // reads as a single unusable smear. Every visible tag is collected
+            // with its real size, then spread so none covers another.
+            const showing: Array<{ node: HTMLElement; label: Label }> = [];
+
             for (const mark of marks) {
-                const node = layer.querySelector<HTMLElement>(`[data-agent="${mark.id}"]`);
+                const node = mark.id.startsWith("step:")
+                    ? layer.querySelector<HTMLElement>(`[data-step="${mark.id.slice(5)}"]`)
+                    : layer.querySelector<HTMLElement>(`[data-agent="${mark.id}"]`);
                 if (!node) {
                     continue;
                 }
 
-                node.style.transform = `translate3d(${Math.round(mark.x)}px, ${Math.round(mark.y)}px, 0) translate(-50%, -100%)`;
-                node.style.visibility = mark.visible ? "visible" : "hidden";
+                const on_screen = on_the_canvas(mark, width, height);
+                node.style.visibility = on_screen ? "visible" : "hidden";
+
+                if (!on_screen) {
+                    continue;
+                }
+
+                showing.push({
+                    node,
+                    label: {
+                        id: mark.id,
+                        x: keep_inside(mark.x, node.offsetWidth, width),
+                        y: mark.y,
+                        width: node.offsetWidth,
+                        height: node.offsetHeight,
+                    },
+                });
+            }
+
+            const spots = spread_labels(
+                showing.map((held) => held.label),
+                { width, height },
+            );
+
+            for (const held of showing) {
+                const spot = spots.get(held.label.id) ?? held.label;
+                held.node.style.transform = `translate3d(${Math.round(spot.x)}px, ${Math.round(spot.y)}px, 0) translate(-50%, -100%)`;
             }
         },
         [],
     );
+
+    // What X is running, if anything: the island shows the plan being worked,
+    // and the crew alone when there is none.
+    const running = useMemo(() => plan_to_show(plans), [plans]);
+    // A step does not name who has it; the supervisor's watch does, because that
+    // is the record of the hand-off actually being followed. Both this and the
+    // step list are memoised: a fresh array on every render makes the scene's
+    // memo useless, and the island redraws for a number moving in the header.
+    const plan_steps: FlowStep[] = useMemo(() => {
+        if (!running) {
+            return [];
+        }
+
+        const hands = new Map(
+            watches
+                .filter((watch) => watch.plan_id === running.id && watch.state === "working")
+                .map((watch) => [watch.step_id, watch.agent_id]),
+        );
+
+        return running.steps.map((step) => ({
+            id: step.id,
+            title: step.title,
+            state: step.state,
+            needs: step.needs,
+            assignee: hands.get(step.id) ?? null,
+        }));
+    }, [running, watches]);
 
     const tier = tier_for(agents.length);
     const selected_agent = agents.find((agent) => agent.id === selected) ?? null;
@@ -311,7 +440,7 @@ export function IslandPanel({ active, on_open_session }: Props) {
                         set_message("That is X's lighthouse — drop a card on it to hand work over.");
                     }
                 }}
-                className="relative min-h-0 min-w-0 flex-1"
+                className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
                 onDragOver={(event) => {
                     event.preventDefault();
                     set_hovered(agent_at(event));
@@ -353,16 +482,12 @@ export function IslandPanel({ active, on_open_session }: Props) {
                         highlighted={hovered}
                         paused={dispatch?.paused ?? false}
                         shots={shots}
+                        plan_steps={plan_steps}
                         on_project={place_labels}
                         selected={selected}
-                        on_select={(id) => set_selected(id)}
-                        on_shot_done={(seq) =>
-                            set_shots((current) => current.filter((shot) => shot.seq !== seq))
-                        }
-                        on_scene={(scene, camera, invalidate) => {
-                            scene_ref.current = { scene, camera };
-                            invalidate_ref.current = invalidate;
-                        }}
+                        on_select={select_agent}
+                        on_shot_done={finish_shot}
+                        on_scene={hold_scene}
                     />
                 ) : (
                     <div className="flex h-full flex-col items-center justify-center gap-3 p-6">
@@ -376,7 +501,7 @@ export function IslandPanel({ active, on_open_session }: Props) {
                                     key={agent.id}
                                     className="border border-reef px-2 py-1 font-mono text-[11px] rounded-lg"
                                 >
-                                    {agent.name} · {agent.role} · {agent.presence}
+                                    {agent.title ?? agent.name} · {agent.role} · {agent.presence}
                                 </span>
                             ))}
                         </div>
@@ -389,11 +514,12 @@ export function IslandPanel({ active, on_open_session }: Props) {
                               <div
                                   key={agent.id}
                                   data-agent={agent.id}
-                                  className="absolute left-0 top-0 whitespace-nowrap rounded-full border border-reef px-2 py-[2px] font-mono text-[10px] text-linen"
+                                  className="absolute left-0 top-0 whitespace-nowrap rounded-full border px-2 py-[2px] font-mono text-[10px] text-linen"
                                   style={{
                                       visibility: "hidden",
                                       willChange: "transform",
                                       backgroundColor: "rgba(13, 28, 31, 0.92)",
+                                      borderColor: agent.colour ?? "#264b52",
                                   }}
                               >
                                   <span
@@ -403,7 +529,27 @@ export function IslandPanel({ active, on_open_session }: Props) {
                                               PRESENCE_COLOR[agent.presence] ?? PRESENCE_COLOR.idle,
                                       }}
                                   />
-                                  {agent.name}
+                                  {agent.title ?? agent.name}
+                              </div>
+                          ))
+                        : null}
+
+                    {webgl
+                        ? plan_steps.map((step, index) => (
+                              <div
+                                  key={step.id}
+                                  data-step={step.id}
+                                  className="absolute left-0 top-0 whitespace-nowrap rounded border px-1.5 py-[1px] font-mono text-[9px]"
+                                  style={{
+                                      visibility: "hidden",
+                                      willChange: "transform",
+                                      backgroundColor: "rgba(13, 28, 31, 0.9)",
+                                      borderColor: color_of(step.state),
+                                      color: color_of(step.state),
+                                  }}
+                                  title={step.title}
+                              >
+                                  {index + 1}. {short(step.title)}
                               </div>
                           ))
                         : null}

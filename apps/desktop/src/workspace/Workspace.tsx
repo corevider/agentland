@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 
+import type { MenuItem } from "@/components/ContextMenu";
+import { use_sideways_wheel } from "@/lib/wheel";
 import { PanelBoundary } from "@/workspace/Panel";
-import { PANELS, panel_entry } from "@/workspace/registry";
+import { PANELS, panel_entry, use_services } from "@/workspace/registry";
 import {
     add_panel,
     close_tab,
@@ -98,10 +100,76 @@ function AddMenu({
     );
 }
 
+function panel_choices(run: (panel: string) => void): MenuItem[] {
+    return PANELS.map((panel) => ({ label: panel.label, hint: panel.hint, run: () => run(panel.id) }));
+}
+
 function StackView({ stack, layout, on_layout, subtitle_for }: Props & { stack: Stack }) {
     const [over, set_over] = useState(false);
+    const strip = use_sideways_wheel<HTMLDivElement>();
+    const { open_menu } = use_services();
     const active_tab = stack.tabs[stack.active] ?? null;
     const alone = stacks(layout.root).length === 1;
+    const maximised = layout.maximised === stack.id;
+
+    // What the menu offers depends on what was right-clicked: a tab answers for
+    // its own panel, the empty strip beside it answers for the stack.
+    const stack_items = (): MenuItem[] => [
+        {
+            label: maximised ? "Restore the layout" : "Fill the window",
+            hint: "▢",
+            disabled: alone && !maximised,
+            run: () => on_layout({ ...layout, maximised: maximised ? null : stack.id }),
+        },
+        { label: "Fold down to the bar", hint: "–", run: () => on_layout(minimise(layout, stack.id)) },
+        { label: "Add a panel here", items: panel_choices((panel) => on_layout(add_panel(layout, stack.id, panel))) },
+        {
+            label: "Split beside",
+            items: panel_choices((panel) => on_layout(split_stack(layout, stack.id, "row", panel))),
+        },
+        {
+            label: "Split below",
+            items: panel_choices((panel) => on_layout(split_stack(layout, stack.id, "column", panel))),
+        },
+    ];
+
+    const tab_items = (tab: { instance: string; panel: string }, index: number): MenuItem[] => [
+        {
+            label: "Close this panel",
+            hint: "×",
+            danger: true,
+            run: () => on_layout(close_tab(layout, stack.id, tab.instance)),
+        },
+        {
+            label: "Close the other tabs",
+            disabled: stack.tabs.length < 2,
+            run: () => {
+                let next = layout;
+                for (const other of stack.tabs) {
+                    if (other.instance !== tab.instance) {
+                        next = close_tab(next, stack.id, other.instance);
+                    }
+                }
+                on_layout(next);
+            },
+        },
+        {
+            label: "Open it beside this one",
+            hint: "⊞",
+            run: () => on_layout(split_stack(layout, stack.id, "row", tab.panel)),
+        },
+        {
+            label: "Open it below this one",
+            hint: "⊟",
+            run: () => on_layout(split_stack(layout, stack.id, "column", tab.panel)),
+        },
+        {
+            label: "Show this tab",
+            disabled: index === stack.active,
+            run: () => on_layout(set_active(layout, stack.id, index)),
+        },
+        ...stack_items(),
+    ];
 
     const accept = useCallback(
         (event: React.DragEvent) => {
@@ -127,8 +195,15 @@ function StackView({ stack, layout, on_layout, subtitle_for }: Props & { stack: 
             onDragLeave={() => set_over(false)}
             onDrop={accept}
         >
-            <header data-chrome className="flex shrink-0 items-stretch gap-1 border-b border-reef/70 pr-1">
-                <div className="flex min-w-0 flex-1 items-stretch overflow-x-auto">
+            <header
+                data-chrome
+                className="flex shrink-0 items-stretch gap-1 border-b border-reef/70 pr-1"
+                onContextMenu={(event) => open_menu(event, "This panel", stack_items())}
+            >
+                <div
+                    ref={strip}
+                    className="flex min-w-0 flex-1 items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                >
                     {stack.tabs.map((tab, index) => {
                         const meta = panel_entry(tab.panel);
                         return (
@@ -140,6 +215,9 @@ function StackView({ stack, layout, on_layout, subtitle_for }: Props & { stack: 
                                     event.dataTransfer.effectAllowed = "move";
                                 }}
                                 onClick={() => on_layout(set_active(layout, stack.id, index))}
+                                onContextMenu={(event) =>
+                                    open_menu(event, meta?.label ?? tab.panel, tab_items(tab, index))
+                                }
                                 className={`group relative flex cursor-pointer items-center gap-1.5 px-2.5 py-1 ${
                                     index === stack.active ? "text-linen" : "text-shell hover:text-linen"
                                 }`}
@@ -246,6 +324,7 @@ function folded_away(node: Node, layout: Layout): boolean {
 }
 
 function NodeView({ node, layout, on_layout, subtitle_for }: Props & { node: Node }) {
+    const { open_menu } = use_services();
     const frame = useRef<HTMLDivElement>(null);
     const dragging = useRef(false);
     const [resizing, set_resizing] = useState(false);
@@ -343,6 +422,25 @@ function NodeView({ node, layout, on_layout, subtitle_for }: Props & { node: Nod
                 className={`shrink-0 rounded transition-colors ${
                     resizing ? "bg-turquoise" : "bg-reef/60 hover:bg-turquoise"
                 } ${row ? "w-1 cursor-col-resize" : "h-1 cursor-row-resize"}`}
+                onContextMenu={(event) =>
+                    open_menu(event, row ? "This divider" : "This divider", [
+                        {
+                            label: "Even split",
+                            hint: "50/50",
+                            run: () => on_layout(set_fraction(layout, node.id, 0.5)),
+                        },
+                        {
+                            label: row ? "Give the left side more" : "Give the top more",
+                            hint: "70/30",
+                            run: () => on_layout(set_fraction(layout, node.id, 0.7)),
+                        },
+                        {
+                            label: row ? "Give the right side more" : "Give the bottom more",
+                            hint: "30/70",
+                            run: () => on_layout(set_fraction(layout, node.id, 0.3)),
+                        },
+                    ])
+                }
                 onPointerDown={(event) => {
                     event.preventDefault();
                     event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -371,6 +469,7 @@ function NodeView({ node, layout, on_layout, subtitle_for }: Props & { node: Nod
 }
 
 export function Workspace({ layout, on_layout, subtitle_for }: Props) {
+    const { open_menu } = use_services();
     const maximised = layout.maximised ? find_stack(layout, layout.maximised) : null;
     const folded = stacks(layout.root).filter((entry) => is_minimised(layout, entry.id));
     const everything_folded = folded.length === stacks(layout.root).length;
@@ -415,6 +514,22 @@ export function Workspace({ layout, on_layout, subtitle_for }: Props) {
                                 className="rounded-md border border-reef px-2 py-0.5 text-[11px] text-shell hover:border-turquoise hover:text-linen"
                                 title="put it back"
                                 onClick={() => on_layout(restore(layout, entry.id))}
+                                onContextMenu={(event) =>
+                                    open_menu(event, label || "Folded panel", [
+                                        { label: "Put it back", hint: "⌃", run: () => on_layout(restore(layout, entry.id)) },
+                                        {
+                                            label: "Close it for good",
+                                            danger: true,
+                                            run: () => {
+                                                let next = restore(layout, entry.id);
+                                                for (const tab of entry.tabs) {
+                                                    next = close_tab(next, entry.id, tab.instance);
+                                                }
+                                                on_layout(next);
+                                            },
+                                        },
+                                    ])
+                                }
                             >
                                 {label || "empty"} ⌃
                             </motion.button>

@@ -1,6 +1,8 @@
+import { use_poll } from "@/lib/poll";
 import { useCallback, useEffect, useState } from "react";
 
 import {
+    shape_agent,
     dismiss_agent,
     format_elapsed,
     hire_agent,
@@ -21,6 +23,7 @@ const ROLES = ["implementer", "reviewer", "tester", "researcher", "ops", "comman
 const PRESENCE_COLOR: Record<string, string> = {
     done: "text-palm",
     working: "text-sun",
+    waiting: "text-turquoise",
     attention: "text-coral",
     idle: "text-shell",
 };
@@ -28,6 +31,7 @@ const PRESENCE_COLOR: Record<string, string> = {
 const PRESENCE_LABEL: Record<string, string> = {
     done: "finished",
     working: "working",
+    waiting: "at a prompt",
     attention: "needs you",
     idle: "idle",
 };
@@ -71,22 +75,19 @@ export function CrewPanel({ active, on_open_session }: Props) {
         }));
     }, []);
 
+    use_poll(() => {
+        list_agents().then(set_agents).catch(() => undefined);
+    }, 3000, active);
+
     useEffect(() => {
         if (!active) {
             return;
         }
 
         refresh().catch((cause) => set_error(String(cause)));
-        const handle = window.setInterval(() => {
-            list_agents().then(set_agents).catch(() => undefined);
-        }, 3000);
 
         const ticker = window.setInterval(() => set_now(Math.floor(Date.now() / 1000)), 1000);
-
-        return () => {
-            window.clearInterval(handle);
-            window.clearInterval(ticker);
-        };
+        return () => window.clearInterval(ticker);
     }, [refresh, active]);
 
     const run = useCallback(
@@ -242,9 +243,39 @@ export function CrewPanel({ active, on_open_session }: Props) {
                         key={agent.id}
                         className="flex flex-wrap items-center gap-3 border border-reef bg-lagoon px-2 py-1 font-mono text-[11px] rounded-lg"
                     >
-                        <span className="text-linen">{agent.name}</span>
+                        <span className="flex items-center gap-1.5 text-linen">
+                            {agent.colour ? (
+                                <span
+                                    className="inline-block size-[9px] rounded-full"
+                                    style={{ backgroundColor: agent.colour }}
+                                    title={`known by ${agent.colour}`}
+                                />
+                            ) : null}
+                            {agent.name}
+                        </span>
                         <span className="text-shell">{agent.role}</span>
-                        <span className="text-turquoise">{agent.engine_id}</span>
+                        <span className="text-turquoise">
+                            {agent.engine_id}
+                            {agent.model ? ` · ${agent.model}` : ""}
+                        </span>
+                        <select
+                            className={`rounded border border-reef bg-lagoon-deep px-1 py-[1px] font-mono text-[10px] ${
+                                agent.permissions === "bypassPermissions" ? "text-coral" : "text-shade"
+                            }`}
+                            title="how much this agent does without asking — yours to set"
+                            value={agent.permissions ?? ""}
+                            onChange={(event) => {
+                                shape_agent(agent.id, { permissions: event.target.value })
+                                    .then(() => refresh())
+                                    .catch((cause) => set_error(String(cause)));
+                            }}
+                        >
+                            <option value="">role default</option>
+                            <option value="plan">plan · reads</option>
+                            <option value="default">default · asks first</option>
+                            <option value="acceptEdits">acceptEdits · writes, asks to run</option>
+                            <option value="bypassPermissions">bypassPermissions · never asks</option>
+                        </select>
                         <span className="text-shell">
                             {agent.repository_id}/{agent.worktree}
                         </span>

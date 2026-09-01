@@ -4,6 +4,9 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
+import { ReadablePane } from "@/components/ReadablePane";
+import { upgrade_soon } from "@/lib/gpu_queue";
+import { use_poll } from "@/lib/poll";
 import {
     format_bytes,
     format_elapsed,
@@ -13,6 +16,10 @@ import {
     write_input,
     type SessionInfo,
 } from "@/lib/core";
+
+/// Its own kind, so a task card dropped on the island and a terminal dragged
+/// across the grid are never mistaken for one another.
+export const PANE_DRAG = "text/agentland-pane";
 
 const TAIL_LIMIT_BYTES = 48 * 1024;
 const QUEUE_LIMIT_BYTES = TAIL_LIMIT_BYTES * 4;
@@ -44,6 +51,15 @@ interface Props {
     zoomed?: boolean;
     on_branch?: (session: SessionInfo) => void;
     on_tear_out?: (session: SessionInfo) => void;
+    stats_from?: SessionInfo | null;
+    now_from?: number;
+    readable?: boolean;
+    on_readable?: (wanted: boolean) => void;
+    on_menu?: (event: React.MouseEvent, where: "header" | "body") => void;
+    /// Reordering: the header is the handle, the whole card is the target.
+    on_pick_up?: (id: string) => void;
+    on_drop_on?: (moved: string, target: string) => void;
+    wanted?: boolean;
     focused: boolean;
     on_focus: (id: string) => void;
     on_metrics: (id: string, metrics: PaneMetrics) => void;
@@ -70,8 +86,12 @@ function collapse_to_tail(data: Uint8Array): Uint8Array {
     return result;
 }
 
-export function TerminalPane({ session, focused, on_focus, on_metrics, label, on_close, on_zoom, zoomed, on_branch, on_tear_out}: Props) {
+export function TerminalPane({ session, focused, on_focus, on_metrics, label, on_close, on_zoom, zoomed, on_branch, on_tear_out, readable = false, on_readable, on_menu, stats_from, now_from, on_pick_up, on_drop_on, wanted = false }: Props) {
     const host_ref = useRef<HTMLDivElement>(null);
+    const screen_ref = useRef<Terminal | null>(null);
+    const gpu_ref = useRef<WebglAddon | null>(null);
+    const readable_ref = useRef(readable);
+    readable_ref.current = readable;
     const focused_ref = useRef(focused);
     const [renderer, set_renderer] = useState("canvas");
     const [stats, set_stats] = useState<SessionInfo | null>(null);
@@ -79,27 +99,20 @@ export function TerminalPane({ session, focused, on_focus, on_metrics, label, on
 
     focused_ref.current = focused;
 
-    useEffect(() => {
-        let cancelled = false;
-
-        const poll = () => {
-            session_stats(session.id)
-                .then((value) => {
-                    if (!cancelled) {
-                        set_stats(value);
-                    }
-                })
-                .catch(() => undefined);
+    // A grid of panes shares one reading of the core and one clock rather than
+    // each pane keeping its own: eight panes were eight requests and eight
+    // re-renders a second, for one liveness dot and one elapsed time each.
+    use_poll(() => {
+        if (!stats_from) {
+            session_stats(session.id).then(set_stats).catch(() => undefined);
+        }
+        if (now_from === undefined) {
             set_now(Math.floor(Date.now() / 1000));
-        };
+        }
+    }, 1000, stats_from === undefined || now_from === undefined);
 
-        poll();
-        const handle = window.setInterval(poll, 1000);
-        return () => {
-            cancelled = true;
-            window.clearInterval(handle);
-        };
-    }, [session.id]);
+    const shown_stats = stats_from ?? stats;
+    const shown_now = now_from ?? now;
 
     useEffect(() => {
         const host = host_ref.current;
@@ -121,42 +134,53 @@ export function TerminalPane({ session, focused, on_focus, on_metrics, label, on
             theme: { background: "#0d1315", foreground: "#d6e2e6" },
         });
 
+        screen_ref.current = terminal;
+
         let disposed = false;
         const fit = new FitAddon();
         terminal.loadAddon(fit);
-        terminal.open(host);
 
         // Measured, not assumed: giving every pane a context beats reserving one
         // for whichever pane is being read. Eight panes on WebGL held 60 fps with
         // a 22 ms worst frame; handing seven of them to canvas dropped that to 49
         // with a 1357 ms stall, so the four-context probe does not bind here.
+        //
+        // What does bind is when the context arrives. Creating one costs about
+        // 190 ms, so a pane opens on the canvas renderer and is upgraded a moment
+        // later, one pane at a time.
         let webgl: WebglAddon | null = null;
 
-        try {
-            const addon = new WebglAddon();
-            addon.onContextLoss(() => {
-                addon.dispose();
-                webgl = null;
-                metrics.renderer = "canvas (context lost)";
+        const take_gpu = () => {
+            if (disposed || readable_ref.current) {
+                return;
+            }
+
+            try {
+                const addon = new WebglAddon();
+                addon.onContextLoss(() => {
+                    addon.dispose();
+                    webgl = null;
+                    gpu_ref.current = null;
+                    metrics.renderer = "canvas (context lost)";
+                    set_renderer("canvas");
+                });
+                terminal.loadAddon(addon);
+                webgl = addon;
+                gpu_ref.current = addon;
+                metrics.renderer = "webgl";
+                set_renderer("webgl");
+            } catch (cause) {
+                const reason = cause instanceof Error ? cause.message : String(cause);
+                metrics.renderer = `canvas (${reason.slice(0, 60)})`;
                 set_renderer("canvas");
-            });
-            terminal.loadAddon(addon);
-            webgl = addon;
-            metrics.renderer = "webgl";
-            set_renderer("webgl");
-        } catch (cause) {
-            const reason = cause instanceof Error ? cause.message : String(cause);
-            metrics.renderer = `canvas (${reason.slice(0, 60)})`;
-            set_renderer("canvas");
-        }
+            }
+        };
 
-        fit.fit();
-
+        let cancel_upgrade = () => undefined as void;
         let queue: Uint8Array[] = [];
         let queued_bytes = 0;
         let writing = false;
         let frame_handle = 0;
-        let last_background_flush = 0;
 
         const flush = () => {
             if (writing || queued_bytes === 0) {
@@ -178,31 +202,39 @@ export function TerminalPane({ session, focused, on_focus, on_metrics, label, on
             });
         };
 
-        const tick = (now: number) => {
-            if (disposed) {
+        // Nothing to draw when nothing arrives: a pane that asks for a frame
+        // every frame keeps the whole page pipeline awake, and eight idle panes
+        // cost more than the terminals they are showing.
+        const schedule = () => {
+            if (disposed || frame_handle !== 0 || queued_bytes === 0) {
                 return;
             }
 
             if (focused_ref.current) {
-                flush();
-            } else if (now - last_background_flush >= BACKGROUND_FLUSH_MS) {
-                last_background_flush = now;
-                flush();
+                frame_handle = requestAnimationFrame(() => {
+                    frame_handle = 0;
+                    flush();
+                    schedule();
+                });
+                return;
             }
 
-            frame_handle = requestAnimationFrame(tick);
+            frame_handle = window.setTimeout(() => {
+                frame_handle = 0;
+                flush();
+                schedule();
+            }, BACKGROUND_FLUSH_MS);
         };
-
-        frame_handle = requestAnimationFrame(tick);
 
         const flush_metrics = window.setInterval(() => {
             on_metrics(session.id, { ...metrics });
             metrics.bytes = 0;
-        }, 500);
+        }, 1000);
 
         let socket: WebSocket | null = null;
 
-        open_stream(session.id).then((connection) => {
+        const connect = () =>
+            open_stream(session.id).then((connection) => {
             if (disposed) {
                 connection.close();
                 return;
@@ -222,6 +254,8 @@ export function TerminalPane({ session, focused, on_focus, on_metrics, label, on
                 metrics.bytes += payload.byteLength;
                 queue.push(payload);
                 queued_bytes += payload.byteLength;
+
+                schedule();
 
                 if (queued_bytes > QUEUE_LIMIT_BYTES) {
                     const merged = concat(queue, queued_bytes);
@@ -245,25 +279,73 @@ export function TerminalPane({ session, focused, on_focus, on_metrics, label, on
                 void resize_session(session.id, terminal.cols, terminal.rows);
             }
         });
-        observer.observe(host);
+
+        // The heavy half of a pane — building the renderer, measuring the font,
+        // laying out the grid — waits a step, so a page of eight appears at once
+        // and fills in behind itself instead of blocking for 600 ms.
+        const cancel_open = upgrade_soon(() => {
+            if (disposed) {
+                return;
+            }
+
+            terminal.open(host);
+            fit.fit();
+            observer.observe(host);
+            void connect();
+            cancel_upgrade = upgrade_soon(take_gpu);
+        });
 
         return () => {
             disposed = true;
             cancelAnimationFrame(frame_handle);
+            window.clearTimeout(frame_handle);
+            cancel_open();
+            cancel_upgrade();
             window.clearInterval(flush_metrics);
             observer.disconnect();
             webgl?.dispose();
+            gpu_ref.current = null;
             input_disposable.dispose();
             socket?.close();
+            screen_ref.current = null;
             terminal.dispose();
         };
     }, [session.id, session.kind, on_metrics]);
 
-    const state = !stats
+    useEffect(() => {
+        if (!readable) {
+            return;
+        }
+
+        // A pane being read as text is not being drawn, and a GL context with a
+        // glyph atlas is the most expensive thing in it. The emulator keeps its
+        // buffer either way — that is what the readable view reads.
+        gpu_ref.current?.dispose();
+        gpu_ref.current = null;
+        set_renderer("canvas");
+
+        return () => {
+            const terminal = screen_ref.current;
+            if (!terminal) {
+                return;
+            }
+
+            try {
+                const addon = new WebglAddon();
+                terminal.loadAddon(addon);
+                gpu_ref.current = addon;
+                set_renderer("webgl");
+            } catch {
+                set_renderer("canvas");
+            }
+        };
+    }, [readable]);
+
+    const state = !shown_stats
         ? "opening"
-        : !stats.alive
+        : !shown_stats.alive
           ? "exited"
-          : now - stats.last_output_at <= 2
+          : now - shown_stats.last_output_at <= 2
             ? "working"
             : "waiting";
 
@@ -279,28 +361,61 @@ export function TerminalPane({ session, focused, on_focus, on_metrics, label, on
     return (
         <div
             className={`flex min-h-0 flex-col overflow-hidden rounded-lg border bg-lagoon-deep ${
-                focused ? "border-turquoise" : "border-reef"
+                wanted ? "border-sun" : focused ? "border-turquoise" : "border-reef"
             }`}
             onMouseDown={() => on_focus(session.id)}
+            onDragOver={(event) => {
+                if (on_drop_on && event.dataTransfer.types.includes(PANE_DRAG)) {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                }
+            }}
+            onDrop={(event) => {
+                if (!on_drop_on) {
+                    return;
+                }
+
+                // The dropped terminal names itself in the event; asking React
+                // what was picked up would be asking a second source of truth.
+                const moved = event.dataTransfer.getData(PANE_DRAG);
+                if (moved) {
+                    event.preventDefault();
+                    on_drop_on(moved, session.id);
+                }
+            }}
+            onContextMenu={(event) => on_menu?.(event, "body")}
         >
-            <div className="flex shrink-0 items-center gap-2 border-b border-reef/70 px-2 py-1">
+            <div
+                className={`flex shrink-0 items-center gap-2 border-b border-reef/70 px-2 py-1 ${
+                    on_pick_up ? "cursor-grab active:cursor-grabbing" : ""
+                }`}
+                draggable={Boolean(on_pick_up)}
+                onDragStart={(event) => {
+                    event.dataTransfer.setData(PANE_DRAG, session.id);
+                    event.dataTransfer.effectAllowed = "move";
+                    on_pick_up?.(session.id);
+                }}
+                onDragEnd={() => on_pick_up?.("")}
+                onContextMenu={(event) => on_menu?.(event, "header")}
+                title={on_pick_up ? "drag this bar to move the terminal" : undefined}
+            >
                 <span className={`size-[7px] shrink-0 rounded-full ${tint}`} title={state} />
                 <span className="truncate text-[12px] text-linen">{label ?? session.id}</span>
                 <span className="shrink-0 rounded bg-lagoon px-1 py-[1px] font-mono text-[9px] text-shade">
                     {session.command.split(/\s+/)[0]}
                 </span>
 
-                {stats ? (
+                {shown_stats ? (
                     <span className="ml-auto flex shrink-0 items-center gap-2 font-mono text-[10px] tabular-nums text-shade">
-                        {stats.context_percent !== null ? (
-                            <span className="text-turquoise">{stats.context_percent}% ctx</span>
-                        ) : stats.context_tokens !== null ? (
+                        {shown_stats.context_percent !== null ? (
+                            <span className="text-turquoise">{shown_stats.context_percent}% ctx</span>
+                        ) : shown_stats.context_tokens !== null ? (
                             <span className="text-turquoise" title="what the engine reports in context">
-                                {format_tokens(stats.context_tokens)} ctx
+                                {format_tokens(shown_stats.context_tokens)} ctx
                             </span>
                         ) : null}
-                        <span title={`${stats.lines.toLocaleString()} lines since start`}>
-                            {format_bytes(stats.bytes)}
+                        <span title={`${shown_stats.lines.toLocaleString()} lines since start`}>
+                            {format_bytes(shown_stats.bytes)}
                         </span>
                     </span>
                 ) : null}
@@ -315,6 +430,21 @@ export function TerminalPane({ session, focused, on_focus, on_metrics, label, on
                         }}
                     >
                         +
+                    </button>
+                ) : null}
+
+                {on_readable ? (
+                    <button
+                        className={`shrink-0 rounded px-1 font-mono text-[11px] ${
+                            readable ? "text-turquoise" : "text-shade hover:text-turquoise"
+                        }`}
+                        title={readable ? "back to the terminal" : "read it as text, without the redrawing"}
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            on_readable(!readable);
+                        }}
+                    >
+                        ¶
                     </button>
                 ) : null}
 
@@ -358,15 +488,27 @@ export function TerminalPane({ session, focused, on_focus, on_metrics, label, on
                 ) : null}
             </div>
 
-            <div ref={host_ref} className="min-h-0 flex-1 overflow-hidden p-1" />
+            <div className="relative min-h-0 flex-1">
+                <div
+                    ref={host_ref}
+                    className={`absolute inset-0 overflow-hidden p-1 ${
+                        readable ? "pointer-events-none opacity-0" : ""
+                    }`}
+                />
+                {readable ? (
+                    <div className="absolute inset-0 flex flex-col bg-lagoon-deep">
+                        <ReadablePane screen={screen_ref} />
+                    </div>
+                ) : null}
+            </div>
 
             <div className="flex shrink-0 items-center gap-2 border-t border-reef/70 px-2 py-[3px] font-mono text-[10px] text-shade">
                 <span className={state === "working" ? "text-sun" : state === "exited" ? "text-coral" : "text-shell"}>
                     {state}
                 </span>
-                {stats ? <span className="tabular-nums">{format_elapsed(now - stats.last_output_at)}</span> : null}
+                {shown_stats ? <span className="tabular-nums">{format_elapsed(shown_now - shown_stats.last_output_at)}</span> : null}
                 <span className="ml-auto truncate">
-                    {focused ? "live" : `${BACKGROUND_FLUSH_MS}ms`} · {renderer}
+                    {readable ? "readable · text only" : `${focused ? "live" : `${BACKGROUND_FLUSH_MS}ms`} · ${renderer}`}
                 </span>
             </div>
         </div>

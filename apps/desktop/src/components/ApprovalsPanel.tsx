@@ -1,3 +1,6 @@
+import { use_poll } from "@/lib/poll";
+
+import { exactly, when } from "@/lib/when";
 import { useCallback, useEffect, useState } from "react";
 
 import { answer_approval, list_approvals, type Approval } from "@/lib/core";
@@ -13,15 +16,9 @@ export function ApprovalsPanel({ active }: { active: boolean }) {
         set_approvals(await list_approvals());
     }, []);
 
-    useEffect(() => {
-        if (!active) {
-            return;
-        }
-
+    use_poll(() => {
         refresh().catch((cause) => set_notice(cause instanceof Error ? cause.message : String(cause)));
-        const handle = window.setInterval(() => refresh().catch(() => undefined), 3000);
-        return () => window.clearInterval(handle);
-    }, [active, refresh]);
+    }, 3000, active);
 
     const answer = useCallback(
         (approval: Approval, approved: boolean) => {
@@ -83,8 +80,12 @@ export function ApprovalsPanel({ active }: { active: boolean }) {
                                 ) : null}
 
                                 <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                                    <span className="font-mono text-[10px] text-shade">
-                                        {agent ? agent.name : approval.requested_by} asked
+                                    <span
+                                        className="font-mono text-[10px] text-shade"
+                                        title={exactly(approval.at ?? 0)}
+                                    >
+                                        {agent ? agent.name : approval.requested_by} asked{" "}
+                                        {when(approval.at ?? 0, Math.floor(Date.now() / 1000))}
                                     </span>
                                     {agent?.session_id ? (
                                         <button
@@ -125,7 +126,7 @@ export function ApprovalsPanel({ active }: { active: boolean }) {
                 </div>
             </section>
 
-            <section className="min-h-0">
+            <section className="shrink-0">
                 <h3 className="mb-1 font-mono text-[9px] uppercase tracking-[0.14em] text-shade">
                     Already answered · {answered.length}
                 </h3>
@@ -152,6 +153,10 @@ export function ApprovalsPanel({ active }: { active: boolean }) {
                             </div>
                             <div className="mt-0.5 font-mono text-[10px] text-shade">
                                 {asker(approval.requested_by)?.name ?? approval.requested_by}
+                                {" · "}
+                                <span title={exactly(approval.answered_at ?? 0)}>
+                                    answered {when(approval.answered_at ?? 0, Math.floor(Date.now() / 1000))}
+                                </span>
                                 {approval.answered_note ? ` · you said: ${approval.answered_note}` : ""}
                             </div>
                         </article>

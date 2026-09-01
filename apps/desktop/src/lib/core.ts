@@ -208,10 +208,26 @@ export function list_repos(): Promise<Repository[]> {
     return request<Repository[]>("/repos");
 }
 
-export function add_repo(path: string): Promise<Repository> {
+/// Take a folder as a project. `start_git` says yes to starting a repository in
+/// a folder that is not one yet — it writes to the folder, so the panel asks
+/// before passing it.
+export function add_repo(path: string, start_git = false): Promise<Repository> {
     return request<Repository>("/repos", {
         method: "POST",
-        body: JSON.stringify({ path }),
+        body: JSON.stringify({ path, start_git }),
+    });
+}
+
+/// Stop tracking a project. The folder on disk is left alone.
+export async function forget_repo(id: string): Promise<void> {
+    await request<void>(`/repos/${id}`, { method: "DELETE" });
+}
+
+/// Clone a repository into a folder the person picked.
+export function clone_repo(url: string, into: string): Promise<Repository> {
+    return request<Repository>("/repos", {
+        method: "POST",
+        body: JSON.stringify({ url, into }),
     });
 }
 
@@ -229,6 +245,132 @@ export function create_worktree(repository_id: string, name: string): Promise<Wo
 export function remove_worktree(repository_id: string, name: string, force: boolean): Promise<void> {
     const suffix = force ? "?force=true" : "";
     return request<void>(`/repos/${repository_id}/worktrees/${name}${suffix}`, { method: "DELETE" });
+}
+
+export interface Worktree {
+    name: string;
+    repository_id: string;
+    path: string;
+    branch: string;
+    port: number;
+}
+
+/// What a new project could be made of, and what that is today.
+export interface Starter {
+    id: string;
+    label: string;
+    what: string;
+    why: string;
+    needs: string[];
+    installed: boolean;
+    missing: string[];
+    /// The headline package's version, asked of the tool that would install it.
+    /// Null when nothing could be asked — never a number the app wrote down.
+    version: string | null;
+    /// Exactly what would run. Shown before anything does: this downloads and
+    /// executes other people's code.
+    commands: string[];
+    audit: string | null;
+    audit_installed: boolean;
+    /// What can be put on top of this one.
+    extras: StarterExtra[];
+}
+
+/// Something added to a starter — authentication, and whatever the catalog
+/// grows next.
+export interface StarterExtra {
+    id: string;
+    label: string;
+    what: string;
+    why: string;
+    version: string | null;
+    commands: string[];
+    /// Each name, and whether the core generates it rather than leaving it for
+    /// a person to paste in.
+    env: [string, boolean][];
+    env_file: string;
+}
+
+export function list_starters(name?: string): Promise<Starter[]> {
+    const suffix = name ? `?name=${encodeURIComponent(name)}` : "";
+    return request<Starter[]>(`/stacks${suffix}`);
+}
+
+/// What the ecosystem's own auditor found. `ran: false` means nobody looked,
+/// which is not the same as nothing being wrong.
+export interface Vetting {
+    tool: string;
+    summary: string;
+    ran: boolean;
+}
+
+/// What a project needs to begin: somewhere to work, and something to do.
+export interface Beginning {
+    goal: string;
+    path?: string;
+    url?: string;
+    into?: string;
+    /// Say yes to `git init` in a folder that is not a repository yet.
+    start_git?: boolean;
+    /// A project that does not exist yet: what to make it out of, and what to
+    /// call it. `path` is then the folder it goes under.
+    stack?: string;
+    name?: string;
+    extras?: string[];
+    workspace?: string;
+    worktree?: string;
+    engine_id?: string;
+    commander?: string;
+}
+
+export interface Begun {
+    workspace: Workspace;
+    repository: Repository;
+    worktree: Worktree;
+    commander: Agent;
+    /// What the core did, in order, so the panel can say it back rather than
+    /// claiming more than happened.
+    did: string[];
+    /// Only on a project this call made — an existing repository is not audited
+    /// because somebody opened it.
+    vetting?: Vetting;
+}
+
+/// Open a project, put a crew in it and give the commander the goal, in one call.
+///
+/// Running it again on a project that is already open is not a mistake: whatever
+/// is already there is found rather than made, and the commander is handed the
+/// new goal.
+export interface Ignited {
+    commander: Agent;
+    worktree: Worktree;
+    did: string[];
+}
+
+/// Put a project's commander at its desk and set it going.
+///
+/// The same call whether there is nobody yet, somebody stopped, or somebody
+/// already working — the core decides which of the three it is.
+export function ignite_commander(repository_id: string, brief?: string): Promise<Ignited> {
+    return request<Ignited>(`/repos/${encodeURIComponent(repository_id)}/commander`, {
+        method: "POST",
+        body: JSON.stringify(brief ? { brief } : {}),
+    });
+}
+
+/// Merge a worktree's pull request and finish the card with it.
+///
+/// A person's call: it puts code in front of everyone and no button takes it
+/// back.
+export function merge_worktree(repository_id: string, name: string, task_id: string): Promise<Task> {
+    return request<Task>(
+        `/repos/${encodeURIComponent(repository_id)}/worktrees/${encodeURIComponent(name)}/merge`,
+        { method: "POST", body: JSON.stringify({ task_id }) },
+    );
+}
+
+export function begin_project(beginning: Beginning): Promise<Begun> {
+    return request<Begun>("/start", { method: "POST", body: JSON.stringify(beginning) });
 }
 
 export type ServiceState = "starting" | "ready" | "unreachable" | "stopped";
@@ -271,7 +413,7 @@ export interface Engine {
 }
 
 export type AgentState = "idle" | "working" | "done" | "offline";
-export type Presence = "idle" | "working" | "done" | "attention";
+export type Presence = "idle" | "working" | "waiting" | "done" | "attention";
 
 export interface Agent {
     id: string;
@@ -285,6 +427,13 @@ export interface Agent {
     presence: Presence;
     since: number;
     reason: string;
+    /// What the commander decided: the model it runs on, what its pane is called
+    /// and the colour the crew knows it by. Null means nobody has decided.
+    model: string | null;
+    title: string | null;
+    colour: string | null;
+    /// How much this agent may do without asking; null means its role's default.
+    permissions: string | null;
 }
 
 export interface HireRequest {
@@ -350,6 +499,7 @@ export interface MailMessage {
     to: string;
     text: string;
     delivered: boolean;
+    at?: number;
 }
 
 export interface MailPolicy {
@@ -380,16 +530,32 @@ export function set_mail_policy(policy: MailPolicy): Promise<MailPolicy> {
     });
 }
 
-export type MemoryScope = "workspace" | "repository" | "agent";
+/// Where a memory belongs, in the vault's own words: "shared",
+/// "workspace:<id>", "project:<workspace>/<project>". It is the folder the note
+/// is written into, so the scope is visible on disk.
+export type MemoryScope = string;
 
 export interface Memory {
+    /// The note's slug in the vault, e.g. `atolye/svc-demo/memory/the-dev-server-reads-port`.
     id: string;
     text: string;
-    scope: MemoryScope;
-    scope_id: string;
+    /// The folder it lives in, without the `memory/` leaf.
+    scope: string;
     proposed_by: string;
+    /// When it was written down, in seconds.
+    written_at: number;
+    /// The memory this one replaces, by slug, when it replaces one.
+    supersedes?: string | null;
+    /// Approved once, then taken back out. Kept, and not told to anyone.
+    retired?: boolean;
     approved: boolean;
     masked: boolean;
+}
+
+/// What answering a memory did: the memory, and the one it took out of the
+/// crew's brief by superseding it.
+export interface Answered extends Memory {
+    replaced: string | null;
 }
 
 export function list_memories(): Promise<Memory[]> {
@@ -399,24 +565,25 @@ export function list_memories(): Promise<Memory[]> {
 export function propose_memory(
     text: string,
     scope: MemoryScope,
-    scope_id: string,
     proposed_by: string,
 ): Promise<Memory> {
     return request<Memory>("/memories", {
         method: "POST",
-        body: JSON.stringify({ text, scope, scope_id, proposed_by }),
+        body: JSON.stringify({ text, scope, proposed_by }),
     });
 }
 
-export function answer_memory(id: string, approved: boolean): Promise<Memory> {
-    return request<Memory>(`/memories/${encodeURIComponent(id)}/approve`, {
+/// Say yes or no to a memory. It is addressed by its note's slug, which has
+/// slashes in it, so the slug travels in the body rather than the path.
+export function answer_memory(slug: string, approved: boolean): Promise<Answered> {
+    return request<Answered>("/memories/answer", {
         method: "POST",
-        body: JSON.stringify({ approved }),
+        body: JSON.stringify({ slug, approved }),
     });
 }
 
-export function forget_memory(id: string): Promise<void> {
-    return request<void>(`/memories/${encodeURIComponent(id)}`, { method: "DELETE" });
+export function forget_memory(slug: string): Promise<void> {
+    return request<void>(`/memories/${slug}`, { method: "DELETE" });
 }
 
 export interface Recalled {
@@ -497,6 +664,7 @@ export interface DispatchEvent {
     agent_id: string;
     task_id: string;
     reason: string;
+    at?: number;
 }
 
 export interface DispatchCaps {
@@ -586,6 +754,91 @@ export function list_agents(): Promise<Agent[]> {
     return request<Agent[]>("/agents");
 }
 
+/// What the commander decided about an agent. Fields left out stay as they were.
+export interface Note {
+    /// null for an ordinary note; false for a memory waiting on you; true for
+    /// one the crew may be told without looking it up.
+    approved?: boolean | null;
+    slug: string;
+    title: string;
+    tags: string[];
+    written_by: string;
+    written_at: number;
+    body: string;
+    links: string[];
+    backlinks: string[];
+}
+
+export interface Notice {
+    id: number;
+    kind: "waiting" | "finished" | "trouble" | "word";
+    text: string;
+    workspace_id: string | null;
+    repository_id: string | null;
+    agent_id: string | null;
+    opens: string | null;
+    at: number;
+    seen: boolean;
+}
+
+export interface NoticeReport {
+    notices: Notice[];
+    unseen: number;
+    loud: boolean;
+}
+
+export function read_notices(limit = 40): Promise<NoticeReport> {
+    return request<NoticeReport>(`/notices?limit=${limit}`);
+}
+
+export function mark_notices_seen(ids: number[] = []): Promise<void> {
+    return request<void>("/notices", { method: "POST", body: JSON.stringify({ ids }) });
+}
+
+export interface VaultReport {
+    path: string;
+    notes: number;
+}
+
+export function read_vault(): Promise<VaultReport> {
+    return request<VaultReport>("/vault");
+}
+
+export function list_notes(query?: string, limit = 40): Promise<Note[]> {
+    const search = new URLSearchParams({ limit: String(limit) });
+    if (query && query.trim()) {
+        search.set("q", query.trim());
+    }
+    return request<Note[]>(`/notes?${search.toString()}`);
+}
+
+export function read_note(slug: string): Promise<Note> {
+    return request<Note>(`/notes/${encodeURIComponent(slug)}`);
+}
+
+export function write_note(draft: {
+    title: string;
+    body: string;
+    tags?: string[];
+    written_by?: string;
+}): Promise<Note> {
+    return request<Note>("/notes", { method: "POST", body: JSON.stringify(draft) });
+}
+
+export function forget_note(slug: string): Promise<void> {
+    return request<void>(`/notes/${encodeURIComponent(slug)}`, { method: "DELETE" });
+}
+
+export function shape_agent(
+    id: string,
+    wanted: { model?: string; title?: string; colour?: string; permissions?: string },
+): Promise<Agent> {
+    return request<Agent>(`/agents/${encodeURIComponent(id)}`, {
+        method: "POST",
+        body: JSON.stringify(wanted),
+    });
+}
+
 export function hire_agent(payload: HireRequest): Promise<Agent> {
     return request<Agent>("/agents", { method: "POST", body: JSON.stringify(payload) });
 }
@@ -602,14 +855,24 @@ export function dismiss_agent(id: string): Promise<void> {
     return request<void>(`/agents/${id}`, { method: "DELETE" });
 }
 
-export type Column = "backlog" | "assigned" | "working" | "review" | "done";
+export type Column = "backlog" | "assigned" | "working" | "review" | "ready" | "done";
 
 export interface Evidence {
-    kind: string;
+    kind: "commit" | "diff" | "pull_request" | "note" | "finished" | string;
     [key: string]: unknown;
 }
 
+/// A piece of evidence and who put it there. Entries written before anyone
+/// signed their work come back as `someone` with no time on them.
+export interface Entry {
+    what: Evidence;
+    by: string;
+    at: number;
+}
+
 export interface Task {
+    /// When the card was written. Zero for cards from before this was recorded.
+    at?: number;
     id: string;
     title: string;
     body: string;
@@ -618,7 +881,7 @@ export interface Task {
     assignee: string | null;
     worktree: string | null;
     branch: string | null;
-    evidence: Evidence[];
+    evidence: Entry[];
 }
 
 export interface CommitInfo {
@@ -672,6 +935,40 @@ export function delete_task(id: string): Promise<void> {
 
 export function review_worktree(repository_id: string, worktree: string): Promise<Review> {
     return request<Review>(`/repos/${repository_id}/worktrees/${worktree}/review`);
+}
+
+export interface Listing {
+    root: string;
+    path: string;
+    entries: { name: string; kind: "dir" | "file"; size: number }[];
+}
+
+export interface FileText {
+    path: string;
+    text: string;
+    bytes: number;
+    truncated: boolean;
+}
+
+/// What is in a folder of a project, or of one of its worktrees.
+///
+/// A project's folder and the folder an agent works in are two different places,
+/// so which one is being read is always said out loud: no worktree means the
+/// project's own checkout.
+export function list_files(repository_id: string, path: string, worktree?: string | null): Promise<Listing> {
+    const query = new URLSearchParams({ path });
+    if (worktree) {
+        query.set("worktree", worktree);
+    }
+    return request<Listing>(`/repos/${repository_id}/files?${query.toString()}`);
+}
+
+export function read_file(repository_id: string, path: string, worktree?: string | null): Promise<FileText> {
+    const query = new URLSearchParams({ path });
+    if (worktree) {
+        query.set("worktree", worktree);
+    }
+    return request<FileText>(`/repos/${repository_id}/file?${query.toString()}`);
 }
 
 export function open_pull_request(
@@ -755,14 +1052,22 @@ export function supervisor_watches(): Promise<Watch[]> {
     return request<Watch[]>("/supervisor");
 }
 
-export function list_windows(): Promise<Record<string, string>> {
-    return request<Record<string, string>>("/ui/windows");
+export interface PaneView {
+    holder: string;
+    readable: boolean;
 }
 
-export function set_window(session_id: string, holder: string): Promise<Record<string, string>> {
-    return request<Record<string, string>>("/ui/windows", {
+export function list_windows(): Promise<Record<string, PaneView>> {
+    return request<Record<string, PaneView>>("/ui/windows");
+}
+
+export function set_window(
+    session_id: string,
+    change: { holder?: string; readable?: boolean },
+): Promise<Record<string, PaneView>> {
+    return request<Record<string, PaneView>>("/ui/windows", {
         method: "POST",
-        body: JSON.stringify({ session_id, holder }),
+        body: JSON.stringify({ session_id, ...change }),
     });
 }
 
@@ -788,6 +1093,10 @@ export interface Approval {
     requested_by: string;
     verdict: "pending" | "approved" | "rejected";
     answered_note: string | null;
+    /// When it was asked, and when it was answered. Zero where it predates the
+    /// app recording either.
+    at?: number;
+    answered_at?: number;
 }
 
 export function list_approvals(): Promise<Approval[]> {

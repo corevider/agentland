@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
+import { due_in, exactly, when } from "@/lib/when";
+
 import {
     create_routine,
     delete_routine,
@@ -131,7 +133,7 @@ export function RoutinesPanel({ active }: { active: boolean }) {
                 </div>
             ) : null}
 
-            <section className="min-h-0">
+            <section className="shrink-0">
                 {routines.length === 0 ? (
                     <p className="font-mono text-[10px] text-shade">
                         No routine yet. A routine gives an agent the same brief on a timer, and disables
@@ -182,10 +184,23 @@ export function RoutinesPanel({ active }: { active: boolean }) {
                                 <div className="mt-0.5 text-[11px] text-driftwood">{routine.brief}</div>
 
                                 <div className="mt-0.5 flex flex-wrap gap-2 font-mono text-[10px] text-shade">
-                                    <span>
+                                    <span title={exactly(routine.last_run)}>
                                         {routine.last_run === 0
                                             ? "never run"
-                                            : `last ran ${format_elapsed(now - routine.last_run)} ago`}
+                                            : `last ran ${when(routine.last_run, now)}`}
+                                    </span>
+                                    <span
+                                        title={
+                                            routine.last_run === 0
+                                                ? "it runs on the next tick"
+                                                : exactly(routine.last_run + routine.every_minutes * 60)
+                                        }
+                                    >
+                                        {routine.enabled
+                                            ? routine.last_run === 0
+                                                ? "due now"
+                                                : `next ${due_in(routine.last_run + routine.every_minutes * 60, now)}`
+                                            : "paused"}
                                     </span>
                                     {overdue && routine.enabled ? <span className="text-sun">due</span> : null}
                                     {routine.consecutive_failures > 0 ? (

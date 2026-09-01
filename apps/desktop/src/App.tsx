@@ -20,12 +20,15 @@ import { PreviewPanel } from "@/components/PreviewPanel";
 import { SkillsPanel } from "@/components/SkillsPanel";
 import { CrewPanel } from "@/components/CrewPanel";
 import { RepoPanel } from "@/components/RepoPanel";
+import { NoticeBell } from "@/components/NoticeBell";
+import { Jumper, PlaceTrail } from "@/components/Jumper";
 import { SettingsPage } from "@/components/SettingsPage";
 import { TerminalPane, type PaneMetrics } from "@/components/TerminalPane";
 import {
     is_tauri,
     kill_session,
     list_agents,
+    list_repos,
     list_tasks,
     list_workspaces,
     list_sessions,
@@ -63,38 +66,69 @@ interface FrameStats {
     worst_frame_ms: number;
 }
 
-function use_frame_stats(): FrameStats {
+/// Measuring smoothness costs smoothness. A rAF loop that never sleeps cost 8 of
+/// this app's 23 idle CPU points on this machine, and sampling it in bursts still
+/// cost 3 — WebKit keeps the frame pipeline warm once anything asks for a frame.
+/// So at rest nothing asks: the reading comes from the frames the island already
+/// counts, and the real meter only runs while a benchmark needs a true number.
+function use_frame_stats(measuring: boolean): FrameStats {
     const [stats, set_stats] = useState<FrameStats>({ fps: 0, worst_frame_ms: 0 });
 
     useEffect(() => {
-        let frames = 0;
-        let worst = 0;
-        let last = performance.now();
-        let window_start = last;
-        let handle = 0;
+        if (measuring) {
+            let frames = 0;
+            let worst = 0;
+            let last = performance.now();
+            let window_start = last;
+            let handle = 0;
 
-        const tick = (now: number) => {
-            const delta = now - last;
-            last = now;
-            frames += 1;
-            worst = Math.max(worst, delta);
+            const tick = (now: number) => {
+                worst = Math.max(worst, now - last);
+                last = now;
+                frames += 1;
 
-            if (now - window_start >= 500) {
-                set_stats({
-                    fps: Math.round((frames * 1000) / (now - window_start)),
-                    worst_frame_ms: Math.round(worst),
-                });
-                frames = 0;
-                worst = 0;
-                window_start = now;
-            }
+                if (now - window_start >= 500) {
+                    set_stats({
+                        fps: Math.round((frames * 1000) / (now - window_start)),
+                        worst_frame_ms: Math.round(worst),
+                    });
+                    frames = 0;
+                    worst = 0;
+                    window_start = now;
+                }
+
+                handle = requestAnimationFrame(tick);
+            };
 
             handle = requestAnimationFrame(tick);
+            return () => cancelAnimationFrame(handle);
+        }
+
+        let seen = island_frames.rendered;
+        let at = performance.now();
+
+        const read = () => {
+            const now = performance.now();
+            const seconds = (now - at) / 1000;
+            const drawn = island_frames.rendered - seen;
+            seen = island_frames.rendered;
+            at = now;
+
+            const fresh = {
+                fps: seconds > 0 ? Math.round(drawn / seconds) : 0,
+                worst_frame_ms: Math.round(island_frames.worst_ms),
+            };
+
+            // A new object every second re-renders every panel under it, and the
+            // island redraws with them. Only a changed reading is worth that.
+            set_stats((held) =>
+                held.fps === fresh.fps && held.worst_frame_ms === fresh.worst_frame_ms ? held : fresh,
+            );
         };
 
-        handle = requestAnimationFrame(tick);
-        return () => cancelAnimationFrame(handle);
-    }, []);
+        const handle = window.setInterval(read, 1000);
+        return () => window.clearInterval(handle);
+    }, [measuring]);
 
     return stats;
 }
@@ -116,7 +150,8 @@ export default function App() {
     const pane_count = settings.panes;
     const rate = settings.lines_per_second;
     const [throughput, set_throughput] = useState({ mb_per_second: 0, dropped_frames: 0, collapsed_mb: 0 });
-    const frame_stats = use_frame_stats();
+    const [measuring, set_measuring] = useState(false);
+    const frame_stats = use_frame_stats(measuring);
     frame_ref.current = frame_stats;
     const [gpu] = useState<GpuReport>(() => probe_gpu());
     const menu = useContextMenu();
@@ -155,6 +190,19 @@ export default function App() {
         });
     }, []);
 
+    // Nothing is open on a fresh install, and every panel below assumes a
+    // project. The one that makes one comes forward instead of leaving a person
+    // to guess which of a dozen tabs comes first.
+    useEffect(() => {
+        list_repos()
+            .then((known) => {
+                if (known.length === 0) {
+                    focus_panel("start");
+                }
+            })
+            .catch(() => undefined);
+    }, [focus_panel]);
+
     useEffect(() => {
         const handle = window.setInterval(() => {
             take_ui_commands()
@@ -166,6 +214,16 @@ export default function App() {
                             if (preset) {
                                 set_layout(preset.build());
                             }
+                            continue;
+                        }
+
+                        if (command === "jump") {
+                            set_jumping(true);
+                            continue;
+                        }
+
+                        if (command === "reload") {
+                            window.location.reload();
                             continue;
                         }
 
@@ -200,11 +258,19 @@ export default function App() {
                 collapsed_bytes += entry.collapsed_bytes;
             }
 
-            set_throughput({
+            const fresh = {
                 mb_per_second: Number(((bytes * 2) / (1024 * 1024)).toFixed(2)),
                 dropped_frames,
                 collapsed_mb: Number((collapsed_bytes / (1024 * 1024)).toFixed(1)),
-            });
+            };
+
+            set_throughput((held) =>
+                held.mb_per_second === fresh.mb_per_second &&
+                held.dropped_frames === fresh.dropped_frames &&
+                held.collapsed_mb === fresh.collapsed_mb
+                    ? held
+                    : fresh,
+            );
         }, 500);
 
         return () => window.clearInterval(handle);
@@ -292,6 +358,7 @@ export default function App() {
         await Promise.all(current.map((session) => kill_session(session.id).catch(() => undefined)));
         metrics_ref.current.clear();
         run_ref.current = null;
+        set_measuring(false);
         set_sessions([]);
     }, []);
 
@@ -311,6 +378,10 @@ export default function App() {
                 ),
             );
             run_ref.current = { id: `run-${Date.now()}`, started: performance.now(), panes: pane_count, rate };
+            set_measuring(true);
+            // A run writes lines for 30 s; the meter has no reason to keep
+            // burning frames after that.
+            window.setTimeout(() => set_measuring(false), 32_000);
             set_focused_id(created[0]?.id ?? null);
             set_sessions(created);
         } catch (cause) {
@@ -354,10 +425,33 @@ export default function App() {
     }, [clear, pane_count]);
 
     const visible = useMemo(() => visible_panels(layout), [layout]);
+
     const current_preset = useMemo(() => preset_of(layout), [layout]);
     const [workspace_id, set_workspace_id] = useState<string | null>(null);
     const [workspace_repos, set_workspace_repos] = useState<string[] | null>(null);
     const [workspace_counts, set_workspace_counts] = useState<Record<string, number>>({});
+    const [jumping, set_jumping] = useState(false);
+    /// Bumped whenever something other than the tabs changes the active
+    /// workspace, so the tabs go and read what is true rather than what they
+    /// last set themselves.
+    const [workspace_turn, set_workspace_turn] = useState(0);
+    const [going, set_going] = useState<{ repository_id: string | null; worktree: string | null; at: number } | null>(
+        null,
+    );
+
+    // The one key that reaches everywhere. Ctrl is what the header says, and a
+    // Mac keyboard reaches the same box with Cmd.
+    useEffect(() => {
+        const listen = (event: KeyboardEvent) => {
+            if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+                event.preventDefault();
+                set_jumping((held) => !held);
+            }
+        };
+
+        window.addEventListener("keydown", listen);
+        return () => window.removeEventListener("keydown", listen);
+    }, []);
     const [rail_shut, set_rail_shut] = useState(() => {
         try {
             return localStorage.getItem("agentland-rail") === "shut";
@@ -416,7 +510,13 @@ export default function App() {
         () => (shown_sessions.length > 4 ? 4 : Math.max(shown_sessions.length, 1)),
         [shown_sessions.length],
     );
-    const verdict = frame_stats.fps >= 55 ? "pass" : frame_stats.fps >= 30 ? "marginal" : "fail";
+    const verdict = !measuring
+        ? "resting"
+        : frame_stats.fps >= 55
+          ? "pass"
+          : frame_stats.fps >= 30
+            ? "marginal"
+            : "fail";
 
     const update_settings = useCallback((next: Settings) => {
         set_settings(next);
@@ -426,6 +526,7 @@ export default function App() {
     const open_window_menu = useCallback(
         (event: React.MouseEvent) => {
             menu.open(event, "Agentland", [
+                { label: "Start a project", hint: "panel", run: () => focus_panel("start") },
                 { label: "Island", hint: "panel", run: () => focus_panel("island") },
                 { label: "Terminals", hint: "panel", run: () => focus_panel("panes") },
                 { label: "Board", hint: "panel", run: () => focus_panel("board") },
@@ -471,9 +572,11 @@ export default function App() {
 
     const services = useMemo<WorkspaceServices>(
         () => ({
+            open_menu: menu.open,
             sessions: shown_sessions,
             crew,
             repositories: workspace_repos,
+            going,
             open_session,
             close_session,
             open_shell_in: (cwd: string) => {
@@ -488,7 +591,17 @@ export default function App() {
             focused_id,
             on_metrics,
         }),
-        [close_session, crew, focused_id, on_metrics, open_session, shown_sessions, workspace_repos],
+        [
+            close_session,
+            crew,
+            focused_id,
+            going,
+            menu.open,
+            on_metrics,
+            open_session,
+            shown_sessions,
+            workspace_repos,
+        ],
     );
 
     return (
@@ -507,14 +620,51 @@ export default function App() {
                 />
             ) : null}
 
+            <Jumper
+                open={jumping}
+                on_close={() => set_jumping(false)}
+                on_go={(place) => {
+                    set_workspace_turn((turn) => turn + 1);
+                    set_going({
+                        repository_id: place.repository_id,
+                        worktree: place.worktree,
+                        at: Date.now(),
+                    });
+
+                    if (place.kind === "agent") {
+                        const held = crew.find((agent) => agent.id === place.agent_id);
+                        if (held?.session_id) {
+                            open_session(held.session_id);
+                            focus_panel("panes");
+                        } else {
+                            focus_panel("crew");
+                        }
+                        return;
+                    }
+
+                    focus_panel(place.kind === "workspace" ? "island" : "project");
+                }}
+            />
+
             <header className="flex shrink-0 items-center gap-3 border-b border-reef/70 px-3 py-1.5">
                 <WorkspaceTabs
+                    turn={workspace_turn}
                     active={workspace_id}
                     on_active={(id, repositories) => {
                         set_workspace_id(id);
                         set_workspace_repos(repositories);
                     }}
+                    on_switched={() => set_workspace_turn((turn) => turn + 1)}
                     counts={workspace_counts}
+                />
+
+                <span className="h-4 w-px bg-reef" />
+
+                <PlaceTrail
+                    repository_id={going?.repository_id ?? null}
+                    worktree={going?.worktree ?? null}
+                    turn={workspace_turn}
+                    on_open={() => set_jumping(true)}
                 />
 
                 <span className="h-4 w-px bg-reef" />
@@ -565,8 +715,19 @@ export default function App() {
                 </span>
 
                 <div className="ml-auto flex items-center gap-3 font-mono text-[10px] tabular-nums">
-                    <span className={verdict === "pass" ? "text-palm" : verdict === "marginal" ? "text-sun" : "text-coral"}>
-                        {frame_stats.fps} fps
+                    <span
+                        className={
+                            verdict === "resting"
+                                ? "text-shade"
+                                : verdict === "pass"
+                                  ? "text-palm"
+                                  : verdict === "marginal"
+                                    ? "text-sun"
+                                    : "text-coral"
+                        }
+                        title={measuring ? "frames the app draws" : "frames the island draws — the app measures itself only while benchmarking"}
+                    >
+                        {frame_stats.fps} fps{measuring ? "" : " · island"}
                     </span>
                     <span className="text-shade">worst {frame_stats.worst_frame_ms} ms</span>
                     <span className="text-shade">{throughput.mb_per_second} MB/s</span>
@@ -576,6 +737,19 @@ export default function App() {
                     <span className="text-shade" title={gpu.renderer}>
                         {gpu.webgl2 ? "webgl2" : gpu.renderer === "none" ? "none" : "webgl1"} · {gpu.max_contexts} ctx
                     </span>
+
+                    <NoticeBell
+                        on_open={(opens) => {
+                            const [what, which] = opens.split(":");
+                            if (what === "agent" && which) {
+                                focus_panel("crew");
+                                return;
+                            }
+                            if (is_known_panel(what)) {
+                                focus_panel(what as PanelId);
+                            }
+                        }}
+                    />
 
                     <button
                         className="rounded border border-reef px-1.5 py-[3px] text-driftwood hover:border-turquoise hover:text-turquoise"
@@ -601,6 +775,12 @@ export default function App() {
                 <WorkspaceRail
                     visible={visible}
                     repositories={workspace_repos}
+                    active_workspace={workspace_id}
+                    on_switched={() => set_workspace_turn((turn) => turn + 1)}
+                    on_open_repo={(repo) => {
+                        set_going({ repository_id: repo.id, worktree: null, at: Date.now() });
+                        focus_panel("project");
+                    }}
                     counts={{ panes: sessions.length, crew: crew_count, board: card_count }}
                     collapsed={rail_shut}
                     on_collapse={(next) => {
@@ -622,7 +802,7 @@ export default function App() {
                     footer={
                         <div className="flex items-center justify-between font-mono text-[10px] text-shade">
                             <span>{sessions.length} panes</span>
-                            <span className={verdict === "pass" ? "text-palm" : verdict === "marginal" ? "text-sun" : "text-coral"}>
+                            <span className={verdict === "resting" ? "text-shade" : verdict === "pass" ? "text-palm" : verdict === "marginal" ? "text-sun" : "text-coral"}>
                                 {frame_stats.fps} fps
                             </span>
                         </div>

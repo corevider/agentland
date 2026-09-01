@@ -33,20 +33,40 @@ export interface TerraceLayer {
     height: number;
     y: number;
     rotation: number;
+    ground: "sand" | "grass";
 }
 
+/// How far out the grass reaches. Beyond it the island is sand, and that is
+/// where the crew stands: a station on a grass shelf with sand under its edge
+/// reads as floating, and an island with its green in the middle and its people
+/// on the shore reads as a place.
+export const GRASS_SHARE = 0.6;
+export const SAND_SHARE = 0.98;
+
+/// The sand apron first, then the grass on top of it, terrace by terrace.
 export function terrace_layers(tier: Tier, seed: string): TerraceLayer[] {
     const random = seeded_random(seed);
 
-    return Array.from({ length: tier.terraces }, (_, index) => {
+    const sand: TerraceLayer = {
+        radius: tier.radius * SAND_SHARE,
+        height: 0.36,
+        y: 0,
+        rotation: random() * Math.PI,
+        ground: "sand",
+    };
+
+    const green = Array.from({ length: Math.max(1, tier.terraces - 1) }, (_, index) => {
         const shrink = (index / (tier.terraces + 1)) * 0.55;
         return {
-            radius: tier.radius * (1 - shrink),
-            height: 0.34 + random() * 0.2,
-            y: index * 0.3,
+            radius: tier.radius * GRASS_SHARE * (1 - shrink),
+            height: 0.3 + random() * 0.18,
+            y: 0.22 + index * 0.26,
             rotation: random() * Math.PI,
+            ground: "grass" as const,
         };
     });
+
+    return [sand, ...green];
 }
 
 export function surface_height(layers: TerraceLayer[], distance: number): number {
@@ -81,7 +101,8 @@ export function station_placements(count: number, radius: number): StationPlacem
         return [];
     }
 
-    const ring_radius = radius * 0.64;
+    // The crew stands on the sand, outside the grass.
+    const ring_radius = radius * 0.8;
     const step = (Math.PI * 2) / count;
     const reserved = [LIGHTHOUSE_ANGLE, JETTY_ANGLE];
 
@@ -136,9 +157,9 @@ export function palm_positions(
     while (palms.length < tier.palms && attempts < tier.palms * 40) {
         attempts += 1;
 
+        // Trees belong to the green middle, not to the shore the crew walks on.
         const angle = random() * Math.PI * 2;
-        const inner = random() > 0.45;
-        const distance = tier.radius * (inner ? 0.2 + random() * 0.22 : 0.8 + random() * 0.12);
+        const distance = tier.radius * GRASS_SHARE * (0.22 + random() * 0.66);
         const x = Math.cos(angle) * distance;
         const z = Math.sin(angle) * distance;
 
@@ -176,6 +197,8 @@ export const ROLE_SHAPE: Record<string, "workbench" | "watchtower" | "radio" | "
 export const PRESENCE_COLOR: Record<string, string> = {
     done: "#6fbf73",
     working: "#f0a95c",
+    /// Alive at a prompt with nothing running: lit, but not busy.
+    waiting: "#7fb8c4",
     attention: "#e5705f",
     idle: "#63797a",
 };
@@ -183,6 +206,41 @@ export const PRESENCE_COLOR: Record<string, string> = {
 export const PRESENCE_LABEL: Record<string, string> = {
     done: "finished",
     working: "working",
+    waiting: "at a prompt",
     attention: "needs you",
     idle: "idle",
 };
+
+/// Who stands where.
+///
+/// The stations are evenly spaced, so which agent takes which one is otherwise
+/// arbitrary — and the commander ending up on the far shore from the lighthouse
+/// that stands for its own dispatching reads as two different people. X takes
+/// the station nearest the lighthouse; the rest keep their order around the ring.
+export function seat_crew<T extends { id: string; role?: string }>(
+    crew: T[],
+    placements: StationPlacement[],
+): StationPlacement[] {
+    const seats = placements.slice(0, crew.length);
+    const commander = crew.findIndex((member) => member.role === "commander");
+
+    if (commander < 0 || seats.length < 2) {
+        return seats;
+    }
+
+    let nearest = 0;
+    let closest = Infinity;
+
+    for (let index = 0; index < seats.length; index += 1) {
+        const angle = Math.atan2(seats[index].z, seats[index].x);
+        const distance = angular_distance(angle, LIGHTHOUSE_ANGLE);
+        if (distance < closest) {
+            closest = distance;
+            nearest = index;
+        }
+    }
+
+    const seated = [...seats];
+    [seated[commander], seated[nearest]] = [seated[nearest], seated[commander]];
+    return seated;
+}

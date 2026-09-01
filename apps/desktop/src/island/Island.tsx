@@ -1,17 +1,21 @@
-import { useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 
 import type { Agent } from "@/lib/core";
 import { Projectile } from "@/island/Projectile";
 import { Robot } from "@/island/Robot";
-import { note_island_frame } from "@/lib/frames";
+import { island_frames, note_island_frame, note_island_request } from "@/lib/frames";
+import { frame_target, frame_wait } from "@/island/pace";
+import { PlanFlow } from "@/island/PlanFlow";
+import { type FlowStep } from "@/island/plan_flow";
 import {
     JETTY_ANGLE,
     LIGHTHOUSE_ANGLE,
     PRESENCE_COLOR,
     ROLE_SHAPE,
     palm_positions,
+    seat_crew,
     station_placements,
     surface_height,
     terrace_layers,
@@ -20,8 +24,6 @@ import {
     type Tier,
 } from "@/island/geometry";
 
-const FOCUSED_FPS = 30;
-const BACKGROUND_FPS = 5;
 
 function Terrain({ tier, seed }: { tier: Tier; seed: string }) {
     const layers = useMemo(() => terrace_layers(tier, seed), [tier, seed]);
@@ -30,8 +32,18 @@ function Terrain({ tier, seed }: { tier: Tier; seed: string }) {
         <group>
             {layers.map((layer, index) => (
                 <mesh key={index} position={[0, layer.y, 0]} rotation={[0, layer.rotation, 0]} castShadow receiveShadow>
-                    <cylinderGeometry args={[layer.radius * 0.86, layer.radius, layer.height, 7]} />
-                    <meshLambertMaterial color={index === 0 ? "#e3cfa4" : "#4d7d55"} flatShading />
+                    <cylinderGeometry
+                        args={[
+                            layer.radius * (layer.ground === "sand" ? 0.94 : 0.86),
+                            layer.radius,
+                            layer.height,
+                            layer.ground === "sand" ? 9 : 7,
+                        ]}
+                    />
+                    <meshLambertMaterial
+                        color={layer.ground === "sand" ? "#e3cfa4" : "#4d7d55"}
+                        flatShading
+                    />
                 </mesh>
             ))}
         </group>
@@ -89,13 +101,20 @@ function Station({
 }) {
     const shape = ROLE_SHAPE[agent.role] ?? "hut";
     const presence = agent.presence ?? "idle";
+    // The lamp says what the agent is doing; the colour the commander gave it
+    // says which agent it is, and the human learns the crew by that long before
+    // they learn the names.
     const color = PRESENCE_COLOR[presence] ?? PRESENCE_COLOR.idle;
+    const known_by = agent.colour ?? null;
 
     return (
         <group position={position} rotation={[0, rotation, 0]} userData={{ agent_id: agent.id }}>
             <mesh position={[0, 0.02, 0]} receiveShadow userData={{ agent_id: agent.id }}>
                 <cylinderGeometry args={[0.44, 0.48, 0.06, 8]} />
-                <meshLambertMaterial color={highlighted ? "#2b7f80" : "#c9b48c"} flatShading />
+                <meshLambertMaterial
+                    color={highlighted ? "#2b7f80" : (known_by ?? "#c9b48c")}
+                    flatShading
+                />
             </mesh>
 
             <Robot
@@ -295,14 +314,9 @@ function LabelTracker({
 
         const marks: Array<{ id: string; x: number; y: number; visible: boolean }> = [];
 
-        for (const node of scene.children) {
-            const id = node.userData?.agent_id;
-            if (typeof id !== "string") {
-                continue;
-            }
-
+        const note = (node: THREE.Object3D, id: string, lift: number) => {
             node.getWorldPosition(point.current);
-            point.current.y += 1.95;
+            point.current.y += lift;
             point.current.project(camera);
 
             marks.push({
@@ -311,7 +325,24 @@ function LabelTracker({
                 y: ((1 - point.current.y) / 2) * size.height,
                 visible: point.current.z < 1,
             });
+        };
+
+        for (const node of scene.children) {
+            const id = node.userData?.agent_id;
+            if (typeof id === "string") {
+                note(node, id, 1.95);
+            }
         }
+
+        // A plan's steps sit inside a group of their own, so they are found by
+        // walking rather than by looking at the scene's own children.
+        scene.traverse((node) => {
+            const step = node.userData?.step_id;
+            if (typeof step === "string") {
+                const lift = node.userData?.label_lift;
+                note(node, `step:${step}`, typeof lift === "number" ? lift : 0.72);
+            }
+        });
 
         on_project(marks);
     });
@@ -319,26 +350,58 @@ function LabelTracker({
     return null;
 }
 
-function Governor({ active }: { active: boolean }) {
+function Governor({ active, moving }: { active: boolean; moving: boolean }) {
     const { invalidate } = useThree();
+    const touched = useRef(0);
+    const drawing = useRef(true);
+
+    useEffect(() => {
+        const note = () => {
+            touched.current = performance.now();
+        };
+
+        window.addEventListener("pointermove", note, { passive: true });
+        window.addEventListener("wheel", note, { passive: true });
+        return () => {
+            window.removeEventListener("pointermove", note);
+            window.removeEventListener("wheel", note);
+        };
+    }, []);
 
     useEffect(() => {
         let handle = 0;
 
         const schedule = () => {
-            const hidden = document.hidden;
-            const fps = hidden ? 0 : active ? FOCUSED_FPS : BACKGROUND_FPS;
+            const fps = frame_target({
+                hidden: document.hidden,
+                showing: active,
+                focused: document.hasFocus(),
+                interacting: performance.now() - touched.current < 1200,
+                moving,
+            });
+
             if (fps > 0) {
+                note_island_request(performance.now());
                 invalidate();
-                handle = window.setTimeout(schedule, 1000 / fps);
-            } else {
-                handle = window.setTimeout(schedule, 500);
+                drawing.current = true;
+                handle = window.setTimeout(schedule, frame_wait(fps, island_frames.cost_ms));
+                return;
             }
+
+            // Nothing is moving. Draw the resting frame once, then stop asking:
+            // a change to the scene re-renders it through React, which draws on
+            // its own. Only the state is checked from here on.
+            if (drawing.current) {
+                drawing.current = false;
+                invalidate();
+            }
+
+            handle = window.setTimeout(schedule, 500);
         };
 
         schedule();
         return () => window.clearTimeout(handle);
-    }, [active, invalidate]);
+    }, [active, invalidate, moving]);
 
     return null;
 }
@@ -417,6 +480,7 @@ interface Props {
     highlighted: string | null;
     paused: boolean;
     shots: Array<{ seq: number; agent_id: string }>;
+    plan_steps: FlowStep[];
     on_project: (marks: Array<{ id: string; x: number; y: number; visible: boolean }>) => void;
     selected: string | null;
     on_select: (id: string) => void;
@@ -424,21 +488,33 @@ interface Props {
     on_scene: (scene: THREE.Scene, camera: THREE.Camera, invalidate: () => void) => void;
 }
 
-export function Island({
+function IslandScene({
     agents,
     seed,
     active,
     highlighted,
     paused,
     shots,
+    plan_steps,
     on_project,
     selected,
     on_select,
     on_shot_done,
     on_scene,
 }: Props) {
+    // Only a working or attention-seeking agent animates, and a hand-off flies
+    // for a moment. Everything else on the island holds still.
+    const moving =
+        shots.length > 0 ||
+        agents.some((agent) => agent.presence === "working" || agent.presence === "attention");
+
     const tier = tier_for(agents.length);
-    const placements = station_placements(agents.length, tier.radius);
+    const placements = seat_crew(agents, station_placements(agents.length, tier.radius));
+    const stations = new Map(
+        agents
+            .map((agent, index) => [agent.id, placements[index]] as const)
+            .filter(([, at]) => at) as Array<[string, (typeof placements)[number]]>,
+    );
     const layers = terrace_layers(tier, seed);
     const ground = surface_height(layers, tier.radius * 0.64);
     const lighthouse: [number, number, number] = [tier.radius * 0.78, ground + 1.7, -tier.radius * 0.3];
@@ -456,7 +532,7 @@ export function Island({
             <directionalLight position={[7, 9, 3]} intensity={1.15} color="#ffd9a8" castShadow />
             <hemisphereLight args={["#8fd3d0", "#2a4a3c", 0.45]} />
 
-            <Governor active={active} />
+            <Governor active={active} moving={moving} />
             <LabelTracker on_project={on_project} />
             <Orbit />
 
@@ -464,6 +540,7 @@ export function Island({
             <Water radius={tier.radius} />
             <Terrain tier={tier} seed={seed} />
             <Palms tier={tier} seed={seed} stations={placements} />
+            <PlanFlow steps={plan_steps} radius={tier.radius} stations={stations} ground={ground} />
             {tier.has_jetty ? <Jetty radius={tier.radius} /> : null}
             <Lighthouse
                 radius={tier.radius}
@@ -503,3 +580,8 @@ export function Island({
         </Canvas>
     );
 }
+
+/// The panel around it re-renders whenever anything in the app changes a number.
+/// The scene is expensive to draw and depends only on these props, so it redraws
+/// when they change and not before.
+export const Island = memo(IslandScene);

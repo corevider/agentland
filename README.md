@@ -1222,3 +1222,417 @@ as it was reported. The listeners are installed once per divider now and read th
 ref, so the gesture outlives its own consequences. Verified by dragging a divider through seven
 steps and back, and a horizontal one through five: the panel follows the whole way and stops when
 the button does.
+
+## Starting a project
+
+Everything the first hour of a project needs already existed, one panel at a time: a workspace, a
+project, a worktree, an agent, a brief. Nothing said in what order, so the first thing a new person
+met for guessing wrong was an error about a worktree rather than a crew at work.
+
+`POST /start` takes the two questions that are genuinely theirs — where the work is, and what it is
+— and does the rest in order: open or clone the project, put it in the workspace they are standing
+in (or make one named after it), cut a worktree named after the goal, hire a commander on an engine
+that can be handed the crew's tools, and give it the goal as its first brief. The **Start** panel
+asks those two questions and nothing else; the names and the engine are behind a fold, and the
+panel comes forward on its own when no project is open yet.
+
+Each step is skipped when what it would make is already there, so running it twice is not a mistake.
+The second goal in the same project finds the project, finds the commander, and hands it the new
+goal — measured, because the first version cut a second worktree and left nobody standing in it.
+Where a commander stands is a fact once it is hired, not a request, so a `worktree` that fights it
+is refused by name rather than quietly ignored.
+
+Two things it will not decide for anybody. A folder that is not a repository yet needs a yes, because
+`git init` writes into somebody's folder — the panel asks and passes `start_git`. And an engine is
+chosen for what it can carry rather than what is first on PATH: a commander that cannot be handed
+`.mcp.json` has no `plan_create`, and a commander without `plan_create` is a pane that talks.
+
+### Choosing what it is made of
+
+A project that does not exist yet gets a third question, and it is the one that is expensive to get
+wrong. `GET /stacks` offers five starters — Vite with React and TypeScript, Next.js, Rust with Axum,
+Python with FastAPI and uv, and Go on its standard library — each with what it is for and why it
+rather than the obvious alternative.
+
+**No version is written down in this repository.** A number pinned here is wrong within the month
+and lies with confidence in the meantime, so the scaffolder is invoked with `@latest` and the panel
+asks npm and cargo what the headline package is at the moment it opens — `vite 8.2.2`, `next 16.3.4`,
+`axum 0.8.9` on the machine this was written on. Where nothing can be asked the panel says "resolved
+at install time" rather than showing a number. The five probes are a process and a second each, so
+they run at once and the list is there in two.
+
+**The audit runs before the crew does.** Once the project exists, the ecosystem's own auditor is run
+in it — `npm audit`, `cargo audit`, `pip-audit`, `govulncheck` — and what it found is a line in the
+report. An auditor that is not installed is said plainly, because an audit nobody ran is not a pass:
+`govulncheck is not installed, so nothing was checked` is the honest sentence and it is the one that
+gets printed. Each auditor is probed for itself, too — `cargo --version` answers for cargo and not
+for cargo-audit, and claiming an audit will run when it cannot is worse than saying it will not.
+
+**What runs is shown before it runs.** Scaffolding downloads and executes other people's code, so
+the exact commands are on the card before anything is pressed. Nothing is composed into a shell
+line: the tool and its arguments come from a fixed catalog, the only thing the caller contributes is
+a name, and that name is checked against a short allowlist — a name starting with a dash becomes a
+flag, one with a slash or `..` writes outside the folder that was picked, and one with a space
+becomes two arguments at the first tool that forgets to quote. Every one of those is refused twice,
+in the panel at the keystroke and in the core before anything runs.
+
+Everything that can be refused for free is refused before anything is made — measured, because the
+first version checked "made here *and* cloned from somewhere" after scaffolding and left a folder
+behind for a request it was going to reject anyway. A Go project also gets the `.gitignore` that Go
+does not write for itself; cargo, uv and the npm templates bring their own, which is why the first
+commit of a Vite project has nineteen files in it and no `node_modules`.
+
+### Auth.js, on the starter that can hold a session
+
+Authentication is the one part of a project where writing it yourself is the wrong answer, so it is
+offered as something put on top of a starter rather than left as work. `GET /stacks` returns each
+starter's extras and `POST /start` takes them by id.
+
+It is offered on Next.js and nowhere else. Auth.js keeps a session, a session needs a server, and a
+Vite build is a folder of files a browser downloads — so `auth-js` names the starters it fits and the
+core refuses the rest by name: *Auth.js does not go on Go · the standard library*. That refusal, like
+every other one that costs nothing, happens before the scaffolder runs, so a request that was going
+to be rejected leaves no folder behind.
+
+**It installs `next-auth@beta`, and says so.** The stable line is 4.24, v5 is `5.0.0-beta.32`, and v5
+is what the Next.js App Router is documented against while 4.24 predates it. Shipping a beta quietly
+would be the wrong call; the card says which and why, and the version shown is the one behind the
+`beta` tag rather than behind `latest` — a number that is true of nothing is worse than no number.
+
+**The secret is generated, not left as a placeholder.** `AUTH_SECRET` is 32 bytes of `/dev/urandom`
+as hex, written into `.env.local`. There is no fallback to the clock or the process id if that read
+fails, because a secret derived from those is one an attacker derives too — it refuses instead. The
+keys that come from GitHub's dashboard are written empty and named in the report, because those are
+not Agentland's to invent.
+
+**And the file it lands in is checked, not assumed.** Before the secret is written, the project's
+`.gitignore` is read and asked whether it covers `.env.local`; if it does not, the pattern is added
+first. Every template here already covers it — Next's own line 34 is `.env*` — and the whole point of
+checking is the day one of them stops, because a generated secret in a pushed commit is the one
+mistake in this file that cannot be taken back.
+
+Measured end to end: 35 seconds from an empty folder to a Next.js project with a commander reading
+its brief — scaffold, `next-auth@beta`, secret, `npm audit` clean, git, worktree, crew. The generated
+`src/auth.ts` and `src/app/api/auth/[...nextauth]/route.ts` were then typechecked against the
+next-auth that had actually been installed, which is the only check that catches a template written
+against a version nobody has any more.
+
+That route also caught a bug worth keeping: the catalog refused to write
+`src/app/api/auth/[...nextauth]/route.ts` because a crude "no `..` in the path" check read the folder
+name Next.js requires as an attempt to escape the project. The rule is on path components now, and it
+moved out of the test and into the writer, so it guards rather than merely asserts.
+
+### Prisma, and two halves of a tool that have to match
+
+Prisma is the second extra on Next.js: a typed database client, and migrations that are files
+somebody reviews rather than something that happened to a server. It starts on SQLite through a
+driver adapter, so the project runs before anybody has a database — moving to Postgres is a change of
+adapter, not a change of code.
+
+**The CLI is pinned to the client, not to a tag.** `prisma@latest` is `8.0.0-rc.12` while
+`@prisma/client@latest` is `7.10.0`: installing both by name gives a CLI a major version ahead of the
+client it drives. So the client is installed first and the CLI takes `{version}`, filled from the
+version that actually landed in `node_modules` — the one number that cannot drift between the two.
+The card shows the resolved command before it runs, `npm install --save-dev prisma@7.10.0 dotenv`,
+not the placeholder.
+
+Three things here were found by running it rather than by reading about it, and each is now a test or
+a guard:
+
+- **`prisma init` reads the project.** In a bare folder it generates the client to `generated/prisma`;
+  in a Next.js project with `--src-dir` it generates to `src/generated/prisma`. A hardcoded relative
+  import compiled in the first and failed in the second. The client file imports through the `@/`
+  alias now, and a test asserts that every starter this extra fits is scaffolded with `--src-dir` —
+  the assumption fails loudly the day somebody offers Prisma on a starter without one.
+- **Prisma 7 requires a driver adapter.** `new PrismaClient()` does not typecheck any more; it wants
+  `{ adapter }`. So `@prisma/adapter-better-sqlite3` is installed in lockstep too, and the singleton
+  is written against it. Verified the way Auth.js was: `tsc --noEmit` against the packages that were
+  actually installed.
+- **`prisma init` appends to an existing `.gitignore` rather than replacing it** — checked, because
+  the file it writes has `.env` in it and not `.env*`, and a replacement would have quietly made the
+  Auth.js secret committable. It appends, so nothing was lost; and because *some* tool one day might
+  not, the last word on every file holding a generated secret is checked again after every extra has
+  had its turn.
+
+The audit is not decoration either. A Next.js project with both extras comes back
+`npm audit: 3 high or critical` — `deepmerge-ts` below 8.0.0, reached through `@prisma/config`, and
+the only fix npm offers is a downgrade to Prisma 6. That is Prisma's own dependency and not something
+this repository can patch, but it is on the report before the crew writes a line against it, which is
+the entire point of running the audit at the start rather than at review.
+
+Measured end to end: 55 seconds from an empty folder to a Next.js project with Auth.js, Prisma, a
+generated secret, a clean typecheck and a commander reading its brief.
+
+### One way of waiting
+
+Every wait long enough to notice looks the same now: the braille cycle the engines' own spinners use,
+which `ReadablePane` already knows how to strip out of a transcript — borrowed rather than redrawn, so
+there is one vocabulary for the idea. `Waiting` pairs it with what it is turning for, and it is what
+the version probe, the start button, the jumper reading the workspaces, a pane opening and the
+island's lazy chunk all use.
+
+Two details it is worth having got right once instead of five times. A reader who has asked their
+computer to stop moving gets a still glyph rather than an empty space, because they still need to
+know something is happening. And a spinner with words beside it announces nothing to a screen reader —
+the words already did — so it only takes a label when it is alone.
+
+## There is always somewhere to stand
+
+The workspace tabs used to open with **All**, and the rail with **Everything**. Both were the same
+thing: not a filter but the *absence* of an active workspace, which quietly conflated "show me
+everything" with "I am nowhere". Every question the rest of the app asks is answered by where you
+are, and nowhere is not an answer to any of them.
+
+Measured on a clean core, standing on All:
+
+```
+open a folder      → workspaces: [], active: null      the project joined nothing
+write a note on it → workspace/proj/the-dev-server-reads-port
+```
+
+That second line is the cost. The vault files a project note under the workspace that owns the
+project, and with no owner and nobody standing anywhere it falls back to the literal string
+`workspace` — a folder in somebody's Obsidian vault that no one would ever think to open. The rail,
+meanwhile, said the workspace held nothing while the project sat in the list below it, which is a
+failure this repository had already met once and written into `Workspaces::include`'s own comment.
+
+So All is gone, and with it the state it stood for. Three doors were closed:
+
+- **`activate(None)` is refused while any workspace exists** — in the store rather than in the
+  handler, so every caller gets the rule and a test can hold it. *open a workspace and work from
+  there — there is nowhere else to stand.*
+- **Deleting the workspace you are in moves you to another one**, and leaves you nowhere only when
+  there is nothing left to stand in.
+- **A folder opened when there is nowhere yet gets a workspace named after itself.** Opening a project
+  and starting one now go down the same road — `standing_in` — so the two cannot drift apart, which
+  is how one of them had the behaviour and the other did not.
+
+The tabs ask for a name instead of offering an All, and the first run reads *name a workspace to work
+in*. The cursor is not taken on that first paint: the box appears on its own there, and focus belongs
+to whoever asked for it. Verified after the change — a folder opened with nothing set up lands in a
+workspace named after it, and the same note now files itself at `proj/proj/…`.
+
+## The ignition
+
+Every project has an X. It is the manager: it reads the project, decides what crew the work needs,
+hires them, splits the work into steps and hands them out. That is the same job in every project and
+every workspace, so it is one button rather than a sequence somebody has to remember.
+
+`POST /repos/{id}/commander` is that button, and it is the same call in all three states it can find:
+
+- **nobody yet** — cut a desk, hire X, start it, hand it the brief
+- **somebody stopped** — start it and hand it the brief
+- **somebody at work** — hand it the brief without restarting anything
+
+One control can mean all three because the core decides which it is, not the person pressing it. With
+no brief of its own, X is told to read the project, say what it would do first and what crew that
+needs, and to wait for a person before starting anything it was not asked for — a manager that hires
+a crew off its own bat on first sight of a repository is not a manager, it is a bill.
+
+**X is a name, not an id.** Agents were keyed by the slug of their name, so the second project's
+commander had to be called X2 — and a name that turns into a number stops meaning the job. A name
+taken in *another* project is not a clash now: the id carries the project (`x`, `x-the-site`) and both
+agents are called X. The same name twice in one project is still refused, because that is a real
+collision. Measured: two projects, two commanders, both `X`.
+
+**And X sits at a desk.** It used to be hired into the worktree cut for the goal, which is the branch
+the work commits to — and a branch is checked out in exactly one place, so the commander was standing
+where the implementer had to be, and a card naming that worktree could not be handed to anybody. The
+commander gets a worktree called `desk` in every project; the goal's worktree is left for the work.
+
+## A card that can say what happened to it
+
+The board recorded evidence, and a card could say "3 evidence" — which is the count of an answer
+rather than the answer. Clicking a card now opens it: what was asked, who took it, which worktree and
+which branch, when it was written, and a history of everything recorded on it in order.
+
+Three things had to change underneath, and the first two came out of watching a commander work.
+
+**Evidence is signed now.** An entry carries what it is, who put it there and when — an agent id, `the
+supervisor`, `the dispatcher`, `a person`. Nothing recorded who did what before, so "kim ne zaman
+yapmış" had no answer to give. Boards written before this still open: the reader takes both shapes and
+fills the missing author in as `someone` rather than dropping a history it cannot parse. Only the new
+shape is written.
+
+**A remark is not a record.** X tried to discard a duplicate card and was refused —
+*"t334 carries 1 piece(s) of evidence — only a person can remove it"* — and then read what that
+evidence actually was:
+
+> t334's single piece of evidence is only a routing note — *"X: Nova is the free agent on
+> agentland-svc-demo with the closest role (ops)"* — not a report, not a commit. The tool can't tell a
+> routing note from a work record, and it's right to refuse rather than guess.
+
+It was right about the refusal and right about the cause. A `Note` is what the machinery says about
+handling a card; a commit, a diff, a pull request or a finish report is what somebody did to it. Only
+the second kind makes a card a person's to remove. The guard was protecting nothing at the cost of a
+job nobody could finish.
+
+**And a turn ends with a report rather than a remark.** When the supervisor settles a step it now
+attaches `Finished` — the reason it settled, attributed to the agent that did the work, carrying the
+files, insertions and deletions the worktree held at that moment. That is the "how it ended" the card
+opens with.
+
+One detail worth keeping: the window and the core are separate processes and either can be older than
+the other, so the card reader takes an entry in both shapes. A version skew shows a history, not an
+empty panel.
+
+## The card's life after the diff
+
+A card reached `review` and the app stopped looking. The branch was pushed, the pull request was
+open, and everything after that — whether a check went red, whether the base had moved under it,
+whether anybody merged it — lived on a website. The card's life after the diff was a thing a person
+carried in their head, and the agent that wrote the code never heard that its tests failed.
+
+A watcher now reads every card in review or ready, once a minute, and asks the forge what its pull
+request is doing. What it finds decides where the card goes:
+
+| What the forge says | Where the card goes | Whose turn |
+|---|---|---|
+| merged | done | nobody's — it is finished |
+| ready: green, reviewed, mergeable | **ready to merge** | a person's |
+| a check failed | back to working | the agent that wrote it |
+| the branch conflicts | back to working | the agent that wrote it |
+| a review or a check still pending | stays in review | somebody else's |
+| closed without merging | back to the backlog | whoever picks it up |
+
+**A red check reaches the agent, not just the board.** When a card comes back, whoever holds it is
+told what broke and where to fix it, through the same channel the crew already uses to answer an
+agent's questions. That is the loop that was missing: the board knew, and nobody told the person
+holding the shovel.
+
+**Ready to merge is its own column, because whose turn it is matters.** A card waiting on a reviewer
+and a card waiting on nothing both sat in `review` and looked identical. They are different states
+and only one of them is a person's to clear.
+
+Three decisions worth keeping, all of them in a pure function with tests rather than in the watcher:
+
+- **A conflict outranks a red check.** Rebasing changes what the checks ran against, so telling an
+  agent to fix a test first is sending it after a result that is about to be replaced.
+- **A check nobody ran is not a failure.** Skipped, neutral and cancelled are not red, and treating
+  them as red sends work back to an agent with nothing to fix.
+- **`UNKNOWN` is not ready.** It is what GitHub says while it is still working the merge out, and
+  calling that ready offers a merge button that fails.
+
+Merging is a person's, and the button lives on the card beside the history that earned it. It squashes
+— a card is one piece of work and its branch is the workings — and it leaves the branch alone, because
+deleting it is destroying something and belongs to whoever decides to. An agent that thinks it is time
+asks with `request_approval` instead.
+
+Only a change is written down, and the card is where that memory lives. A card that has been waiting
+on a reviewer for a week says so once.
+
+### Two things a real pull request caught
+
+Both of them the same shape: reading a moment when the forge had not spoken yet as if it had.
+
+**A card reached "ready to merge" twelve seconds after the pull request opened, while the workflow was
+still being registered.** GitHub reported `CLEAN` and no checks, so the reader saw "no checks are
+running" and called it clear — and for a minute the board offered a merge button on work whose tests
+had not started. An empty check list means either *this repository runs no checks* or *they have not
+woken up*, and nothing the forge reports tells those apart. So the reader is told how long the pull
+request has been watched: under two minutes with nothing reported, it waits. And the last word on
+ready is now the forge's own `mergeStateStatus` rather than an inference — `BLOCKED`, `UNSTABLE` and
+`BEHIND` each mean something is in the way, whether or not this can name it. The exact state that was
+misread is a test now.
+
+**The same line was written to the card twice.** "Only on change" was remembered in the watcher, so
+restarting the app re-stamped the current standing onto every card it was following. The card already
+records who said what; the last thing the forge said is read back off the card itself, which survives
+a restart because it is not in memory at all.
+
+Verified on a real one — ccdo#1, opened, watched, then closed and its branch deleted:
+
+```
+11:02:29  review | pull #1: no checks have reported yet
+11:03:44  ready  | pull #1: ready to merge
+```
+
+### What the run said
+
+A card that comes back carrying the name of a check tells the agent nothing it can act on. `test`
+failed — which test, and why? So when a check goes red the run's own words come back with the card:
+`gh run view --log-failed` for the steps that failed, trimmed to the part that is the reason, attached
+to the card and carried in the message to whoever holds it.
+
+The trimming is the whole job, and a real red run taught it twice.
+
+**A tally is not a failure.** The first version anchored on the last line that looked like trouble. On
+a real run that was `##[error]Process completed with exit code 1` on line 660 — and the excerpt came
+back full of tests that had passed, because the suite keeps going after one test fails and the
+traceback was on line 34. Lines that *are* the failure (`Traceback`, `AssertionError`, `panicked at`,
+`error:`, `--- FAIL`, `not ok`) now outrank lines that merely count them up, and the tally is the
+anchor only when nothing in the log says what broke.
+
+**A stack trace is a dozen lines, not a budget.** Filling the whole budget backwards from the failure
+dragged in whatever the suite had printed before it. With the failure itself as the anchor the reach
+back is capped; with only a tally there is no trace to bound, so the budget is the bound.
+
+What reaches the card now, off the real run:
+
+```
+Traceback (most recent call last):
+  File ".../tests/test_agentland_probe.py", line 12, in <module>
+    test_the_probe_fails_on_purpose()
+  File ".../tests/test_agentland_probe.py", line 9, in test_the_probe_fails_on_purpose
+    assert got == expected, f"expected {expected}, got {got}"
+AssertionError: expected 3, got 0
+```
+
+File, line, expression and value. That is a thing an agent can fix. The shape of that log — failure at
+the top, six hundred passing lines under it, tally at the bottom — is a test now.
+
+Both probes were opened on a real repository and both were closed with their branches deleted: ccdo#1
+for the green path, ccdo#2 for the red one.
+
+### When the branch will not merge
+
+A card that comes back saying "the branch conflicts" sends somebody to go and find out what. It names
+the files now: `git merge-tree --write-tree --name-only` computes the merge and writes nothing, so the
+worktree the agent is standing in is never used as a scratch pad for a trial merge. The base is
+fetched first, because the conflict is with what the base is now and not with the copy this machine
+last saw. Reading its output is a parse worth testing — the tool prints the tree it wrote, then the
+files, then a blank line and its own commentary, and taking the commentary for filenames reports
+`CONFLICT (content): Merge conflict in a.txt` as a path.
+
+**Behind is not conflicted.** GitHub reports `BEHIND` when the base has moved and nothing collides,
+and telling somebody to resolve conflicts they do not have costs a turn while they go looking. It has
+its own name and its own sentence: update from the base and push, nothing to resolve.
+
+**And the conflict is computed against the pull request's own base.** It used to use the repository's
+default branch, which is only usually the same thing. A pull request targeting anything else would
+have its conflict computed against the wrong branch, find none, and tell the agent there was nothing
+to resolve while GitHub refused to merge it.
+
+Two more things the probe turned up, both about the difference between news and fact:
+
+- **A standing that has not changed is still worth acting on.** The watcher skipped the whole block
+  when the forge said the same thing twice, so a card dragged back into review sat there while its
+  checks were still red. The note is news and is written once; the column is a fact and is set every
+  time.
+- Fetching a failing run's log and composing the message for the agent happen only on a change, so a
+  card that has been red for a week does not re-download its log every minute.
+
+Probed on a real repository without touching its default branch: the base that had to move was a
+throwaway branch, the pull request was retargeted at it, and the branch, the base and the pull request
+were all deleted afterwards. `main` never received a commit.
+
+### A review somebody else does
+
+The last thing an agent could not do was pass judgement on another agent's work. `pr_review` is that:
+read the diff with `repo_review`, then say `approve`, `request_changes` or `comment` with what you
+made of it. The verdict lands on the card as a signed record, and asking for changes puts the card
+back in working and tells whoever wrote it what to change — the same channel a red check uses.
+
+**Nobody reviews their own work.** It is the one rule a review has, and it is enforced rather than
+asked for: an agent that can approve what it just wrote is not a reviewer. Measured — `zen` reviewing
+the card `zen` is holding comes back *"zen wrote this one — a review is somebody else's job"*.
+
+**And the verdict lives here rather than on GitHub, for a reason worth writing down.** Every agent in
+a crew pushes as the same GitHub account, and GitHub will not let an account approve its own pull
+request — so `gh pr review --approve` would fail for every agent this app will ever run. What goes to
+the forge is a comment naming the reviewer and the verdict, where the people reading the pull request
+will see it; what the board acts on is the record on the card. A review of work that has not been
+pushed yet is still a review, so it is kept even when there is no pull request to post it to.
+
+The reviewer role already had the shape for this: `plan` permissions, so it cannot edit what it is
+judging.

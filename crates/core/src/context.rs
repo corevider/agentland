@@ -17,6 +17,81 @@ pub fn read_context(output: &str) -> Option<ContextReading> {
     last_tokens_used(&plain).map(ContextReading::TokensUsed)
 }
 
+/// How full a pane has to be before it is worth trading for a fresh one.
+///
+/// Measured on the commander that ran this app's own demos: at 195k it was
+/// still working but every turn cost a fortune, and at 367k the engine
+/// compacted itself mid-message and swallowed the goal it had just been given.
+/// The work is not in the pane — plans, cards, evidence and the vault all live
+/// in the core — so a fresh session loses only the transcript.
+const TOKENS_ARE_TOO_MANY: u64 = 200_000;
+const TOO_LITTLE_LEFT: u8 = 15;
+
+/// A session has to have lived a little before it can be replaced, or a pane
+/// that reads high the moment it opens would be restarted forever.
+const SETTLE_FIRST: u64 = 10 * 60;
+
+/// Whether this pane should be traded for a clean one.
+pub fn wants_a_fresh_session(reading: Option<ContextReading>, alive_for: u64, busy: bool) -> bool {
+    if busy || alive_for < SETTLE_FIRST {
+        return false;
+    }
+
+    match reading {
+        Some(ContextReading::TokensUsed(tokens)) => tokens >= TOKENS_ARE_TOO_MANY,
+        Some(ContextReading::PercentLeft(left)) => left <= TOO_LITTLE_LEFT,
+        None => false,
+    }
+}
+
+/// What a pane says about being rate limited.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RateLimit {
+    /// The wait in the engine's own words — `4hr 10m` — rather than a number
+    /// recomputed from it. It is a countdown somebody else owns.
+    pub resets_in: Option<String>,
+}
+
+/// Whether this pane is waiting out a rate limit rather than working.
+///
+/// A rate-limited pane looks exactly like a busy one: it redraws a retry
+/// counter, so it never falls silent and `last_output_at` never settles. An
+/// agent sat in that loop for forty-four minutes here while every panel showed
+/// it working and nothing said a word.
+///
+/// The match is deliberately tight — the bracketed words *and* a status line's
+/// pipes. Loose matching would find this sentence in a pane that happened to be
+/// reading this repository, and an agent that greps for the phrase would report
+/// itself throttled.
+pub fn read_rate_limit(output: &str) -> Option<RateLimit> {
+    let plain = strip_escapes(output);
+    let lines: Vec<&str> = plain.lines().collect();
+
+    let limited = lines
+        .iter()
+        .rev()
+        .take(STATUS_LINES)
+        .any(|line| line.contains("[Rate limited]") && line.contains('|'));
+
+    if !limited {
+        return None;
+    }
+
+    let resets_in = lines
+        .iter()
+        .rev()
+        .take(STATUS_LINES)
+        .find_map(|line| line.split("Reset:").nth(1))
+        .map(|rest| rest.split('|').next().unwrap_or(rest).trim().to_owned())
+        .filter(|value| !value.is_empty());
+
+    Some(RateLimit { resets_in })
+}
+
+/// How far back a status line can be. A pane redraws, so the last thing written
+/// is not always the last line of the buffer.
+const STATUS_LINES: usize = 12;
+
 pub fn strip_escapes(output: &str) -> String {
     let mut plain = String::with_capacity(output.len());
     let mut characters = output.chars().peekable();
@@ -141,6 +216,45 @@ fn scale_or_none(digits: &str) -> Option<u64> {
 }
 
 #[cfg(test)]
+mod limit_tests {
+    use super::*;
+
+    /// Captured off a live pane, non-breaking spaces and all.
+    const REAL: &str = "Model: Opus 5 | Ctx: 95.7k | \u{a0}agent/x-desk | [Rate\u{a0}limited] | [Rate\u{a0}limited] | (+0,-0)\nReset:\u{a0}4hr\u{a0}10m | Cost: $2.18\n";
+
+    #[test]
+    fn a_throttled_pane_is_read_off_its_status_line() {
+        let held = read_rate_limit(REAL).expect("the pane says so");
+
+        assert_eq!(held.resets_in.as_deref(), Some("4hr 10m"));
+    }
+
+    #[test]
+    fn a_working_pane_is_not_read_as_throttled() {
+        let busy = "Model: Opus 5 | Ctx: 95.7k | agent/x-desk | (+12,-3) | Cost: $2.18\n";
+
+        assert_eq!(read_rate_limit(busy), None);
+        assert_eq!(read_rate_limit(""), None);
+    }
+
+    #[test]
+    fn the_words_alone_are_not_enough() {
+        // An agent reading this repository would otherwise report itself
+        // throttled for having the phrase on its screen.
+        let prose = "the pane said [Rate limited] for forty-four minutes and nothing noticed\n";
+
+        assert_eq!(read_rate_limit(prose), None, "prose is not a status line");
+    }
+
+    #[test]
+    fn a_limit_with_no_reset_time_is_still_a_limit() {
+        let terse = "Model: Opus 5 | [Rate limited] | Cost: $2.18\n";
+
+        assert_eq!(read_rate_limit(terse), Some(RateLimit { resets_in: None }));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -192,5 +306,38 @@ mod tests {
     #[test]
     fn a_zero_reading_is_a_reading() {
         assert_eq!(read_context("Ctx: 0 | branch"), Some(ContextReading::TokensUsed(0)));
+    }
+
+    #[test]
+    fn a_pane_is_left_alone_until_it_is_actually_full() {
+        use super::{wants_a_fresh_session, ContextReading};
+
+        let hour = 3600;
+
+        assert!(!wants_a_fresh_session(Some(ContextReading::TokensUsed(40_000)), hour, false));
+        assert!(wants_a_fresh_session(Some(ContextReading::TokensUsed(210_000)), hour, false));
+        assert!(!wants_a_fresh_session(Some(ContextReading::PercentLeft(60)), hour, false));
+        assert!(wants_a_fresh_session(Some(ContextReading::PercentLeft(9)), hour, false));
+    }
+
+    #[test]
+    fn a_pane_in_the_middle_of_something_is_never_taken_away() {
+        use super::{wants_a_fresh_session, ContextReading};
+
+        assert!(!wants_a_fresh_session(Some(ContextReading::TokensUsed(300_000)), 3600, true));
+    }
+
+    #[test]
+    fn a_pane_that_just_opened_is_not_restarted_in_a_loop() {
+        use super::{wants_a_fresh_session, ContextReading};
+
+        assert!(!wants_a_fresh_session(Some(ContextReading::TokensUsed(300_000)), 30, false));
+    }
+
+    #[test]
+    fn a_pane_that_says_nothing_about_its_context_is_left_alone() {
+        use super::wants_a_fresh_session;
+
+        assert!(!wants_a_fresh_session(None, 3600, false));
     }
 }

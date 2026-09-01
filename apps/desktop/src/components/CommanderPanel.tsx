@@ -1,15 +1,20 @@
+import { use_poll } from "@/lib/poll";
 import { useCallback, useEffect, useState } from "react";
 
 import {
+    ignite_commander,
     list_plans,
+    list_repos,
     mark_step,
     ready_steps,
     supervisor_watches,
     type Plan,
     type PlanStep,
     type ReadyStep,
+    type Repository,
     type Watch,
 } from "@/lib/core";
+import { Waiting } from "@/components/Spinner";
 import { use_services } from "@/workspace/registry";
 
 const STEP_COLOR: Record<string, string> = {
@@ -20,34 +25,57 @@ const STEP_COLOR: Record<string, string> = {
 };
 
 export function CommanderPanel({ active }: { active: boolean }) {
-    const { crew, open_session } = use_services();
+    const { crew, repositories, open_session } = use_services();
     const [plans, set_plans] = useState<Plan[]>([]);
     const [ready, set_ready] = useState<ReadyStep[]>([]);
     const [watches, set_watches] = useState<Watch[]>([]);
+    const [repos, set_repos] = useState<Repository[]>([]);
+    const [igniting, set_igniting] = useState<string | null>(null);
     const [notice, set_notice] = useState<string | null>(null);
 
     const refresh = useCallback(async () => {
-        const [held, next, watching] = await Promise.all([
+        const [held, next, watching, known] = await Promise.all([
             list_plans(),
             ready_steps(),
             supervisor_watches(),
+            list_repos(),
         ]);
         set_plans(held);
         set_ready(next);
         set_watches(watching);
+        set_repos(known);
     }, []);
 
-    useEffect(() => {
-        if (!active) {
-            return;
-        }
+    use_poll(() => {
+        refresh().catch(() => undefined);
+    }, 4000, active);
 
-        refresh().catch((cause) => set_notice(cause instanceof Error ? cause.message : String(cause)));
-        const handle = window.setInterval(() => refresh().catch(() => undefined), 4000);
-        return () => window.clearInterval(handle);
-    }, [active, refresh]);
+    // A commander belongs to a project. Reading the first one in the crew showed
+    // one project's X while standing in another's, which is the sort of wrong
+    // that looks right.
+    const mine = repositories ? repos.filter((repo) => repositories.includes(repo.id)) : repos;
+    const commander_of = (repository_id: string) =>
+        crew.find((agent) => agent.role === "commander" && agent.repository_id === repository_id);
 
-    const commander = crew.find((agent) => agent.role === "commander");
+    const ignite = useCallback(
+        async (repository_id: string) => {
+            set_igniting(repository_id);
+            set_notice(null);
+            try {
+                const done = await ignite_commander(repository_id);
+                if (done.commander.session_id) {
+                    open_session(done.commander.session_id);
+                }
+                await refresh();
+            } catch (cause) {
+                set_notice(cause instanceof Error ? cause.message : String(cause));
+            } finally {
+                set_igniting(null);
+            }
+        },
+        [open_session, refresh],
+    );
+
     const running = plans.filter((plan) => plan.state === "running");
     const watching = watches.filter((watch) => watch.state === "working");
     const settled = watches.filter((watch) => watch.state !== "working");
@@ -57,19 +85,54 @@ export function CommanderPanel({ active }: { active: boolean }) {
 
     return (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-y-auto p-2.5">
-            <section className="flex flex-wrap items-center gap-2">
-                {commander ? (
-                    <button
-                        className="rounded-md border border-turquoise px-2 py-0.5 font-mono text-[11px] text-turquoise"
-                        onClick={() => commander.session_id && open_session(commander.session_id)}
-                    >
-                        {commander.name} · {commander.session_id ? "at its desk" : "not started"}
-                    </button>
-                ) : (
+            <section className="flex flex-col gap-1.5">
+                {mine.length === 0 ? (
                     <span className="font-mono text-[11px] text-shade">
-                        No commander hired. Hire an agent with the role commander.
+                        No project in this workspace yet.
                     </span>
-                )}
+                ) : null}
+
+                {mine.map((repo) => {
+                    const held = commander_of(repo.id);
+                    const at_work = Boolean(held?.session_id);
+
+                    return (
+                        <div key={repo.id} className="flex flex-wrap items-center gap-2">
+                            <span className="font-mono text-[11px] text-linen">{repo.name}</span>
+                            <span className="font-mono text-[10px] text-shade">
+                                {held
+                                    ? `${held.name} · ${at_work ? "at its desk" : "stopped"}`
+                                    : "no commander yet"}
+                            </span>
+
+                            {igniting === repo.id ? (
+                                <Waiting says="starting…" className="font-mono text-[11px] text-turquoise" />
+                            ) : (
+                                <button
+                                    className="rounded-md border border-turquoise px-2 py-0.5 font-mono text-[11px] text-turquoise"
+                                    onClick={() => ignite(repo.id)}
+                                    title={
+                                        held
+                                            ? "hand it the project again"
+                                            : "hire X here and set it going"
+                                    }
+                                >
+                                    {at_work ? `tell ${held?.name}` : `start ${held?.name ?? "X"}`}
+                                </button>
+                            )}
+
+                            {at_work && held?.session_id ? (
+                                <button
+                                    className="rounded-md border border-reef px-2 py-0.5 font-mono text-[11px] text-shell hover:border-foam"
+                                    onClick={() => held.session_id && open_session(held.session_id)}
+                                >
+                                    open its pane
+                                </button>
+                            ) : null}
+                        </div>
+                    );
+                })}
+
                 <span className="font-mono text-[10px] text-shade">
                     {running.length} plan{running.length === 1 ? "" : "s"} running · {watching.length} step
                     {watching.length === 1 ? "" : "s"} being watched
@@ -176,7 +239,7 @@ export function CommanderPanel({ active }: { active: boolean }) {
                 </div>
             </section>
 
-            <section className="min-h-0">
+            <section className="shrink-0">
                 <h3 className="mb-1 font-mono text-[9px] uppercase tracking-[0.14em] text-shade">
                     What the supervisor is watching
                 </h3>

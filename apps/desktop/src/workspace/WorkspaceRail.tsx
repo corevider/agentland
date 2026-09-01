@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { list_agents, list_repos, type Agent, type Repository } from "@/lib/core";
+import {
+    activate_workspace,
+    list_agents,
+    list_repos,
+    list_workspaces,
+    type Agent,
+    type Repository,
+    type Workspace,
+} from "@/lib/core";
 import { PRESENCE_COLOR } from "@/island/geometry";
 import type { PanelId } from "@/workspace/layout";
 import { PANELS } from "@/workspace/registry";
@@ -8,6 +16,11 @@ import { PANELS } from "@/workspace/registry";
 interface Props {
     visible: PanelId[];
     repositories: string[] | null;
+    active_workspace: string | null;
+    /// Called after a workspace has been made active, so the rest of the window
+    /// follows the rail rather than the other way round.
+    on_switched: () => void;
+    on_open_repo: (repository: Repository) => void;
     counts: Partial<Record<PanelId, number>>;
     collapsed: boolean;
     on_collapse: (next: boolean) => void;
@@ -28,6 +41,9 @@ function Dot({ presence }: { presence: string }) {
 export function WorkspaceRail({
     visible,
     repositories,
+    active_workspace,
+    on_switched,
+    on_open_repo,
     counts,
     collapsed,
     on_collapse,
@@ -37,13 +53,29 @@ export function WorkspaceRail({
 }: Props) {
     const [repos, set_repos] = useState<Repository[]>([]);
     const [agents, set_agents] = useState<Agent[]>([]);
+    const [workspaces, set_workspaces] = useState<Workspace[]>([]);
     const [folded, set_folded] = useState<Record<string, boolean>>({});
+    const [switching, set_switching] = useState(false);
 
     const refresh = useCallback(async () => {
-        const [listed, crew] = await Promise.all([list_repos(), list_agents()]);
+        const [listed, crew, held] = await Promise.all([list_repos(), list_agents(), list_workspaces()]);
         set_repos(listed);
         set_agents(crew);
+        set_workspaces(held.workspaces);
     }, []);
+
+    const switch_to = useCallback(
+        (id: string) => {
+            set_switching(false);
+            activate_workspace(id)
+                .then(() => {
+                    on_switched();
+                    return refresh();
+                })
+                .catch(() => undefined);
+        },
+        [on_switched, refresh],
+    );
 
     const shown_repos = useMemo(
         () => (repositories ? repos.filter((repo) => repositories.includes(repo.id)) : repos),
@@ -109,6 +141,51 @@ export function WorkspaceRail({
 
             <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
                 <h2 className="px-1 pb-0.5 pt-1.5 font-mono text-[9px] uppercase tracking-[0.16em] text-shade">
+                    Workspace
+                </h2>
+
+                <button
+                    className="flex w-full items-center gap-1.5 rounded border border-reef px-2 py-1 text-left text-[13px] text-linen hover:border-turquoise"
+                    title="switch to another workspace"
+                    onClick={() => set_switching(!switching)}
+                >
+                    <span className="truncate">
+                        {workspaces.find((held) => held.id === active_workspace)?.name ?? "no workspace yet"}
+                    </span>
+                    <span className="ml-auto shrink-0 font-mono text-[9px] text-shade">
+                        {switching ? "▴" : "▾"}
+                    </span>
+                </button>
+
+                {switching ? (
+                    <div className="mb-1 mt-0.5 rounded border border-foam bg-lagoon-deep py-0.5">
+                        {workspaces.map((workspace) => {
+                            const busy = agents.filter(
+                                (agent) =>
+                                    workspace.repository_ids.includes(agent.repository_id) &&
+                                    agent.session_id !== null,
+                            ).length;
+
+                            return (
+                                <button
+                                    key={workspace.id}
+                                    className={`flex w-full items-center gap-2 px-2 py-[3px] text-left text-[12px] hover:bg-shallow ${
+                                        workspace.id === active_workspace ? "text-turquoise" : "text-shell"
+                                    }`}
+                                    onClick={() => switch_to(workspace.id)}
+                                >
+                                    <span className="truncate">{workspace.name}</span>
+                                    <span className="ml-auto shrink-0 font-mono text-[9px] text-shade">
+                                        {workspace.repository_ids.length}
+                                        {busy > 0 ? ` · ${busy} live` : ""}
+                                    </span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                ) : null}
+
+                <h2 className="px-1 pb-0.5 pt-3 font-mono text-[9px] uppercase tracking-[0.16em] text-shade">
                     Views
                 </h2>
                 {PANELS.map((panel) => {
@@ -136,7 +213,7 @@ export function WorkspaceRail({
                 })}
 
                 <h2 className="px-1 pb-0.5 pt-3 font-mono text-[9px] uppercase tracking-[0.16em] text-shade">
-                    Workspaces
+                    Projects
                 </h2>
                 {shown_repos.length === 0 ? (
                     <p className="px-2 font-mono text-[10px] text-shade">
@@ -150,18 +227,25 @@ export function WorkspaceRail({
 
                     return (
                         <div key={repo.id} className="mb-0.5">
-                            <button
-                                onClick={() => set_folded((held) => ({ ...held, [repo.id]: !shut }))}
-                                className="flex w-full items-center gap-1.5 rounded px-2 py-[3px] text-left text-[13px] text-linen hover:bg-lagoon-deep/60"
-                            >
-                                <span className="w-2 shrink-0 font-mono text-[9px] text-shade">
+                            <div className="flex w-full items-center gap-1.5 rounded px-2 py-[3px] text-[13px] text-linen hover:bg-lagoon-deep/60">
+                                <button
+                                    className="w-2 shrink-0 font-mono text-[9px] text-shade hover:text-linen"
+                                    title={shut ? "show the crew here" : "fold this project"}
+                                    onClick={() => set_folded((held) => ({ ...held, [repo.id]: !shut }))}
+                                >
                                     {shut ? "▸" : "▾"}
-                                </span>
-                                <span className="truncate">{repo.name}</span>
-                                <span className="ml-auto font-mono text-[10px] tabular-nums text-shade">
+                                </button>
+                                <button
+                                    className="min-w-0 flex-1 truncate text-left hover:text-turquoise"
+                                    title={repo.primary_path}
+                                    onClick={() => on_open_repo(repo)}
+                                >
+                                    {repo.name}
+                                </button>
+                                <span className="font-mono text-[10px] tabular-nums text-shade">
                                     {crew.length}
                                 </span>
-                            </button>
+                            </div>
 
                             {shut
                                 ? null

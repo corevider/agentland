@@ -239,16 +239,45 @@ pub fn safe_to_type(previous: &str, latest: &str) -> bool {
 /// "esc to interrupt" appears once, while the spinner line — a glyph, a gerund and
 /// an ellipsis, `✶ Skedaddling… (3s · thinking)` — appears 547 times. Keying only
 /// on the interrupt hint would have typed into running turns all day.
+/// Whether the pane is holding a question open — the engine's own picker, not
+/// ours. An agent that has stopped on one is waiting on a person, and saying it
+/// is "at a prompt" hides that from the only person who can answer.
+pub fn asking_the_human(frame: &str) -> bool {
+    let lowered = frame.to_lowercase();
+    let tail: String = lowered.lines().rev().take(16).collect::<Vec<_>>().join("\n");
+
+    // A picker draws its hint line differently depending on what it is asking —
+    // "enter to select" for a list, "esc to cancel · tab to amend" for a command
+    // it wants approved — so the hint alone is not the signal. What every one of
+    // them has is a way out and a numbered choice waiting.
+    let squashed: String = tail.chars().filter(|c| !c.is_whitespace()).collect();
+    let has_a_way_out = tail.contains("esc to cancel")
+        || squashed.contains("esctocancel")
+        || tail.contains("to navigate");
+    let offers_a_choice = tail.contains("enter to select")
+        || tail.contains("enter to confirm")
+        || squashed.contains("doyouwanttoproceed")
+        || squashed.contains("1.yes");
+
+    has_a_way_out && offers_a_choice
+}
+
 pub fn turn_running(frame: &str) -> bool {
     let lowered = frame.to_lowercase();
-    if lowered.contains("esc to interrupt") || lowered.contains("esc to cancel") {
+    // "esc to cancel" is the picker's way out, not a turn in flight — a pane
+    // stopped on "do you want to proceed?" carries it while nothing runs, and
+    // reading it as work is how a held question hides behind "working".
+    if lowered.contains("esc to interrupt") {
         return true;
     }
 
+    // The engine redraws counters and fragments below its spinner, so the
+    // spinner is not always near the bottom — measured at 30-odd lines deep on a
+    // wrapped pane, which read as "idle" while a turn was plainly running.
     frame
         .lines()
         .rev()
-        .take(16)
+        .take(40)
         .any(|line| spinner_line(line.trim()))
 }
 
@@ -296,37 +325,6 @@ fn composer_line(frame: &str) -> Option<String> {
                 .or_else(|| bare.strip_prefix('>'))
                 .map(|rest| rest.trim().to_owned())
         })
-}
-
-fn is_chrome(line: &str) -> bool {
-    if line.is_empty() {
-        return true;
-    }
-
-    if line.chars().all(|c| matches!(c, '─' | '-' | '═' | '╭' | '╮' | '╯' | '╰' | '│' | ' ')) {
-        return true;
-    }
-
-    let lowered = line.to_lowercase();
-    const KNOWN: &[&str] = &[
-        "? for shortcuts",
-        "⏵",
-        "⚠",
-        "model:",
-        "session:",
-        "reset:",
-        "context left",
-        "bypass permissions",
-        "transcript saving",
-        "shift+tab",
-        "auto mode",
-        "✻",
-        "✽",
-        "✶",
-        "·",
-    ];
-
-    KNOWN.iter().any(|mark| lowered.starts_with(mark))
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -542,6 +540,50 @@ impl Supervisor {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_command_the_engine_wants_approved_is_a_question_held_open() {
+        // Recorded from zen's pane on the /version plan, where this read as
+        // "waiting at a prompt" and the step stood still for four minutes.
+        let frame = [
+            "  Bash command",
+            "npm test 2>&1",
+            "Run the test suite",
+            "This command requires approval",
+            "Do you want to proceed?",
+            "❯ 1. Yes",
+            "  2. No",
+            "Esc to cancel · Tab to amend · ctrl+e to explain",
+        ]
+        .join("\n");
+
+        assert!(super::asking_the_human(&frame));
+        assert!(!super::turn_running(&frame));
+    }
+
+    #[test]
+    fn a_list_the_engine_offers_is_still_a_question_held_open() {
+        let frame = "❯ 1. rebase onto ada-tree\n  2. start fresh\nEnter to select · Esc to cancel";
+
+        assert!(super::asking_the_human(frame));
+    }
+
+    #[test]
+    fn a_plain_prompt_is_not_a_question() {
+        let frame = "❯\n⏵⏵ bypass permissions on (shift+tab to cycle)\nModel: Opus 5";
+
+        assert!(!super::asking_the_human(frame));
+    }
+
+    #[test]
+    fn a_spinner_buried_under_redrawn_footer_still_reads_as_a_running_turn() {
+        let mut lines = vec!["✻ Gesticulating… (28s · ↓ 2.1k tokens)".to_owned()];
+        for count in 0..30 {
+            lines.push(format!("{count}"));
+        }
+
+        assert!(super::turn_running(&lines.join("\n")));
+    }
+
     use super::*;
 
     fn watch() -> Watch {
@@ -882,5 +924,28 @@ mod tests {
         assert!(!supervisor.wake_is_due(210), "one attempt in, the backoff holds");
         assert!(supervisor.wake_is_due(400), "and lifts later");
         assert_eq!(third.wake_attempts, 1);
+    }
+}
+
+#[cfg(test)]
+mod asking_tests {
+    use super::asking_the_human;
+
+    #[test]
+    fn a_picker_on_screen_is_an_agent_waiting_on_a_person() {
+        let frame = "What base should the /version work build on?\n❯ 1. Rebase onto ada-tree\n  2. Merge first\nEnter to select · ↑/↓ to navigate · Esc to cancel";
+        assert!(asking_the_human(frame));
+    }
+
+    #[test]
+    fn a_pane_at_an_ordinary_prompt_is_not_asking_anything() {
+        let frame = "● Done.\n\n❯\n\nModel: Opus 5 | Ctx: 42k\n⏵⏵ bypass permissions on (shift+tab to cycle)";
+        assert!(!asking_the_human(frame));
+    }
+
+    #[test]
+    fn the_words_have_to_be_on_screen_now_not_somewhere_up_the_scrollback() {
+        let old = "Enter to select · Esc to cancel\n".to_owned() + &"a line of work\n".repeat(30);
+        assert!(!asking_the_human(&old), "a picker answered long ago is not a question");
     }
 }

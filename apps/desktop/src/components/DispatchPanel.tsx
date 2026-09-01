@@ -1,3 +1,6 @@
+import { use_poll } from "@/lib/poll";
+
+import { exactly, when } from "@/lib/when";
 import { useCallback, useEffect, useState } from "react";
 
 import {
@@ -25,15 +28,9 @@ export function DispatchPanel({ active }: { active: boolean }) {
         set_tasks(board);
     }, []);
 
-    useEffect(() => {
-        if (!active) {
-            return;
-        }
-
+    use_poll(() => {
         refresh().catch((cause) => set_notice(cause instanceof Error ? cause.message : String(cause)));
-        const handle = window.setInterval(() => refresh().catch(() => undefined), 4000);
-        return () => window.clearInterval(handle);
-    }, [active, refresh]);
+    }, 4000, active);
 
     const run = useCallback(
         (action: () => Promise<unknown>) => {
@@ -182,7 +179,7 @@ export function DispatchPanel({ active }: { active: boolean }) {
                 </div>
             </section>
 
-            <section className="min-h-0">
+            <section className="shrink-0">
                 <h3 className="mb-1 font-mono text-[9px] uppercase tracking-[0.14em] text-shade">
                     What X decided
                 </h3>
@@ -203,6 +200,9 @@ export function DispatchPanel({ active }: { active: boolean }) {
                                       <span className="text-linen">{name_of(event.agent_id)}</span>
                                       <span className="text-shade">took</span>
                                       <span className="text-linen">{event.task_id}</span>
+                                      <span className="ml-auto text-shade" title={exactly(event.at ?? 0)}>
+                                          {when(event.at ?? 0, Math.floor(Date.now() / 1000))}
+                                      </span>
                                   </div>
                                   <div className="mt-0.5 text-[11px] text-driftwood">{event.reason}</div>
                               </article>

@@ -14,6 +14,9 @@ pub struct Message {
     pub text: String,
     #[serde(default)]
     pub delivered: bool,
+    /// When it was sent. Zero for messages from before this was recorded.
+    #[serde(default)]
+    pub at: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -136,6 +139,7 @@ impl Mailbox {
             to: request.to,
             text: request.text,
             delivered: false,
+            at: now_secs(),
         };
 
         state.messages.push(message.clone());
@@ -211,4 +215,11 @@ mod tests {
         assert_eq!(mailbox.take_inbox("rex").len(), 1);
         assert!(mailbox.take_inbox("rex").is_empty());
     }
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_secs())
+        .unwrap_or_default()
 }

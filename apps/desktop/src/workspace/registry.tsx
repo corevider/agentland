@@ -1,16 +1,21 @@
+import type { MenuItem } from "@/components/ContextMenu";
 import { Suspense, createContext, lazy, useContext, type ReactNode } from "react";
 
 import { ApprovalsPanel } from "@/components/ApprovalsPanel";
 import { BoardPanel } from "@/components/BoardPanel";
 import { MailPanel } from "@/components/MailPanel";
 import { MemoryPanel } from "@/components/MemoryPanel";
+import { NotesPanel } from "@/components/NotesPanel";
 import { RoutinesPanel } from "@/components/RoutinesPanel";
 import { CommanderPanel } from "@/components/CommanderPanel";
 import { CrewPanel } from "@/components/CrewPanel";
 import { DispatchPanel } from "@/components/DispatchPanel";
 import { PreviewPanel } from "@/components/PreviewPanel";
+import { ProjectPanel } from "@/components/ProjectPanel";
 import { RepoPanel } from "@/components/RepoPanel";
 import { SkillsPanel } from "@/components/SkillsPanel";
+import { Waiting } from "@/components/Spinner";
+import { StartPanel } from "@/components/StartPanel";
 import { TerminalsPanel } from "@/components/TerminalsPanel";
 import type { PaneMetrics } from "@/components/TerminalPane";
 import type { SessionInfo, Agent } from "@/lib/core";
@@ -37,9 +42,13 @@ export interface PanelEntry {
 }
 
 export interface WorkspaceServices {
+    open_menu: (event: React.MouseEvent, title: string | undefined, items: MenuItem[]) => void;
     sessions: SessionInfo[];
     crew: Agent[];
     repositories: string[] | null;
+    /// Where the person last said they wanted to be, from the jumper: a project
+    /// and, when they picked one, the worktree inside it.
+    going: { repository_id: string | null; worktree: string | null; at: number } | null;
     open_session: (id: string) => void;
     close_session: (id: string) => void;
     open_shell_in: (cwd: string) => void;
@@ -70,6 +79,12 @@ export function use_services(): WorkspaceServices {
 
 export const PANELS: PanelEntry[] = [
     {
+        id: "start",
+        label: "Start",
+        hint: "open a project, put a crew in it, say what to do",
+        Component: ({ active }) => <StartPanel active={active} />,
+    },
+    {
         id: "island",
         label: "Island",
         hint: "the crew at a glance",
@@ -78,7 +93,7 @@ export const PANELS: PanelEntry[] = [
             <Suspense
                 fallback={
                     <div className="flex min-h-0 flex-1 items-center justify-center font-mono text-[11px] text-shell">
-                        loading the island…
+                        <Waiting says="loading the island…" />
                     </div>
                 }
             >
@@ -110,6 +125,18 @@ export const PANELS: PanelEntry[] = [
         label: "Preview",
         hint: "a worktree's localhost",
         Component: ({ active }) => <PreviewPanel active={active} />,
+    },
+    {
+        id: "project",
+        label: "Files & Git",
+        hint: "a project's folder, and what a branch changed in it",
+        Component: ({ active }) => (
+            <ProjectPanel
+                active={active}
+                repositories={use_services().repositories}
+                going={use_services().going}
+            />
+        ),
     },
     {
         id: "repos",
@@ -146,6 +173,12 @@ export const PANELS: PanelEntry[] = [
         label: "Memory",
         hint: "what the crew has learned, once you approve it",
         Component: ({ active }) => <MemoryPanel active={active} />,
+    },
+    {
+        id: "notes",
+        label: "Notes",
+        hint: "the vault the crew writes into, and you can open in any note tool",
+        Component: ({ active }) => <NotesPanel active={active} />,
     },
     {
         id: "routines",

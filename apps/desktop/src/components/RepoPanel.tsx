@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 
 import {
     add_repo,
+    clone_repo,
     create_worktree,
+    forget_repo,
     list_repos,
     list_services,
     list_worktrees,
@@ -13,6 +15,7 @@ import {
     type Service,
     type WorktreeStatus,
 } from "@/lib/core";
+import { as_url, clone_target, is_clonable, pick_folder } from "@/lib/pick";
 
 const STATE_COLOR: Record<Service["state"], string> = {
     starting: "text-sun",
@@ -27,6 +30,9 @@ export function RepoPanel({ active }: { active: boolean }) {
     const [services, set_services] = useState<Record<string, Service>>({});
     const [preview, set_preview] = useState<string | null>(null);
     const [path, set_path] = useState("");
+    const [url, set_url] = useState("");
+    const [into, set_into] = useState("");
+    const [needs_git, set_needs_git] = useState<string | null>(null);
     const [names, set_names] = useState<Record<string, string>>({});
     const [error, set_error] = useState<string | null>(null);
     const [busy, set_busy] = useState(false);
@@ -75,26 +81,126 @@ export function RepoPanel({ active }: { active: boolean }) {
     return (
         <div className="flex h-full min-h-0 min-w-0 flex-1">
             <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-2.5 overflow-y-auto p-2.5">
-                <div className="flex flex-wrap items-center gap-2">
-                    <input
-                        className="w-96 border border-reef bg-lagoon px-2 py-1 font-mono text-[11px] rounded-lg"
-                        placeholder="/path/to/a/git/repository"
-                        value={path}
-                        onChange={(event) => set_path(event.target.value)}
-                    />
-                    <button
-                        className="border border-turquoise px-3 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40 rounded-lg"
-                        disabled={busy || path.trim().length === 0}
-                        onClick={() =>
-                            run(async () => {
-                                await add_repo(path.trim());
-                                set_path("");
-                            })
-                        }
-                    >
-                        add repository
-                    </button>
-                </div>
+                <section className="flex flex-col gap-2 rounded-lg border border-reef bg-lagoon-deep p-2">
+                    <h3 className="font-mono text-[9px] uppercase tracking-[0.14em] text-shade">
+                        Open a project
+                    </h3>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                        <input
+                            className="min-w-[18rem] flex-1 rounded-lg border border-reef bg-lagoon px-2 py-1 font-mono text-[11px]"
+                            placeholder="a folder on this machine"
+                            value={path}
+                            onChange={(event) => {
+                                set_path(event.target.value);
+                                set_needs_git(null);
+                            }}
+                        />
+                        <button
+                            className="rounded-lg border border-reef px-3 py-1 font-mono text-[11px] text-shell hover:border-foam"
+                            onClick={() =>
+                                run(async () => {
+                                    const chosen = await pick_folder("Open a project folder", path || undefined);
+                                    if (chosen) {
+                                        set_path(chosen);
+                                        set_needs_git(null);
+                                    }
+                                })
+                            }
+                        >
+                            browse…
+                        </button>
+                        <button
+                            className="rounded-lg border border-turquoise px-3 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40"
+                            disabled={busy || path.trim().length === 0}
+                            onClick={() => {
+                                const wanted = path.trim();
+                                set_needs_git(null);
+                                run(async () => {
+                                    try {
+                                        await add_repo(wanted);
+                                        set_path("");
+                                    } catch (cause) {
+                                        const said = cause instanceof Error ? cause.message : String(cause);
+                                        // A folder that is not a repository yet is not a
+                                        // mistake — it is the other half of the question.
+                                        if (said.includes("not a git repository")) {
+                                            set_needs_git(wanted);
+                                            return;
+                                        }
+                                        throw cause;
+                                    }
+                                });
+                            }}
+                        >
+                            open folder
+                        </button>
+                    </div>
+
+                    {needs_git ? (
+                        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-sun px-2 py-1">
+                            <span className="font-mono text-[11px] text-sun">
+                                {needs_git} is not a git repository yet. Each agent works in its own worktree,
+                                which needs one.
+                            </span>
+                            <button
+                                className="rounded-lg border border-sun px-2 py-[3px] font-mono text-[11px] text-sun hover:bg-sun/10"
+                                disabled={busy}
+                                onClick={() =>
+                                    run(async () => {
+                                        await add_repo(needs_git, true);
+                                        set_needs_git(null);
+                                        set_path("");
+                                    })
+                                }
+                            >
+                                start one here
+                            </button>
+                        </div>
+                    ) : null}
+
+                    <div className="flex flex-wrap items-center gap-2">
+                        <input
+                            className="min-w-[18rem] flex-1 rounded-lg border border-reef bg-lagoon px-2 py-1 font-mono text-[11px]"
+                            placeholder="or clone: a git URL, or owner/repo"
+                            value={url}
+                            onChange={(event) => set_url(event.target.value)}
+                        />
+                        <button
+                            className="rounded-lg border border-reef px-3 py-1 font-mono text-[11px] text-shell hover:border-foam"
+                            onClick={() =>
+                                run(async () => {
+                                    const chosen = await pick_folder("Clone into…", into || undefined);
+                                    if (chosen) {
+                                        set_into(chosen);
+                                    }
+                                })
+                            }
+                        >
+                            clone into…
+                        </button>
+                        <button
+                            className="rounded-lg border border-turquoise px-3 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40"
+                            disabled={busy || !is_clonable(url) || into.trim().length === 0}
+                            onClick={() =>
+                                run(async () => {
+                                    await clone_repo(as_url(url), into.trim());
+                                    set_url("");
+                                })
+                            }
+                        >
+                            clone
+                        </button>
+                    </div>
+
+                    {url.trim() && into.trim() ? (
+                        <p className="font-mono text-[10px] text-shade">
+                            lands in {clone_target(as_url(url), into.trim())}
+                        </p>
+                    ) : url.trim() ? (
+                        <p className="font-mono text-[10px] text-shade">pick where it should land</p>
+                    ) : null}
+                </section>
 
                 {error ? (
                     <div className="border border-coral bg-lagoon px-2 py-1 font-mono text-[11px] text-coral rounded-lg">
@@ -113,11 +219,19 @@ export function RepoPanel({ active }: { active: boolean }) {
                     <section key={repo.id} className="border border-reef bg-lagoon rounded-lg">
                         <header className="flex flex-wrap items-baseline justify-between gap-3 border-b border-reef px-2 py-1">
                             <span className="font-mono text-[13px] text-linen">{repo.name}</span>
-                            <span className="font-mono text-[11px] text-shell">
+                            <span className="flex items-baseline gap-2 font-mono text-[11px] text-shell">
                                 {repo.default_branch}
                                 {repo.remotes.length > 0
                                     ? ` · ${repo.remotes.map((remote) => `${remote.name}@${remote.provider}`).join(", ")}`
                                     : " · no remote"}
+                                <button
+                                    className="rounded px-1 text-shade hover:text-coral"
+                                    title="stop tracking this project — the folder is left alone"
+                                    disabled={busy}
+                                    onClick={() => run(() => forget_repo(repo.id))}
+                                >
+                                    forget
+                                </button>
                             </span>
                         </header>
 

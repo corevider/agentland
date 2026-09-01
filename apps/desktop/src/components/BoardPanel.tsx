@@ -1,5 +1,10 @@
+import { use_poll } from "@/lib/poll";
+
+import { exactly, when } from "@/lib/when";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+
+import { use_sideways_wheel } from "@/lib/wheel";
 
 import {
     assign_task,
@@ -8,17 +13,20 @@ import {
     list_agents,
     list_repos,
     list_tasks,
+    merge_worktree,
     move_task,
     open_pull_request,
     review_worktree,
     type Agent,
     type Column,
+    type Entry,
+    type Evidence,
     type Repository,
     type Review,
     type Task,
 } from "@/lib/core";
 
-const COLUMNS: Column[] = ["backlog", "assigned", "working", "review", "done"];
+const COLUMNS: Column[] = ["backlog", "assigned", "working", "review", "ready", "done"];
 
 function patch_line_color(line: string): string {
     if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ")) {
@@ -37,6 +45,7 @@ function patch_line_color(line: string): string {
 }
 
 export function BoardPanel({ active, repositories }: { active: boolean; repositories: string[] | null }) {
+    const columns = use_sideways_wheel<HTMLDivElement>();
     const [all_tasks, set_tasks] = useState<Task[]>([]);
     const tasks = repositories
         ? all_tasks.filter((task) => repositories.includes(task.repository_id))
@@ -45,6 +54,9 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
     const [repos, set_repos] = useState<Repository[]>([]);
     const [draft, set_draft] = useState({ title: "", body: "", repository_id: "" });
     const [review, set_review] = useState<{ task: Task; data: Review } | null>(null);
+    // The id rather than the card: the board polls, and a card held by value
+    // would stop changing the moment it was opened.
+    const [opened, set_opened] = useState<string | null>(null);
     const [error, set_error] = useState<string | null>(null);
     const [busy, set_busy] = useState(false);
 
@@ -63,17 +75,9 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
         }));
     }, []);
 
-    useEffect(() => {
-        if (!active) {
-            return;
-        }
-
-        refresh().catch((cause) => set_error(String(cause)));
-        const handle = window.setInterval(() => {
-            list_tasks().then(set_tasks).catch(() => undefined);
-        }, 4000);
-        return () => window.clearInterval(handle);
-    }, [refresh, active]);
+    use_poll(() => {
+        list_tasks().then(set_tasks).catch(() => undefined);
+    }, 4000, active);
 
     const run = useCallback(
         async (action: () => Promise<unknown>) => {
@@ -148,7 +152,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                     </div>
                 ) : null}
 
-                <div className="flex min-h-0 flex-1 gap-1.5 overflow-x-auto">
+                <div ref={columns} className="flex min-h-0 flex-1 gap-1.5 overflow-x-auto">
                     {COLUMNS.map((column) => (
                         <div
                             key={column}
@@ -172,6 +176,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                                         key={task.id}
                                         task={task}
                                         agents={agents}
+                                        on_open={() => set_opened(task.id)}
                                         on_assign={(agent_id) => run(() => assign_task(task.id, agent_id))}
                                         on_review={() => void open_review(task)}
                                         on_delete={() => run(() => delete_task(task.id))}
@@ -182,6 +187,27 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                     ))}
                 </div>
             </div>
+
+            {!review && opened && tasks.some((task) => task.id === opened) ? (
+                <CardDetail
+                    task={tasks.find((task) => task.id === opened)!}
+                    on_close={() => set_opened(null)}
+                    on_review={() => {
+                        const held = tasks.find((task) => task.id === opened);
+                        if (held) {
+                            void open_review(held);
+                        }
+                    }}
+                    on_merge={() => {
+                        const held = tasks.find((task) => task.id === opened);
+                        if (held?.worktree) {
+                            void run(() =>
+                                merge_worktree(held.repository_id, held.worktree!, held.id),
+                            );
+                        }
+                    }}
+                />
+            ) : null}
 
             {review ? (
                 <aside className="flex w-[46%] min-w-[440px] flex-col border-l border-reef">
@@ -277,15 +303,178 @@ function Column({ tasks, render }: { tasks: Task[]; render: (task: Task) => Reac
     );
 }
 
+const KIND_TINT: Record<string, string> = {
+    finished: "text-palm",
+    commit: "text-turquoise",
+    diff: "text-shell",
+    pull_request: "text-sun",
+    note: "text-shade",
+};
+
+/// The evidence inside an entry, whichever shape it arrived in.
+///
+/// A core that has not been restarted since the board learned to record who did
+/// what still serves bare evidence with no `what` around it. The window and the
+/// core are separate processes and one can be older than the other, so the
+/// reader takes both rather than showing an empty history for a version skew.
+function what_of(entry: Entry): Evidence {
+    return entry.what ?? (entry as unknown as Evidence);
+}
+
+/// One line of a card's history, in the words of whoever wrote it.
+function said(entry: Entry): string {
+    const what = what_of(entry);
+    switch (what.kind) {
+        case "commit":
+            return `${String(what.sha).slice(0, 7)} ${what.subject}`;
+        case "diff":
+            return `${what.files} files · +${what.insertions} −${what.deletions}`;
+        case "pull_request":
+            return String(what.url);
+        case "finished": {
+            const touched = Number(what.files ?? 0);
+            const size = touched
+                ? ` · ${touched} file${touched === 1 ? "" : "s"} +${what.insertions} −${what.deletions}`
+                : "";
+            return `${what.summary}${size}`;
+        }
+        default:
+            return String(what.text ?? what.kind);
+    }
+}
+
+/// Everything the card knows about itself: what was asked, who took it, where
+/// they worked, and what each of them left behind.
+///
+/// A card used to say "3 evidence" and nothing more, which is the count of an
+/// answer rather than the answer.
+function CardDetail({
+    task,
+    on_close,
+    on_review,
+    on_merge,
+}: {
+    task: Task;
+    on_close: () => void;
+    on_review: () => void;
+    on_merge: () => void;
+}) {
+    const now = Math.floor(Date.now() / 1000);
+    const finish = task.evidence.filter((entry) => what_of(entry).kind === "finished").at(-1);
+
+    return (
+        <aside className="flex w-[46%] min-w-[380px] flex-col border-l border-reef">
+            <header className="flex items-start justify-between gap-2 border-b border-reef px-2 py-1.5">
+                <div className="min-w-0">
+                    <div className="text-[12px] text-linen">{task.title}</div>
+                    <div className="font-mono text-[10px] text-shade" title={exactly(task.at ?? 0)}>
+                        {task.id} · {task.column} · written {when(task.at ?? 0, now)}
+                    </div>
+                </div>
+                <button
+                    className="rounded px-1.5 font-mono text-[11px] text-shell hover:text-linen"
+                    onClick={on_close}
+                >
+                    ✕
+                </button>
+            </header>
+
+            <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-2.5">
+                {task.body.trim() ? (
+                    <p className="whitespace-pre-wrap text-[11px] text-shell">{task.body}</p>
+                ) : null}
+
+                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-[10px]">
+                    <dt className="text-shade">who</dt>
+                    <dd className="text-linen">{task.assignee ?? "nobody yet"}</dd>
+                    <dt className="text-shade">where</dt>
+                    <dd className="text-linen">{task.worktree ?? "not bound to a worktree"}</dd>
+                    <dt className="text-shade">branch</dt>
+                    <dd className="text-turquoise">{task.branch ?? "none yet"}</dd>
+                    <dt className="text-shade">project</dt>
+                    <dd className="text-linen">{task.repository_id}</dd>
+                </dl>
+
+                {finish ? (
+                    <section className="rounded-md border border-palm/60 bg-lagoon-deep px-2 py-1.5">
+                        <h3 className="font-mono text-[9px] uppercase tracking-[0.14em] text-palm">
+                            How it ended
+                        </h3>
+                        <p className="mt-0.5 text-[11px] text-linen">{said(finish)}</p>
+                        <p className="font-mono text-[10px] text-shade" title={exactly(finish.at)}>
+                            {finish.by ?? "someone"} · {finish.at ? when(finish.at, now) : "no date"}
+                        </p>
+                    </section>
+                ) : null}
+
+                <section>
+                    <h3 className="mb-1 font-mono text-[9px] uppercase tracking-[0.14em] text-shade">
+                        What happened · {task.evidence.length}
+                    </h3>
+
+                    {task.evidence.length === 0 ? (
+                        <p className="font-mono text-[10px] text-shade">
+                            Nothing has been recorded on this card yet.
+                        </p>
+                    ) : null}
+
+                    <ol className="flex flex-col gap-1">
+                        {task.evidence.map((entry, index) => (
+                            <li
+                                key={`${entry.at}-${index}`}
+                                className="rounded-md border border-reef bg-lagoon-deep px-2 py-1"
+                            >
+                                <div className={`text-[11px] ${KIND_TINT[what_of(entry).kind] ?? "text-shell"}`}>
+                                    {said(entry)}
+                                </div>
+                                <div
+                                    className="font-mono text-[10px] text-shade"
+                                    title={entry.at ? exactly(entry.at) : "before this was recorded"}
+                                >
+                                    {what_of(entry).kind} · {entry.by ?? "someone"} ·{" "}
+                                    {entry.at ? when(entry.at, now) : "no date"}
+                                </div>
+                            </li>
+                        ))}
+                    </ol>
+                </section>
+
+                <div className="flex flex-wrap gap-2">
+                    {task.worktree ? (
+                        <button
+                            className="rounded-lg border border-turquoise px-2 py-0.5 font-mono text-[11px] text-turquoise"
+                            onClick={on_review}
+                        >
+                            read the diff
+                        </button>
+                    ) : null}
+
+                    {task.column === "ready" && task.worktree ? (
+                        <button
+                            className="rounded-lg border border-palm px-2 py-0.5 font-mono text-[11px] text-palm"
+                            onClick={on_merge}
+                            title="squash and merge the pull request, and finish this card"
+                        >
+                            merge it
+                        </button>
+                    ) : null}
+                </div>
+            </div>
+        </aside>
+    );
+}
+
 function BoardCard({
     task,
     agents,
+    on_open,
     on_assign,
     on_review,
     on_delete,
 }: {
     task: Task;
     agents: Agent[];
+    on_open: () => void;
     on_assign: (agent_id: string) => void;
     on_review: () => void;
     on_delete: () => void;
@@ -297,12 +486,13 @@ function BoardCard({
                             onDragStart={(event) =>
                                 event.dataTransfer.setData("text/plain", task.id)
                             }
+                            onClick={on_open}
                             className="cursor-grab border border-reef bg-lagoon p-2 rounded-lg"
                         >
                             <div className="flex items-baseline justify-between gap-2">
                                 <span className="text-[11px] text-linen">{task.title}</span>
-                                <span className="font-mono text-[10px] text-shade">
-                                    {task.id}
+                                <span className="font-mono text-[10px] text-shade" title={exactly(task.at ?? 0)}>
+                                    {task.id} · {when(task.at ?? 0, Math.floor(Date.now() / 1000))}
                                 </span>
                             </div>
         
@@ -314,7 +504,10 @@ function BoardCard({
         
                             {task.evidence.length > 0 ? (
                                 <div className="mt-1 font-mono text-[10px] text-palm">
-                                    {task.evidence.length} evidence
+                                    {task.evidence.some((entry) => what_of(entry).kind === "finished")
+                                        ? "finished · "
+                                        : ""}
+                                    {task.evidence.length} on its history
                                 </div>
                             ) : null}
         

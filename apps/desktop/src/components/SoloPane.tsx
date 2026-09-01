@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
+import { Waiting } from "@/components/Spinner";
 import { TerminalPane, type PaneMetrics } from "@/components/TerminalPane";
 import { list_agents, list_sessions, set_window, type Agent, type SessionInfo } from "@/lib/core";
 
@@ -10,6 +11,7 @@ export function SoloPane({ session_id }: { session_id: string }) {
     const [session, set_session] = useState<SessionInfo | null>(null);
     const [crew, set_crew] = useState<Agent[]>([]);
     const [gone, set_gone] = useState(false);
+    const [readable, set_readable] = useState(false);
     const metrics = useRef(new Map<string, PaneMetrics>());
 
     const refresh = useCallback(async () => {
@@ -28,7 +30,7 @@ export function SoloPane({ session_id }: { session_id: string }) {
 
     useEffect(() => {
         const put_back = () => {
-            void set_window(session_id, "grid").catch(() => undefined);
+            void set_window(session_id, { holder: "grid" }).catch(() => undefined);
         };
 
         window.addEventListener("beforeunload", put_back);
@@ -45,7 +47,7 @@ export function SoloPane({ session_id }: { session_id: string }) {
                 <button
                     className="ml-auto rounded border border-reef px-2 py-0.5 font-mono text-[11px] text-shell hover:border-foam"
                     onClick={() => {
-                        void set_window(session_id, "grid")
+                        void set_window(session_id, { holder: "grid" })
                             .then(() => invoke("close_pane_window", { sessionId: session_id }))
                             .catch(() => undefined);
                     }}
@@ -60,12 +62,17 @@ export function SoloPane({ session_id }: { session_id: string }) {
                         session={session}
                         label={label}
                         focused
+                        readable={readable}
+                        on_readable={(wanted) => {
+                            set_readable(wanted);
+                            void set_window(session_id, { readable: wanted }).catch(() => undefined);
+                        }}
                         on_focus={() => undefined}
                         on_metrics={(id, value) => metrics.current.set(id, value)}
                     />
                 ) : (
                     <div className="flex flex-1 items-center justify-center font-mono text-[11px] text-shade">
-                        {gone ? "this terminal has closed" : "opening…"}
+                        {gone ? "this terminal has closed" : <Waiting says="opening…" />}
                     </div>
                 )}
             </div>

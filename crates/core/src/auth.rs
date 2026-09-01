@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "lowercase")]
 pub enum Scope {
     Full,
+    /// What the crew's own agents carry. Everything the app can do, except the
+    /// handful of things that decide what the crew itself is allowed to do — an
+    /// agent that can raise its own permissions has no permissions.
+    Agent,
     Approve,
 }
 
@@ -48,7 +52,21 @@ pub struct TokenStore {
     data_dir: PathBuf,
 }
 
+/// What an agent may never do, however useful it would be: take someone off the
+/// crew, or hand out a key. Shaping an agent stays open to the commander, because
+/// lowering another agent is its job — the raise inside that call is refused
+/// separately, by whoever is asking rather than by the route.
+fn is_the_humans_alone(method: &str, path: &str) -> bool {
+    let one_agent = path.starts_with("/agents/") && path.matches('/').count() == 2;
+
+    (method == "DELETE" && one_agent) || path == "/devices"
+}
+
 pub fn permits(scope: Scope, method: &str, path: &str) -> bool {
+    if scope == Scope::Agent {
+        return !is_the_humans_alone(method, path);
+    }
+
     if scope == Scope::Full {
         return true;
     }
@@ -120,6 +138,22 @@ impl TokenStore {
             .map(|entry| entry.scope)
     }
 
+    /// The crew's one key, made once and kept. Minting a fresh one on every
+    /// start would leave a drawer of old keys that still open the door.
+    pub fn for_the_crew(&self, label: &str) -> String {
+        if let Some(held) = self
+            .state
+            .lock()
+            .tokens
+            .values()
+            .find(|entry| entry.scope == Scope::Agent && entry.label == label)
+        {
+            return held.token.clone();
+        }
+
+        self.issue(label.to_owned(), Scope::Agent).secret().to_owned()
+    }
+
     pub fn list(&self) -> Vec<TokenSummary> {
         self.state
             .lock()
@@ -163,6 +197,20 @@ impl TokenStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_crews_key_works_but_cannot_dismiss_or_hand_out_keys() {
+        assert!(permits(Scope::Agent, "GET", "/tasks"));
+        assert!(permits(Scope::Agent, "POST", "/plans"));
+        assert!(permits(Scope::Agent, "POST", "/notes"));
+        assert!(
+            permits(Scope::Agent, "POST", "/agents/ada"),
+            "lowering another agent is the commander's job",
+        );
+
+        assert!(!permits(Scope::Agent, "DELETE", "/agents/ada"), "nobody fires anybody");
+        assert!(!permits(Scope::Agent, "POST", "/devices"), "and nobody mints a key");
+    }
+
 
     #[test]
     fn an_approval_token_cannot_reach_a_shell() {
