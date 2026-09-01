@@ -121,6 +121,42 @@ pub struct RepoRegistry {
     ports: SharedPorts,
 }
 
+/// Who git should say wrote a commit, when the machine has nobody to say.
+///
+/// Git refuses to commit without a name to put on it, and a machine that has
+/// never had `user.email` set is not a broken machine — it is a fresh one. Its
+/// first commit should not be the thing that fails, and on a CI runner it is
+/// exactly the thing that did.
+///
+/// Only when nothing is configured. A person who has set their own identity
+/// keeps it: a commit attributed to the tool rather than to them is a lie about
+/// who wrote it.
+fn who_is_committing(at: &Path) -> Vec<String> {
+    let configured = git(&["config", "user.email"], Some(at))
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+
+    if configured {
+        return Vec::new();
+    }
+
+    vec![
+        "-c".to_owned(),
+        "user.name=Agentland".to_owned(),
+        "-c".to_owned(),
+        "user.email=agentland@localhost".to_owned(),
+    ]
+}
+
+/// Run `git commit` with somebody's name on it, whoever that turns out to be.
+fn commit_as_somebody(args: &[&str], at: &Path) -> Result<String> {
+    let mut all = who_is_committing(at);
+    all.extend(args.iter().map(|piece| (*piece).to_owned()));
+
+    let borrowed: Vec<&str> = all.iter().map(String::as_str).collect();
+    git(&borrowed, Some(at))
+}
+
 fn git(args: &[&str], cwd: Option<&Path>) -> Result<String> {
     let mut command = Command::new("git");
     command.args(args);
@@ -285,9 +321,9 @@ impl RepoRegistry {
         let staged = git(&["diff", "--cached", "--name-only"], Some(&canonical)).unwrap_or_default();
         let message = "chore: start tracking this folder with Agentland";
         if staged.trim().is_empty() {
-            git(&["commit", "--allow-empty", "-m", message], Some(&canonical))?;
+            commit_as_somebody(&["commit", "--allow-empty", "-m", message], &canonical)?;
         } else {
-            git(&["commit", "-m", message], Some(&canonical))?;
+            commit_as_somebody(&["commit", "-m", message], &canonical)?;
         }
 
         self.register(&canonical)
@@ -801,7 +837,7 @@ impl RepoRegistry {
             bail!("there is nothing to commit in {worktree_name}");
         }
 
-        git(&["commit", "-q", "-m", message], Some(&worktree.path))?;
+        commit_as_somebody(&["commit", "-q", "-m", message], &worktree.path)?;
 
         let sha = git(&["rev-parse", "--short", "HEAD"], Some(&worktree.path))?
             .trim()
@@ -1142,6 +1178,32 @@ mod tests {
 
     fn a_registry(name: &str) -> RepoRegistry {
         RepoRegistry::new(std::env::temp_dir().join(format!("agentland-adopt-data-{name}")))
+    }
+
+    #[test]
+    fn a_machine_with_nobody_configured_is_still_given_somebody() {
+        let dir = std::env::temp_dir().join("agentland-identity-probe");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        git(&["init", "-b", "main"], Some(&dir)).unwrap();
+
+        // An empty local value answers for the machine whatever the machine
+        // running this test has configured for itself.
+        git(&["config", "--local", "user.email", ""], Some(&dir)).unwrap();
+
+        let given = who_is_committing(&dir);
+        assert!(
+            given.iter().any(|piece| piece.starts_with("user.email=")),
+            "git was given nobody to blame: {given:?}"
+        );
+
+        git(&["config", "--local", "user.email", "someone@example.com"], Some(&dir)).unwrap();
+        assert!(
+            who_is_committing(&dir).is_empty(),
+            "somebody who has a name of their own keeps it"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
