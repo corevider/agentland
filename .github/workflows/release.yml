@@ -68,10 +68,18 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
+      # The action takes the body as a string, so the notes go through an
+      # output. A heredoc delimiter is the only way to carry newlines out of a
+      # step, and the notes are all newlines.
       - name: What changed since the last tag
         id: notes
         shell: bash
-        run: bash scripts/release/notes.sh > "$RUNNER_TEMP/notes.md"
+        run: |
+          {
+            echo 'body<<AGENTLAND_NOTES_EOF'
+            bash scripts/release/notes.sh
+            echo 'AGENTLAND_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
 
       # Builds, signs with the updater key, uploads the bundles, and writes the
       # latest.json the app reads. Signing is what makes an update trustworthy:
@@ -86,8 +94,7 @@ jobs:
           projectPath: apps/desktop
           tagName: ${{ github.ref_name }}
           releaseName: ${{ github.ref_name }}
-          releaseBody: ${{ steps.notes.outputs.body || '' }}
-          releaseBodyPath: ${{ runner.temp }}/notes.md
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
