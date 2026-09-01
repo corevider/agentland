@@ -60,6 +60,86 @@ pub fn find(worktree: &Path) -> Option<Transcript> {
     Some(Transcript { path: newest })
 }
 
+/// What the engine has spent since a moment, turn by turn.
+///
+/// The transcript is the only place this is written down: the engine records
+/// what each turn cost, and nothing else on the machine does. Reading it is how
+/// the app can throttle itself against a per-minute ceiling it does not make the
+/// requests for.
+///
+/// Rows without a timestamp or a usage block are skipped rather than guessed at.
+pub fn spending_since(worktree: &Path, since: u64) -> Vec<crate::meter::Spend> {
+    let Some(transcript) = find(worktree) else {
+        return Vec::new();
+    };
+
+    let Ok(text) = std::fs::read_to_string(&transcript.path) else {
+        return Vec::new();
+    };
+
+    let mut spends = Vec::new();
+    for line in text.lines() {
+        let Ok(row) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+
+        let Some(usage) = row.get("message").and_then(|held| held.get("usage")) else {
+            continue;
+        };
+
+        let Some(at) = row.get("timestamp").and_then(|held| held.as_str()).and_then(seconds_of)
+        else {
+            continue;
+        };
+
+        if at < since {
+            continue;
+        }
+
+        let number = |key: &str| usage.get(key).and_then(serde_json::Value::as_u64).unwrap_or(0);
+
+        spends.push(crate::meter::Spend {
+            at,
+            input: number("input_tokens")
+                + number("cache_creation_input_tokens")
+                + number("cache_read_input_tokens"),
+            output: number("output_tokens"),
+        });
+    }
+
+    spends
+}
+
+/// Seconds since the epoch, from the engine's own `2026-09-01T13:26:11.984Z`.
+///
+/// Hand-rolled because the whole of a date library would be carried for one
+/// format that never varies, and getting this wrong is visible immediately: a
+/// window that never fills, or one that never empties.
+fn seconds_of(stamp: &str) -> Option<u64> {
+    let (date, rest) = stamp.split_once('T')?;
+    let time = rest.split(['.', 'Z']).next()?;
+
+    let mut date = date.split('-');
+    let year: i64 = date.next()?.parse().ok()?;
+    let month: i64 = date.next()?.parse().ok()?;
+    let day: i64 = date.next()?.parse().ok()?;
+
+    let mut clock = time.split(':');
+    let hour: i64 = clock.next()?.parse().ok()?;
+    let minute: i64 = clock.next()?.parse().ok()?;
+    let second: i64 = clock.next()?.parse().ok()?;
+
+    // Days from the civil calendar, the standard shift-March algorithm.
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+
+    u64::try_from(days * 86_400 + hour * 3_600 + minute * 60 + second).ok()
+}
+
 /// Whether the engine has a record of being told this.
 ///
 /// `None` means there is no transcript to consult — not that nothing arrived.
@@ -105,6 +185,32 @@ fn squash(text: &str) -> String {
         .filter(|character| !character.is_whitespace())
         .flat_map(|character| character.to_lowercase())
         .collect()
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::seconds_of;
+
+    #[test]
+    fn the_engines_own_stamp_becomes_seconds() {
+        // 2026-09-01T13:26:11Z, checked against `date -u -d ... +%s`.
+        assert_eq!(seconds_of("2026-09-01T13:26:11.984Z"), Some(1_788_269_171));
+        assert_eq!(seconds_of("2026-09-01T13:26:11Z"), Some(1_788_269_171));
+    }
+
+    #[test]
+    fn the_epoch_and_a_leap_day_land_where_they_should() {
+        assert_eq!(seconds_of("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(seconds_of("2024-02-29T00:00:00Z"), Some(1_709_164_800));
+        assert_eq!(seconds_of("2000-03-01T00:00:00Z"), Some(951_868_800));
+    }
+
+    #[test]
+    fn a_stamp_that_is_not_one_is_not_guessed_at() {
+        assert_eq!(seconds_of(""), None);
+        assert_eq!(seconds_of("yesterday"), None);
+        assert_eq!(seconds_of("2026-09-01"), None);
+    }
 }
 
 #[cfg(test)]

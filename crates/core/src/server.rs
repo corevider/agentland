@@ -87,6 +87,16 @@ struct AppState {
     /// question and was answered has to hear the answer, or it waits forever.
     crew_words: Arc<parking_lot::Mutex<BTreeMap<String, Vec<String>>>>,
     notices: Arc<crate::notices::Notices>,
+    /// What the engines last said about the account's quota, and when. Read
+    /// rather than tallied: the quota is the account's, and every engine on the
+    /// machine spends from it — including ones nobody here started.
+    quota: Arc<parking_lot::Mutex<Option<(crate::budget::Usage, u64)>>>,
+    /// What the crew has spent in the last minute, read from the engines' own
+    /// transcripts. This app makes none of the requests it is throttling, so
+    /// the only honest way to count them is to read what the engines wrote.
+    journal: Arc<crate::journal::Journal>,
+    spending: Arc<parking_lot::Mutex<crate::meter::Window>>,
+    ceilings: Arc<parking_lot::Mutex<crate::meter::Ceilings>>,
 }
 
 #[derive(Deserialize)]
@@ -162,6 +172,10 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         leader_words: Arc::new(parking_lot::Mutex::new(Vec::new())),
         crew_words: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
         notices: Arc::new(crate::notices::Notices::default()),
+        journal: Arc::new(crate::journal::Journal::new(data_dir.clone())),
+        quota: Arc::new(parking_lot::Mutex::new(None)),
+        spending: Arc::new(parking_lot::Mutex::new(crate::meter::Window::default())),
+        ceilings: Arc::new(parking_lot::Mutex::new(crate::meter::Ceilings::default())),
         ui_commands: Arc::new(parking_lot::Mutex::new(Vec::new())),
         pane_views: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
     };
@@ -243,6 +257,8 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/integrations/call", post(call_integration))
         .route("/approvals", get(list_approvals).post(request_approval))
         .route("/approvals/{id}", post(answer_approval))
+        .route("/budget", get(read_budget).post(set_ceilings))
+        .route("/journal", get(read_journal))
         .route("/stacks", get(list_starters))
         .route("/repos/{id}/commander", post(ignite))
         .route("/start", post(begin))
@@ -673,6 +689,8 @@ fn spawn_supervisor(state: AppState) {
                                 continue;
                             }
                             state.supervisor.count_resend(&watch.id);
+                            state.journal.write("brief.resent", "the supervisor", &watch.task_id,
+                                "the brief never landed", now);
                             tracing::info!(watch = %watch.id, agent = %watch.agent_id, "the brief never landed; sent again");
                         }
                     }
@@ -705,10 +723,12 @@ fn spawn_supervisor(state: AppState) {
                             &watch.agent_id,
                             now,
                         );
+                        state.journal.write("step.settled", &watch.agent_id, &watch.task_id, &reason, now);
                         state.supervisor.settle(&watch.id, reason, now);
                     }
                     Verdict::LostIt(reason) => {
                         tracing::warn!(watch = %watch.id, %reason, "giving up on a step");
+                        state.journal.write("step.given_up", "the supervisor", &watch.task_id, &reason, now);
                         state.supervisor.give_up(&watch.id, reason, now);
                     }
                 }
@@ -744,6 +764,33 @@ fn spawn_supervisor(state: AppState) {
                 }
             }
 
+            // The last minute of spending, refilled from the engines' own
+            // transcripts. Rebuilt rather than appended to: a turn is written
+            // when it ends, so the same one would be counted on every tick it
+            // is still inside the window.
+            {
+                let since = now.saturating_sub(60);
+                let mut fresh = crate::meter::Window::default();
+
+                for entry in state.repos.worktrees() {
+                    let live = state.crew.list().into_iter().any(|agent| {
+                        agent.repository_id == entry.worktree.repository_id
+                            && agent.worktree == entry.worktree.name
+                            && agent.session_id.is_some()
+                    });
+
+                    if !live {
+                        continue;
+                    }
+
+                    for spend in crate::transcript::spending_since(&entry.worktree.path, since) {
+                        fresh.record(spend);
+                    }
+                }
+
+                *state.spending.lock() = fresh;
+            }
+
             // What the panes say about themselves, once per tick: an agent that
             // finished its turn gives its slot back, and one that is mid-turn
             // takes it. Without this an idle pane counts against the engine cap
@@ -761,6 +808,22 @@ fn spawn_supervisor(state: AppState) {
 
                 if tail.is_empty() {
                     continue;
+                }
+
+                // What the account has left, in the engine's own words, and
+                // what the crew has spent in the last minute, from the record
+                // the engine keeps. Neither number is one this app could count
+                // for itself.
+                if let Some(usage) = crate::budget::read_usage(&tail) {
+                    let worse = state
+                        .quota
+                        .lock()
+                        .map(|(held, _)| held.weekly > usage.weekly)
+                        .unwrap_or(false);
+
+                    if !worse {
+                        *state.quota.lock() = Some((usage, now));
+                    }
                 }
 
                 let limit = crate::context::read_rate_limit(&tail);
@@ -785,6 +848,7 @@ fn spawn_supervisor(state: AppState) {
                             .unwrap_or_default();
 
                         tracing::warn!(agent = %agent.id, "an agent is rate limited");
+                        state.journal.write("engine.rate_limited", &agent.id, "", &wait, now);
                         state.notices.push(
                             crate::notices::NewNotice {
                                 kind: crate::notices::Kind::Trouble,
@@ -800,6 +864,7 @@ fn spawn_supervisor(state: AppState) {
                     (None, true) => {
                         throttled.insert(agent.id.clone(), false);
                         tracing::info!(agent = %agent.id, "the rate limit cleared");
+                        state.journal.write("engine.rate_limit_cleared", &agent.id, "", "", now);
                         state.notices.push(
                             crate::notices::NewNotice {
                                 kind: crate::notices::Kind::Word,
@@ -939,7 +1004,10 @@ fn spawn_supervisor(state: AppState) {
 
             let waiting_words = !state.leader_words.lock().is_empty();
 
-            if state.supervisor.wake_is_due(now) || waiting_words {
+            // A wake is a turn and a turn is money. When the week or the
+            // minute is tight the news waits for whoever opens the pane.
+            let room = room_left(&state);
+            if (state.supervisor.wake_is_due(now) || waiting_words) && room.may_wake_the_commander() {
                 let news = state.supervisor.news_for_leader();
                 if news.is_empty() && !waiting_words {
                     continue;
@@ -998,6 +1066,13 @@ fn spawn_supervisor(state: AppState) {
                         Vec::new()
                     };
                     state.supervisor.leader_was_told(&ids, now);
+                    state.journal.write(
+                        "commander.woken",
+                        "the supervisor",
+                        &leader.id,
+                        if carrying_news { "carried the news" } else { "had something to say" },
+                        now,
+                    );
                     tracing::info!(
                         count = ids.len(),
                         words = words.len(),
@@ -1092,6 +1167,7 @@ fn spawn_pull_watcher(state: AppState) {
                     let _ = state
                         .board
                         .attach(&task.id, Evidence::Note { text: line }, "the forge", now);
+                    state.journal.write("pull.changed", "the forge", &task.id, &said, now);
                 }
 
                 match &standing {
@@ -1452,6 +1528,37 @@ fn standing_in(state: &AppState, called: &str) -> Result<(Workspace, bool), ApiE
     })?;
 
     Ok((made, true))
+}
+
+/// How much room the week has, as the panes last reported it.
+///
+/// Unknown is treated as room. An app that refuses to work because no engine has
+/// spoken yet is an app that never starts, and the first pane to open answers
+/// the question within a tick.
+/// Write down what just happened.
+fn note(state: &AppState, kind: &str, actor: &str, subject: &str, detail: &str) {
+    state.journal.write(kind, actor, subject, detail, now_secs());
+}
+
+fn room_left(state: &AppState) -> crate::budget::Room {
+    let week = state
+        .quota
+        .lock()
+        .map(|(usage, _)| usage.room())
+        .unwrap_or(crate::budget::Room::Plenty);
+
+    // Two different walls stop the same work: the week's allowance, and the
+    // per-minute ceiling. Whichever is tighter is the one that decides.
+    let minute = {
+        let ceilings = *state.ceilings.lock();
+        state
+            .spending
+            .lock()
+            .in_the_last_minute(now_secs())
+            .room(&ceilings)
+    };
+
+    crate::meter::tighter(week, minute)
 }
 
 async fn add_repo(
@@ -1950,6 +2057,31 @@ async fn dispatch_task(
         .ok_or_else(|| ApiError(anyhow::anyhow!("unknown task: {id}")))?;
 
     let crew = state.crew.list();
+
+    // Before choosing anybody: a card handed out with no allowance left is a
+    // card that stalls half-done, which costs what it already spent and buys
+    // nothing.
+    let room = room_left(&state);
+    if !room.may_start_work() {
+        let reason = room.in_a_line().to_owned();
+        note(&state, "card.held_back", "the dispatcher", &task.id, &reason);
+        let snapshot = state.dispatch.enqueue(&task.id);
+        let noted = state.board.attach(
+            &task.id,
+            Evidence::Note {
+                text: format!("held back: {reason}"),
+            },
+            "the dispatcher",
+            now_secs(),
+        )?;
+
+        return Ok(Json(DispatchReport {
+            state: snapshot,
+            decision: Decision::Queue { reason },
+            task: Some(noted),
+        }));
+    }
+
     let decision = state.dispatch.decide(&task, &crew);
 
     match &decision {
@@ -2008,6 +2140,8 @@ async fn dispatch_task(
             )?;
 
             watch_the_step(&state, &agent, &task.id, task.title.trim());
+            note(&state, "card.assigned", "the dispatcher", &task.id,
+                 &format!("{} — {reason}", agent.name));
 
             let after = state.dispatch.record_assignment(&agent.id, &task.id, reason);
 
@@ -2191,6 +2325,8 @@ async fn submit_review(
         now,
     )?;
 
+    note(&state, "card.reviewed", &reviewer, &task.id, verdict.word());
+
     if verdict.sends_it_back() {
         let updated = state.board.move_to(&task.id, Column::Working)?;
 
@@ -2236,6 +2372,8 @@ async fn merge_worktree(
         "a person",
         now,
     )?;
+
+    note(&state, "card.merged", "a person", &task_id, &format!("{id}/{name}"));
 
     Ok(Json(state.board.move_to(&task_id, Column::Done)?))
 }
@@ -3251,6 +3389,16 @@ async fn ignite(
         .into_iter()
         .find(|agent| agent.role == "commander" && agent.repository_id == repository.id);
 
+    // Hiring is starting work. Telling a commander that already exists is not,
+    // so a person can still reach the one they have.
+    let room = room_left(&state);
+    if held.is_none() && !room.may_start_work() {
+        return Err(ApiError(anyhow::anyhow!(
+            "not hiring anybody right now: {}",
+            room.in_a_line()
+        )));
+    }
+
     let commander = match held {
         Some(commander) => commander,
         None => {
@@ -3297,6 +3445,8 @@ async fn ignite(
             )?;
 
             did.push(format!("hired {} to command {}", hired.name, repository.name));
+            note(&state, "agent.hired", "a person", &hired.id,
+                 &format!("commander of {} on {}", repository.name, hired.engine_id));
             hired
         }
     };
@@ -3328,8 +3478,14 @@ async fn ignite(
                 commander.name
             )))
         }
-        HandOver::Started => did.push(format!("started {} at its desk", commander.name)),
-        HandOver::Typed => did.push(format!("told {} to take it on", commander.name)),
+        HandOver::Started => {
+            note(&state, "agent.started", "a person", &commander.id, "at its desk");
+            did.push(format!("started {} at its desk", commander.name))
+        }
+        HandOver::Typed => {
+            note(&state, "brief.delivered", "a person", &commander.id, "told it to take the project on");
+            did.push(format!("told {} to take it on", commander.name))
+        }
     }
 
     let commander = state
@@ -3344,6 +3500,75 @@ async fn ignite(
         worktree,
         did,
     }))
+}
+
+/// What the app has been doing, and why.
+async fn read_journal(
+    State(state): State<AppState>,
+    Query(ask): Query<crate::journal::Ask>,
+) -> Json<Vec<crate::journal::Entry>> {
+    Json(state.journal.read(&ask))
+}
+
+#[derive(Serialize)]
+struct BudgetReport {
+    /// What the engines last said about the account, and how long ago.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    weekly_percent: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_percent: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    read_seconds_ago: Option<u64>,
+    /// What the crew spent in the last minute, and against what.
+    last_minute: crate::meter::Rate,
+    ceilings: crate::meter::Ceilings,
+    closest_to: &'static str,
+    /// The decision the two of them add up to.
+    room: crate::budget::Room,
+    says: &'static str,
+}
+
+/// What the crew is allowed to spend, and what it has.
+async fn read_budget(State(state): State<AppState>) -> Json<BudgetReport> {
+    let now = now_secs();
+    let held = *state.quota.lock();
+    let ceilings = *state.ceilings.lock();
+    let last_minute = state.spending.lock().in_the_last_minute(now);
+    let room = room_left(&state);
+
+    Json(BudgetReport {
+        weekly_percent: held.map(|(usage, _)| usage.weekly),
+        session_percent: held.map(|(usage, _)| usage.session),
+        read_seconds_ago: held.map(|(_, at)| now.saturating_sub(at)),
+        closest_to: last_minute.tightest(&ceilings),
+        last_minute,
+        ceilings,
+        room,
+        says: room.in_a_line(),
+    })
+}
+
+#[derive(Deserialize)]
+struct SetCeilings {
+    requests: u32,
+    input: u64,
+    output: u64,
+}
+
+/// What this account is held to per minute. A person's to set: it is a fact
+/// about their plan, not something the app can measure.
+async fn set_ceilings(
+    State(state): State<AppState>,
+    Json(body): Json<SetCeilings>,
+) -> Json<crate::meter::Ceilings> {
+    let wanted = crate::meter::Ceilings {
+        requests: body.requests,
+        input: body.input,
+        output: body.output,
+    };
+
+    *state.ceilings.lock() = wanted;
+    Json(wanted)
 }
 
 #[derive(Serialize)]
@@ -3709,6 +3934,8 @@ async fn begin(
             }
         }
     };
+
+    note(&state, "project.opened", "a person", &repository.id, &repository.name);
 
     did.push(if known_before.iter().any(|held| held == &repository.id) {
         format!("found {}, already open", repository.name)
