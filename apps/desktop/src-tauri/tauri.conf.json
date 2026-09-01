@@ -25,10 +25,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "deb",
-      "appimage"
-    ],
+    "targets": "all",
     "publisher": "Agentland",
     "category": "DeveloperTool",
     "shortDescription": "A crew of coding agents, one worktree each",
@@ -42,7 +39,8 @@
     ],
     "linux": {
       "deb": {}
-    }
+    },
+    "createUpdaterArtifacts": true
   },
   "plugins": {
     "updater": {

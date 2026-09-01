@@ -65,6 +65,35 @@ function plugin_pairs() {
     return trouble;
 }
 
+/// An updater with an endpoint and no artifacts to serve is the quietest kind of
+/// broken: the app checks, the forge answers 404, and nothing anywhere says the
+/// build was never asked to produce a manifest. Tauri v2 makes updater bundles
+/// opt-in, and v0.1.0 shipped without them for exactly this reason.
+function updater_agrees_with_the_bundle() {
+    const config = JSON.parse(readFileSync(join(root, "apps/desktop/src-tauri/tauri.conf.json"), "utf8"));
+    const updater = config.plugins?.updater ?? {};
+    const bundle = config.bundle ?? {};
+
+    const asked_for = (updater.endpoints ?? []).length > 0;
+    const produced = bundle.createUpdaterArtifacts === true;
+
+    if (asked_for && !produced) {
+        return "the updater has an endpoint but the bundle does not create updater artifacts — the app would check and find nothing";
+    }
+
+    if (asked_for && !updater.pubkey) {
+        return "the updater has an endpoint and no public key — every update would be refused";
+    }
+
+    return null;
+}
+
+const misconfigured = updater_agrees_with_the_bundle();
+if (misconfigured) {
+    console.error(`\nThe updater is set up to fail: ${misconfigured}`);
+    process.exit(1);
+}
+
 const drifted = plugin_pairs();
 if (drifted.length > 0) {
     console.error("\nA plugin's two halves are on different minor versions:");
