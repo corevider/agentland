@@ -1,10 +1,23 @@
+# What the app writes while it runs
 bench-results.jsonl
 data/
-dist/
-.env
-*.log
-node_modules/
 sessions/
 target/
-data/agentland.db*
-data/*.json.imported
+dist/
+node_modules/
+
+# Nothing that carries a secret, ever. The list is deliberately wider than
+# what this repository uses: a file nobody thought about is the one that gets
+# committed, and a public repository does not forget.
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+id_rsa*
+*_rsa
+credentials.json
+secrets.json
+updater.key*

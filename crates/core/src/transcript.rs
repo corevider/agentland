@@ -122,7 +122,7 @@ mod tests {
                 "/home/dev/Desktop/agentland/apps/desktop/src-tauri/data/worktrees/ccdo/ccdo"
             )),
             "-home-dev-Desktop-agentland-apps-desktop-src-tauri-data-worktrees-ccdo-ccdo",
-            "this is a real folder on this machine"
+            "a nested path folds the same way"
         );
     }
 
