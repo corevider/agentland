@@ -1,6 +1,7 @@
 import type { MenuItem } from "@/components/ContextMenu";
 import { Suspense, createContext, lazy, useContext, type ReactNode } from "react";
 
+import { ActivityPanel } from "@/components/ActivityPanel";
 import { ApprovalsPanel } from "@/components/ApprovalsPanel";
 import { BoardPanel } from "@/components/BoardPanel";
 import { MailPanel } from "@/components/MailPanel";
@@ -167,6 +168,12 @@ export const PANELS: PanelEntry[] = [
         label: "Dispatch",
         hint: "what X decided, and why",
         Component: ({ active }) => <DispatchPanel active={active} />,
+    },
+    {
+        id: "activity",
+        label: "Activity",
+        hint: "what it spent, and what it did",
+        Component: ({ active }) => <ActivityPanel active={active} />,
     },
     {
         id: "memory",

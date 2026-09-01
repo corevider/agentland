@@ -341,6 +341,62 @@ export interface Begun {
 /// Running it again on a project that is already open is not a mistake: whatever
 /// is already there is found rather than made, and the commander is handed the
 /// new goal.
+export type Room = "plenty" | "tight" | "spent";
+
+export interface Rate {
+    requests: number;
+    input: number;
+    output: number;
+}
+
+export interface Ceilings {
+    requests: number;
+    input: number;
+    output: number;
+}
+
+/// What the crew is allowed to spend, and what it has.
+///
+/// The weekly numbers are read off an engine's own status line, so they are
+/// absent until a pane has been open long enough to say. The minute is counted
+/// from what the engines wrote in their transcripts.
+export interface Budget {
+    weekly_percent?: number;
+    session_percent?: number;
+    read_seconds_ago?: number;
+    last_minute: Rate;
+    ceilings: Ceilings;
+    closest_to: string;
+    room: Room;
+    says: string;
+}
+
+export function read_budget(): Promise<Budget> {
+    return request<Budget>("/budget");
+}
+
+export function set_ceilings(ceilings: Ceilings): Promise<Ceilings> {
+    return request<Ceilings>("/budget", { method: "POST", body: JSON.stringify(ceilings) });
+}
+
+/// One thing the app decided or did.
+export interface JournalEntry {
+    at: number;
+    kind: string;
+    actor: string;
+    subject: string;
+    detail: string;
+}
+
+export function read_journal(ask: { kind?: string; limit?: number } = {}): Promise<JournalEntry[]> {
+    const query = new URLSearchParams();
+    if (ask.kind) {
+        query.set("kind", ask.kind);
+    }
+    query.set("limit", String(ask.limit ?? 120));
+    return request<JournalEntry[]>(`/journal?${query}`);
+}
+
 export interface Ignited {
     commander: Agent;
     worktree: Worktree;

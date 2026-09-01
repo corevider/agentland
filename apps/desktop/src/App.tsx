@@ -556,6 +556,7 @@ export default function App() {
                 { label: "Board", hint: "panel", run: () => focus_panel("board") },
                 { label: "Repositories", hint: "panel", run: () => focus_panel("repos") },
                 { label: "Crew", hint: "panel", run: () => focus_panel("crew") },
+                { label: "Activity", hint: "panel", run: () => focus_panel("activity") },
                 { label: "Skills", hint: "panel", run: () => focus_panel("skills") },
                 { label: "Preview", hint: "panel", run: () => focus_panel("preview") },
                 {

@@ -65,7 +65,7 @@ export const PRESETS: Preset[] = [
                         direction: "column",
                         fraction: 0.5,
                         first: stack_of("k5", ["preview", "crew"], take),
-                        second: stack_of("k6", ["memory", "routines", "mail", "approvals", "skills", "start"], take),
+                        second: stack_of("k6", ["activity", "memory", "routines", "mail", "approvals", "skills", "start"], take),
                     },
                 },
             })),
