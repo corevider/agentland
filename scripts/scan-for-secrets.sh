@@ -25,11 +25,13 @@ patterns="$patterns"'|glpat-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}'
 found=0
 for file in "${files[@]}"; do
     [ -f "$file" ] || continue
-    # The masker's own tests carry deliberately fake keys, and so does the
-    # README where it shows what the masker catches. They are the one place a
-    # key-shaped string belongs.
+    # Nothing is exempt but this file, which has to carry the patterns to match
+    # them. The masker's own fixtures used to be exempted, and GitHub's scanner
+    # rejected the push anyway — a fake key realistic enough to need an
+    # exemption is a fake key that will keep tripping somebody's scanner. They
+    # are obviously fake now, so no exemption is needed and none is given.
     case "$file" in
-        crates/core/src/memory.rs|README.md|scripts/scan-for-secrets.sh) continue ;;
+        scripts/scan-for-secrets.sh) continue ;;
     esac
 
     if hits=$(grep -InE "$patterns" "$file"); then
