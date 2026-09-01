@@ -1,8 +1,12 @@
 name: ci
 
 on:
+  # The default branch, whatever it is called here. This said `main` while the
+  # branch was `master`, so every push to it went unchecked and only pull
+  # requests were ever tested — which is the quiet kind of gap: the badge is
+  # green because nothing ran.
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
 
 jobs:
