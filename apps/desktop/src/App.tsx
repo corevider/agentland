@@ -144,6 +144,7 @@ export default function App() {
     const frame_ref = useRef({ fps: 0, worst_frame_ms: 0 });
     const island_ref = useRef({ rendered: 0, at: 0 });
     const [focused_id, set_focused_id] = useState<string | null>(null);
+    const [update_out, set_update_out] = useState<string | null>(null);
     const [layout, set_layout_state] = useState<Layout>(() => load_layout(is_known_panel));
     const layout_ref = useRef(layout);
     layout_ref.current = layout;
@@ -188,6 +189,29 @@ export default function App() {
             save_layout(next);
             return next;
         });
+    }, []);
+
+    // Asked once, quietly, when the window opens. Finding an update is worth
+    // saying; taking one is a decision, and it stays a person's — nothing is
+    // downloaded or replaced until they press the button in Settings.
+    useEffect(() => {
+        if (!is_tauri()) {
+            return;
+        }
+
+        let cancelled = false;
+        import("@tauri-apps/plugin-updater")
+            .then((api) => api.check())
+            .then((found) => {
+                if (!cancelled && found) {
+                    set_update_out(found.version);
+                }
+            })
+            .catch(() => undefined);
+
+        return () => {
+            cancelled = true;
+        };
     }, []);
 
     // Nothing is open on a fresh install, and every panel below assumes a
@@ -542,6 +566,15 @@ export default function App() {
                         window.dispatchEvent(new CustomEvent("agentland:capture-island"));
                     },
                 },
+                ...(update_out
+                    ? [
+                          {
+                              label: `Update to ${update_out}`,
+                              hint: "settings",
+                              run: () => set_settings_open(true),
+                          },
+                      ]
+                    : []),
                 { label: "Settings", run: () => set_settings_open(true) },
                 {
                     label: "Reload the interface",
@@ -567,7 +600,7 @@ export default function App() {
                     : []),
             ]);
         },
-        [menu, layout, focus_panel],
+        [menu, layout, focus_panel, update_out],
     );
 
     const services = useMemo<WorkspaceServices>(

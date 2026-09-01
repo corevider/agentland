@@ -17,6 +17,8 @@
     "@react-three/fiber": "^9.7.0",
     "@tanstack/react-virtual": "^3.14.10",
     "@tauri-apps/plugin-dialog": "^2.7.2",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.11.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-webgl": "^0.18.0",
     "@xterm/xterm": "^5.5.0",

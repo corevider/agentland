@@ -1636,3 +1636,41 @@ pushed yet is still a review, so it is kept even when there is no pull request t
 
 The reviewer role already had the shape for this: `plan` permissions, so it cannot edit what it is
 judging.
+
+## Releases, and taking one
+
+A tag beginning with `v` builds the release. Before anything is built, three
+things are checked, because each is cheap to check and expensive to miss: nothing
+in the tree looks like a credential, the versions in `Cargo.toml` and
+`tauri.conf.json` agree with each other, and both agree with the tag. A tag that
+disagrees with the version breaks the update check silently — the app would keep
+offering an update somebody already has.
+
+The bundles are built on Linux and macOS, **signed with a key only the build
+holds**, and published with the `latest.json` the app reads. Signing is what makes
+taking an update safe rather than a leap: a bundle that is not signed, or signed
+by anything else, is refused by every client. The private key lives in a GitHub
+secret and on the machine that generated it; only the public half is in this
+repository, which is where it belongs.
+
+The release notes are the commit subjects, grouped by what kind of change each
+one is. A release note nobody writes is a release note nobody reads, and one
+written by hand at tag time is written in a hurry — the subjects were written
+when the change was fresh and already say what they are.
+
+### What the person sees
+
+Settings has an **Updates** section: which version this is, a button to ask now,
+what the newer one changed, and a button to take it. The app also asks once,
+quietly, when the window opens — finding an update is worth saying, so the
+Agentland menu gains *Update to X.Y.Z* when there is one.
+
+Taking it stays a decision. Nothing is downloaded or replaced until somebody
+presses the button, and the new version takes effect when they restart rather
+than under them mid-sentence.
+
+Two things the panel will not do. It will not show a percentage of a download
+whose total the server did not send, because a percentage of an unknown total is
+a number somebody made up — it says `12.0 MB so far` instead. And it will not
+quietly cut a long release note in half: it shows the top and says it is showing
+the top.

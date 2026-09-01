@@ -46,8 +46,10 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "",
-      "endpoints": []
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFBQTc1QkQ3RkM3M0QyODYKUldTRzBuUDgxMXVuR3UwbWZBcWhoajdnUS93cGlXZFVnSUFkTCs2OGgvbCtpK1M5TnducUI4RU4K",
+      "endpoints": [
+        "https://github.com/corevider/agentland/releases/latest/download/latest.json"
+      ]
     }
   }
 }

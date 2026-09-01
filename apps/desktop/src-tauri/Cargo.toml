@@ -16,6 +16,7 @@ serde_json.workspace = true
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber = "0.3"
