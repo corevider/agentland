@@ -99,8 +99,8 @@ apps/desktop/
 
 **Worktrees never touch your clone's directory.** Point Agentland at any plain checkout; it registers
 the path as-is and creates worktrees under `data/worktrees/<repo>/<name>`. No `main/` subdirectory to
-prepare, no folders rearranged — the lesson taken from a tool that demands the
-layout up front.
+prepare, no folders rearranged. A layout demanded up front is a layout somebody has to migrate
+into, and that is a reason not to adopt a tool rather than a feature of one.
 
 Each worktree gets a branch (`agent/<name>`) and a port from the 4100–4999 range, allocated by
 probing for a free socket, recorded in `data/repositories.json`, and released on teardown. Two
@@ -205,8 +205,8 @@ than one that admits it skipped.
 **Replay buffer.** Each session keeps its last 256 KB, replayed on connect, so opening a pane after
 an agent has been working shows what happened instead of an empty screen.
 
-**Security on day one**, because retrofitting it is how a project ended up with 297
-unauthenticated endpoints that can spawn shells:
+**Security on day one**, because an endpoint that can spawn a shell is not something to add
+authentication to later:
 
 - binds `127.0.0.1` only
 - token required on every request and every WebSocket, generated per run
@@ -215,7 +215,7 @@ unauthenticated endpoints that can spawn shells:
 
 ## Stack
 
-- **Shell:** Tauri v2 — target under 30 MB against Electron, which starts around 150 MB
+- **Shell:** Tauri v2 — target under 30 MB; the same app on Electron starts around 150 MB
 - **Core:** Rust — axum, `portable-pty` (WezTerm's pty layer), `tokio`; `git2`, `sqlx` and `keyring` to come
 - **UI:** Vite + React + Tailwind + shadcn/ui, xterm.js with the WebGL addon and a canvas fallback
 - **Island:** react-three-fiber, once the gate is green
@@ -387,8 +387,8 @@ On the island, the lighthouse is the drop target for X; its lamp goes dark when 
 
 ## Pane telemetry
 
-Other tools put an activity line in every pane, and it is the cheapest way to tell a working
-agent from a stuck one. Each session now carries its own statistics — start time, time of last
+An activity line in every pane is the cheapest way there is to tell a working agent from a stuck
+one. Each session now carries its own statistics — start time, time of last
 output, bytes and lines produced, and whether the child process is still alive — and the pane header
 reads:
 
@@ -400,8 +400,8 @@ pane-6a8e-3   waiting 4m 12s   11 B   250ms · canvas
 *working* means output arrived in the last two seconds; *waiting* is the time since it last said
 anything; *exited* means the process is gone. The byte figure carries the line count in its tooltip.
 
-**The context meter is deliberately empty.** Other tools show a token or context number per
-pane, and the field exists here — but it stays `null` until a parser is verified against a real
+**The context meter is deliberately empty.** A token or context number per pane is worth showing
+and the field exists here — but it stays `null` until a parser is verified against a real
 engine session, because a meter that disagrees with the engine's own `/status` is worse than no
 meter. Claude Code reports context inside a redrawing TUI; guessing at that with a regex would
 produce a number that looks authoritative and is wrong.
@@ -411,7 +411,7 @@ produce a number that looks authoritative and is wrong.
 
 `npm run tauri build` produces both Linux bundles:
 
-| Artefact | Size |   |
+| Artefact | Size | |
 | --- | --- | --- |
 | `Agentland_0.0.1_amd64.deb` | **4.2 MB** | — |
 | `Agentland_0.0.1_amd64.AppImage` | **80 MB** | the whole runtime, in one file |
@@ -987,8 +987,8 @@ sent anywhere, not even to a model on localhost.
 ## The commander, part one
 
 The AppImage was opened again — this time without running it: the ELF header gives the offset of the
-embedded filesystem, and `unsquashfs` reads it in place. What that showed is that the other tool's
-leader is not a service. It is **a real CLI agent in a pane**, with a supervisor in the main process
+embedded filesystem, and `unsquashfs` reads it in place. What that settled is that the leader is
+not a service. It is **a real CLI agent in a pane**, with a supervisor in the main process
 that writes into that agent's terminal only when its input box is idle, journals every delegation to
 disk, and detects completion from several signals at once. Their own comments say why: thirty fixes
 failed because the follow-up logic lived in the renderer, and a reload vaporised it.
@@ -1004,8 +1004,8 @@ tests hold the model, including that what is ready survives a restart.
 **X has an identity.** Hiring an agent with the role `commander` installs a built-in skill that says
 what commanding is: take the goal apart before handing anything out, a step is one agent's work,
 name what waits on what, then work the plan and never report a step done because an agent said so.
-The brief now opens with who the agent is and who is on the crew — the other tool's own requirement
-list calls this the identity carrier, without which you cannot tell a pane "you are the leader".
+The brief now opens with who the agent is and who is on the crew. That is the identity carrier,
+without which you cannot tell a pane "you are the leader".
 
 **Four tools.** `plan_create`, `plan_ready`, `plan_status`, `plan_step_done`, beside the delegation
 and board tools X already had.
@@ -1027,13 +1027,13 @@ a plan was still wanted. That is the right answer, and it is why the run above u
 genuinely does not exist yet.
 
 Still to build: the supervisor. Today nothing watches whether a delegated step ever landed, nothing
-detects that a worker finished, and nothing wakes X when it did. That is part three, and the
-other tool's design notes are a good map of the failures to skip.
+detects that a worker finished, and nothing wakes X when it did. That is part three.
 
 ## The supervisor
 
-Thirty fixes failed before they moved the follow-up out of the
-renderer, where a reload vaporised every timer, and into the main process with a journal on disk.
+A follow-up that lives in the renderer dies with a reload — every timer vaporised, and thirty
+attempts to patch around it are thirty wasted. It belongs in the main process, with a journal on
+disk.
 Ours starts where theirs ended up: in the core, in SQLite.
 
 **What it watches.** Assigning a card that belongs to a plan step opens a watch — plan, step, card,
@@ -1082,8 +1082,8 @@ notes are what the skill asked for and not what an agent claimed:
 ### Ghost panes
 
 A finished agent does not exit. The engine sits at its prompt holding a worktree and a slot under
-the caps, so the next step cannot start and somebody has to close it by hand — which is exactly the
-chore the other tool's supervisor removes.
+the caps, so the next step cannot start and somebody has to close it by hand — which is exactly
+the chore a supervisor exists to remove.
 
 The core takes the pane back itself, and only when that is safe: the work is settled, forty-five
 seconds have passed, the session is still alive, no turn is running, nobody has typed into the
@@ -1118,8 +1118,8 @@ the fix wrote a transcript at the expected path with the brief in it, which the 
 
 ## A pane in a window of its own
 
-The rule: a pane may have two views — a cell in the grid and a
-separate window — but there is only ever **one pty**, and the preference lives in the main process so
+The rule: a pane may have two views — a cell in the grid and a separate window — but there is only
+ever **one pty**, and the preference lives in the main process so
 both windows agree. Get that wrong and a person switches to the separate window, puts the pane back,
 and watches it snap to a view nobody chose.
 
