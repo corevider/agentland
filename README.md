@@ -1673,3 +1673,27 @@ whose total the server did not send, because a percentage of an unknown total is
 a number somebody made up — it says `12.0 MB so far` instead. And it will not
 quietly cut a long release note in half: it shows the top and says it is showing
 the top.
+
+### What three attempts at one release taught
+
+`v0.1.0` failed twice before it shipped, and each failure was a thing nothing was
+checking. All four are gates now, in the version check that runs before anything
+is built:
+
+- **The tag and the version have to agree.** A tag that disagrees breaks the
+  update check in silence: the app keeps offering an update somebody already has.
+- **A plugin's two halves have to agree.** A Tauri plugin is a Rust crate and an
+  npm package, and adding one does not touch the other's lockfile. They drifted
+  to 2.11.0 and 2.10.1, and Tauri says so only at build time — a fine place to
+  find out while developing and a terrible one at a tag, where the gate has
+  already passed and the tag is already pushed.
+- **An endpoint needs artefacts to serve.** Updater bundles are opt-in in Tauri
+  v2 and nothing had asked for them, so nothing was signed and no manifest was
+  written. The app checked, the forge answered 404, and nothing anywhere said the
+  build had never been asked. That is the quietest kind of broken there is.
+- **An endpoint needs a key.** One without a public key would refuse every update
+  it was offered.
+
+A fifth was not silent, only wasteful: the bundle targets were `deb` and
+`appimage`, both Linux, so the macOS runner compiled for six minutes and
+thirty-nine seconds and then found nothing to package.
