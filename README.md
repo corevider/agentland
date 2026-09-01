@@ -4,8 +4,7 @@ An open-source desktop workspace where a named crew of CLI coding agents works i
 real git worktrees — each agent with its own branch, its own running dev server, and a preview beside
 the diff.
 
-
-Status: **M7 — approvals reach the phone.** 29 tests. M0 passed and Tauri is confirmed by measurement; M1 shipped worktrees, ports and per-worktree dev servers; M2 hires agents and runs their engines; the board now carries a card from assignment to a diff.
+Status: **M7 — approvals reach the phone.** 289 core tests and 189 in the window. M0 passed and Tauri is confirmed by measurement; M1 shipped worktrees, ports and per-worktree dev servers; M2 hires agents and runs their engines; the board now carries a card from assignment to a diff.
 
 ## Why M0 comes first
 
