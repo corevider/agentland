@@ -14,6 +14,23 @@ pub struct Usage {
     pub weekly: f32,
 }
 
+/// Which allowance an agent spends from.
+///
+/// An engine is knowable — it is how the agent was hired. The account within it
+/// is not: a status line says `Weekly: 55%` and never whose week that is. So the
+/// engine separates providers on its own, and an account label separates logins
+/// within one provider only when somebody says which is which.
+///
+/// Getting this wrong is not a rounding error. A single global quota meant a
+/// Claude account at ninety-five per cent would stop a Codex agent whose own
+/// allowance had not been touched.
+pub fn identity_of(engine: &str, account: Option<&str>) -> String {
+    match account.map(str::trim).filter(|held| !held.is_empty()) {
+        Some(account) => format!("{engine}/{account}"),
+        None => engine.to_owned(),
+    }
+}
+
 /// How much room is left, as a decision rather than a number.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -120,6 +137,20 @@ mod tests {
 
     /// Captured off a live pane, non-breaking spaces and all.
     const REAL: &str = "Model:\u{a0}Opus\u{a0}5\u{a0}|\u{a0}Ctx:\u{a0}41.2k\u{a0}|\u{a0}\u{2387}\u{a0}agent/x-desk\nSession:\u{a0}4.0%\u{a0}|\u{a0}Weekly:\u{a0}55.0%\u{a0}|\u{a0}(+0,-0)\nReset:\u{a0}2hr\u{a0}33m\u{a0}|\u{a0}Cost:\u{a0}$0.65\n";
+
+    #[test]
+    fn an_allowance_belongs_to_an_engine_and_maybe_a_login() {
+        assert_eq!(identity_of("claude", None), "claude");
+        assert_eq!(identity_of("claude", Some("work")), "claude/work");
+        assert_eq!(identity_of("codex", None), "codex");
+
+        // A blank label is not a second account.
+        assert_eq!(identity_of("claude", Some("  ")), "claude");
+
+        // Two engines never share an allowance, whatever the labels say.
+        assert_ne!(identity_of("claude", None), identity_of("codex", None));
+        assert_ne!(identity_of("claude", Some("work")), identity_of("claude", Some("home")));
+    }
 
     #[test]
     fn the_quota_is_read_off_a_real_status_line() {

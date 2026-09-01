@@ -288,6 +288,7 @@ mod tests {
             title: None,
             colour: None,
             permissions: None,
+            account: None,
         }
     }
 

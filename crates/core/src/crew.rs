@@ -127,6 +127,14 @@ pub struct Agent {
     /// How much this agent may do without asking. None means the role's default.
     #[serde(default)]
     pub permissions: Option<String>,
+    /// Which login on this engine it spends from, when there is more than one.
+    ///
+    /// Nothing can read this off a pane — a status line says how much of the
+    /// week is gone and never whose week — so it is a person's to say, and it
+    /// only matters when they have more than one subscription to the same
+    /// engine.
+    #[serde(default)]
+    pub account: Option<String>,
 }
 
 fn offline() -> AgentState {
@@ -149,6 +157,8 @@ pub struct HireRequest {
     pub colour: Option<String>,
     #[serde(default)]
     pub permissions: Option<String>,
+    #[serde(default)]
+    pub account: Option<String>,
 }
 
 /// A change to how an agent is set up. A field left out is left alone; a field
@@ -350,6 +360,7 @@ impl Crew {
             title: request.title,
             colour,
             permissions: request.permissions,
+            account: request.account,
         };
 
         state.agents.insert(id, agent.clone());
@@ -776,6 +787,7 @@ mod pane_tests {
             title: None,
             colour: None,
             permissions: None,
+            account: None,
         }
     }
 
@@ -829,6 +841,7 @@ mod pane_tests {
             title: None,
             colour: None,
             permissions: None,
+            account: None,
         }
     }
 
