@@ -1,3 +1,4 @@
+import { use_poll } from "@/lib/poll";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { list_services, type Service } from "@/lib/core";
@@ -28,15 +29,9 @@ export function PreviewPanel({ active }: Props) {
         }
     }, []);
 
-    useEffect(() => {
-        if (!active) {
-            return;
-        }
-
+    use_poll(() => {
         refresh().catch(() => undefined);
-        const handle = window.setInterval(() => refresh().catch(() => undefined), 4000);
-        return () => window.clearInterval(handle);
-    }, [active, refresh]);
+    }, 4000, active);
 
     const current = services.find((service) => service.key === selected) ?? null;
 

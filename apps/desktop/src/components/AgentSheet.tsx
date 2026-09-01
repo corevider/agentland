@@ -218,7 +218,7 @@ export function AgentSheet({ agent, on_close, on_open_pane, on_changed }: Props)
 
                 {notice ? <div className="font-mono text-[11px] text-driftwood">{notice}</div> : null}
 
-                <section className="min-h-0">
+                <section className="shrink-0">
                     <h3 className="mb-1 font-mono text-[10px] uppercase tracking-[0.12em] text-shell">
                         Last words
                     </h3>

@@ -1,3 +1,4 @@
+import { use_poll } from "@/lib/poll";
 import { useCallback, useEffect, useState } from "react";
 
 import {
@@ -14,16 +15,23 @@ import {
     type Recalled,
 } from "@/lib/core";
 import { use_services } from "@/workspace/registry";
+import { exactly, when } from "@/lib/when";
 
-const SCOPES: MemoryScope[] = ["workspace", "repository", "agent"];
+/// Where a memory can be filed, in the vault's own words. A scope is also told
+/// everything above it, so the crew's own shelf reaches every project.
+const SCOPES: { value: MemoryScope; label: string }[] = [
+    { value: "shared", label: "the whole crew" },
+    { value: "workspace", label: "this workspace" },
+    { value: "project", label: "one project" },
+];
 
 export function MemoryPanel({ active }: { active: boolean }) {
     const { crew } = use_services();
     const [memories, set_memories] = useState<Memory[]>([]);
-    const [draft, set_draft] = useState<{ text: string; scope: MemoryScope; scope_id: string }>({
+    const [draft, set_draft] = useState<{ text: string; scope: MemoryScope; project: string }>({
         text: "",
-        scope: "workspace",
-        scope_id: "",
+        scope: "shared",
+        project: "",
     });
     const [notice, set_notice] = useState<string | null>(null);
     const [query, set_query] = useState("");
@@ -49,15 +57,9 @@ export function MemoryPanel({ active }: { active: boolean }) {
             .catch((cause) => set_notice(cause instanceof Error ? cause.message : String(cause)));
     }, [query]);
 
-    useEffect(() => {
-        if (!active) {
-            return;
-        }
-
-        refresh().catch((cause) => set_notice(cause instanceof Error ? cause.message : String(cause)));
-        const handle = window.setInterval(() => refresh().catch(() => undefined), 5000);
-        return () => window.clearInterval(handle);
-    }, [active, refresh]);
+    use_poll(() => {
+        refresh().catch(() => undefined);
+    }, 5000, active);
 
     const run = useCallback(
         (action: () => Promise<unknown>) => {
@@ -75,18 +77,36 @@ export function MemoryPanel({ active }: { active: boolean }) {
             return;
         }
 
+        // "project" needs the project's name to become a folder; the workspace
+        // half is filled in by the core, which knows which one is active.
+        const scope =
+            draft.scope === "project" && draft.project.trim()
+                ? `project:${draft.project.trim()}`
+                : draft.scope === "workspace"
+                  ? "workspace"
+                  : draft.scope;
+
         run(async () => {
-            await propose_memory(text, draft.scope, draft.scope_id, "you");
+            await propose_memory(text, scope, "you");
             set_draft({ ...draft, text: "" });
         });
     }, [draft, run]);
 
-    const waiting = memories.filter((memory) => !memory.approved);
-    const kept = memories.filter((memory) => memory.approved);
+    // Newest first, in both lists: a correction is written after the thing it
+    // corrects, so the one that matters is the one at the top.
+    const newest_first = [...memories].sort((left, right) => right.written_at - left.written_at);
+    // Three states, not two: something nobody has answered is a question, and
+    // something a person took back out is an answer. Showing them in one list
+    // asks the same question twice, which is how a memory that was deliberately
+    // retired ends up re-approved by someone tidying the top of the panel.
+    const waiting = newest_first.filter((memory) => !memory.approved && !memory.retired);
+    const kept = newest_first.filter((memory) => memory.approved);
+    const retired = newest_first.filter((memory) => !memory.approved && memory.retired);
+    const by_slug = new Map(memories.map((memory) => [memory.id, memory]));
 
     return (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-y-auto p-2.5">
-            <section className="flex flex-wrap items-center gap-1.5">
+            <section className="flex shrink-0 flex-wrap items-center gap-1.5">
                 <input
                     className="min-w-[150px] flex-1 rounded-md border border-reef bg-lagoon-deep font-mono text-[11px]"
                     placeholder="what would an agent be told about ports?"
@@ -123,7 +143,7 @@ export function MemoryPanel({ active }: { active: boolean }) {
             </section>
 
             {tuning && embedder ? (
-                <section className="flex flex-wrap items-center gap-1.5 rounded-md border border-reef px-2 py-1.5">
+                <section className="flex shrink-0 flex-wrap items-center gap-1.5 rounded-md border border-reef px-2 py-1.5">
                     <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-shade">
                         Embedder
                     </span>
@@ -179,7 +199,7 @@ export function MemoryPanel({ active }: { active: boolean }) {
             ) : null}
 
             {found ? (
-                <section>
+                <section className="shrink-0">
                     <h3 className="mb-1 font-mono text-[9px] uppercase tracking-[0.14em] text-turquoise">
                         What an agent would be told · {found.length}
                     </h3>
@@ -206,7 +226,7 @@ export function MemoryPanel({ active }: { active: boolean }) {
                 </section>
             ) : null}
 
-            <section className="flex flex-wrap items-center gap-1.5">
+            <section className="flex shrink-0 flex-wrap items-center gap-1.5">
                 <input
                     className="min-w-[150px] flex-1 rounded-md border border-reef bg-lagoon-deep font-mono text-[11px]"
                     placeholder="the dev server needs PORT, not --port"
@@ -222,19 +242,19 @@ export function MemoryPanel({ active }: { active: boolean }) {
                     }
                 >
                     {SCOPES.map((scope) => (
-                        <option key={scope} value={scope}>
-                            {scope}
+                        <option key={scope.value} value={scope.value}>
+                            {scope.label}
                         </option>
                     ))}
                 </select>
-                {draft.scope === "workspace" ? null : (
+                {draft.scope === "project" ? (
                     <input
-                        className="w-32 rounded-md border border-reef bg-lagoon-deep font-mono text-[11px]"
-                        placeholder={draft.scope === "agent" ? "agent id" : "repository id"}
-                        value={draft.scope_id}
-                        onChange={(event) => set_draft({ ...draft, scope_id: event.target.value })}
+                        className="w-36 rounded-md border border-reef bg-lagoon-deep font-mono text-[11px]"
+                        placeholder="project id"
+                        value={draft.project}
+                        onChange={(event) => set_draft({ ...draft, project: event.target.value })}
                     />
-                )}
+                ) : null}
                 <button
                     className="rounded-md border border-turquoise px-2 py-0.5 font-mono text-[11px] text-turquoise"
                     onClick={propose}
@@ -249,7 +269,7 @@ export function MemoryPanel({ active }: { active: boolean }) {
                 </div>
             ) : null}
 
-            <section>
+            <section className="shrink-0">
                 <h3 className="mb-1 font-mono text-[9px] uppercase tracking-[0.14em] text-coral">
                     Waiting on you · {waiting.length}
                 </h3>
@@ -263,6 +283,7 @@ export function MemoryPanel({ active }: { active: boolean }) {
                         <Entry
                             key={memory.id}
                             memory={memory}
+                            replaces={memory.supersedes ? by_slug.get(memory.supersedes) ?? null : null}
                             on_approve={() => run(() => answer_memory(memory.id, true))}
                             on_forget={() => run(() => forget_memory(memory.id))}
                         />
@@ -270,7 +291,10 @@ export function MemoryPanel({ active }: { active: boolean }) {
                 </div>
             </section>
 
-            <section className="min-h-0">
+            {/* Every section sizes to its content and the panel scrolls. A
+                section allowed to shrink below what is in it does not clip —
+                it spills, and the next section is drawn over the top of it. */}
+            <section className="shrink-0">
                 <h3 className="mb-1 font-mono text-[9px] uppercase tracking-[0.14em] text-shade">
                     What the crew has learned · {kept.length}
                 </h3>
@@ -282,37 +306,83 @@ export function MemoryPanel({ active }: { active: boolean }) {
                         <Entry
                             key={memory.id}
                             memory={memory}
+                            replaces={memory.supersedes ? by_slug.get(memory.supersedes) ?? null : null}
                             on_revoke={() => run(() => answer_memory(memory.id, false))}
                             on_forget={() => run(() => forget_memory(memory.id))}
                         />
                     ))}
                 </div>
             </section>
+
+            {retired.length > 0 ? (
+                <section className="shrink-0">
+                    <h3 className="mb-1 font-mono text-[9px] uppercase tracking-[0.14em] text-shade">
+                        Taken back out · {retired.length}
+                        <span className="ml-2 normal-case tracking-normal text-shade/70">
+                            kept in the vault, told to nobody
+                        </span>
+                    </h3>
+                    <div className="flex flex-col gap-1">
+                        {retired.map((memory) => (
+                            <Entry
+                                key={memory.id}
+                                memory={memory}
+                                replaces={memory.supersedes ? by_slug.get(memory.supersedes) ?? null : null}
+                                on_restore={() => run(() => answer_memory(memory.id, true))}
+                                on_forget={() => run(() => forget_memory(memory.id))}
+                            />
+                        ))}
+                    </div>
+                </section>
+            ) : null}
         </div>
     );
 }
 
 function Entry({
     memory,
+    replaces,
     on_approve,
     on_revoke,
+    on_restore,
     on_forget,
 }: {
     memory: Memory;
+    replaces?: Memory | null;
     on_approve?: () => void;
     on_revoke?: () => void;
+    on_restore?: () => void;
     on_forget: () => void;
 }) {
+    const [asking, set_asking] = useState(false);
+
     return (
         <article
             className={`rounded-md border bg-lagoon-deep px-2 py-1 ${
-                memory.approved ? "border-reef" : "border-coral/60"
+                memory.approved
+                    ? "border-reef"
+                    : memory.retired
+                      ? "border-reef/50 opacity-70"
+                      : "border-coral/60"
             }`}
         >
             <div className="text-[12px] text-linen">{memory.text}</div>
+
+            {replaces ? (
+                <div className="mt-1 rounded border-l-2 border-sun/70 bg-lagoon px-2 py-1">
+                    <div className="font-mono text-[9px] uppercase tracking-[0.12em] text-sun">
+                        replaces {memory.approved ? "— already taken out of the brief" : "— approving this takes it out"}
+                    </div>
+                    <div className="text-[11px] text-shade line-clamp-2">{replaces.text}</div>
+                </div>
+            ) : null}
+
             <div className="mt-0.5 flex flex-wrap items-center gap-2 font-mono text-[10px] text-shade">
-                <span>{memory.scope}{memory.scope_id ? ` · ${memory.scope_id}` : ""}</span>
+                <span title="the folder it lives in, inside the vault">{memory.scope}</span>
                 <span>from {memory.proposed_by}</span>
+                <span title={exactly(memory.written_at)}>
+                    {when(memory.written_at, Math.floor(Date.now() / 1000))}
+                </span>
                 {memory.masked ? (
                     <span className="text-sun" title="a secret was masked before this was stored">
                         masked
@@ -327,6 +397,15 @@ function Entry({
                             approve
                         </button>
                     ) : null}
+                    {on_restore ? (
+                        <button
+                            className="rounded border border-palm px-1.5 text-palm"
+                            title="tell the crew this again"
+                            onClick={on_restore}
+                        >
+                            put back
+                        </button>
+                    ) : null}
                     {on_revoke ? (
                         <button
                             className="rounded border border-reef px-1.5 hover:border-sun hover:text-sun"
@@ -336,9 +415,40 @@ function Entry({
                             revoke
                         </button>
                     ) : null}
-                    <button className="rounded border border-reef px-1.5 hover:border-coral hover:text-coral" onClick={on_forget}>
-                        forget
-                    </button>
+                    {/* Deleting sits apart from the other two on purpose: revoke
+                        takes a memory out of the crew's brief and keeps the file,
+                        while this throws the file away. They were side by side and
+                        indistinguishable, and the wrong one got clicked twice. */}
+                    <span className="ml-1 border-l border-reef pl-1.5">
+                        {asking ? (
+                            <span className="flex items-center gap-1">
+                                <span className="text-coral">delete the file?</span>
+                                <button
+                                    className="rounded border border-coral bg-coral/10 px-1.5 text-coral"
+                                    onClick={() => {
+                                        set_asking(false);
+                                        on_forget();
+                                    }}
+                                >
+                                    delete
+                                </button>
+                                <button
+                                    className="rounded border border-reef px-1.5 hover:border-foam"
+                                    onClick={() => set_asking(false)}
+                                >
+                                    keep
+                                </button>
+                            </span>
+                        ) : (
+                            <button
+                                className="rounded border border-coral/40 px-1.5 text-coral/70 hover:border-coral hover:text-coral"
+                                title="delete the note from the vault — there is no undo"
+                                onClick={() => set_asking(true)}
+                            >
+                                forget
+                            </button>
+                        )}
+                    </span>
                 </span>
             </div>
         </article>

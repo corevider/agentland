@@ -1,3 +1,6 @@
+import { use_poll } from "@/lib/poll";
+
+import { exactly, when } from "@/lib/when";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
@@ -23,18 +26,9 @@ export function MailPanel({ active }: { active: boolean }) {
         set_policy(rules);
     }, []);
 
-    useEffect(() => {
-        if (!active) {
-            return;
-        }
-
+    use_poll(() => {
         refresh().catch((cause) => set_notice(cause instanceof Error ? cause.message : String(cause)));
-        const handle = window.setInterval(
-            () => refresh().catch(() => undefined),
-            4000,
-        );
-        return () => window.clearInterval(handle);
-    }, [active, refresh]);
+    }, 4000, active);
 
     const names = useMemo(() => crew.map((agent) => agent.id), [crew]);
 
@@ -169,9 +163,10 @@ export function MailPanel({ active }: { active: boolean }) {
                                 <span className="text-linen">{message.from}</span>
                                 <span className="text-shade">→</span>
                                 <span className="text-linen">{message.to}</span>
-                                <span
-                                    className={`ml-auto ${message.delivered ? "text-shade" : "text-sun"}`}
-                                >
+                                <span className="ml-auto text-shade" title={exactly(message.at ?? 0)}>
+                                    {when(message.at ?? 0, Math.floor(Date.now() / 1000))}
+                                </span>
+                                <span className={message.delivered ? "text-shade" : "text-sun"}>
                                     {message.delivered ? "read" : "waiting"}
                                 </span>
                             </div>

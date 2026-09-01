@@ -12,12 +12,17 @@ import {
 } from "@/lib/core";
 
 interface Props {
+    /// Changes when someone else activated a workspace; the tabs re-read on it.
+    turn: number;
     active: string | null;
     on_active: (id: string | null, repositories: string[] | null) => void;
+    /// Called when a tab activates a workspace, so the rest of the window —
+    /// the rail, the trail — re-reads instead of waiting for its next poll.
+    on_switched: () => void;
     counts: Record<string, number>;
 }
 
-export function WorkspaceTabs({ active, on_active, counts }: Props) {
+export function WorkspaceTabs({ turn, active, on_active, on_switched, counts }: Props) {
     const [workspaces, set_workspaces] = useState<Workspace[]>([]);
     const [repos, set_repos] = useState<Repository[]>([]);
     const [editing, set_editing] = useState<string | null>(null);
@@ -36,16 +41,19 @@ export function WorkspaceTabs({ active, on_active, counts }: Props) {
 
     useEffect(() => {
         refresh().catch((cause) => set_error(cause instanceof Error ? cause.message : String(cause)));
-    }, [refresh]);
+    }, [refresh, turn]);
 
     const choose = useCallback(
-        (id: string | null) => {
+        (id: string) => {
             set_editing(null);
             activate_workspace(id)
-                .then(() => refresh())
+                .then(() => {
+                    on_switched();
+                    return refresh();
+                })
                 .catch((cause) => set_error(cause instanceof Error ? cause.message : String(cause)));
         },
-        [refresh],
+        [refresh, on_switched],
     );
 
     const create = useCallback(() => {
@@ -81,16 +89,6 @@ export function WorkspaceTabs({ active, on_active, counts }: Props) {
 
     return (
         <div className="relative flex items-center gap-1">
-            <button
-                onClick={() => choose(null)}
-                title="every repository"
-                className={`rounded px-2 py-[3px] text-[12px] ${
-                    active === null ? "bg-lagoon text-linen" : "text-shell hover:text-linen"
-                }`}
-            >
-                All
-            </button>
-
             {workspaces.map((workspace) => {
                 const chosen = workspace.id === active;
                 return (
@@ -116,9 +114,18 @@ export function WorkspaceTabs({ active, on_active, counts }: Props) {
                 );
             })}
 
-            {drafting ? (
+            {workspaces.length === 0 && !drafting ? (
+                <span className="font-mono text-[11px] text-shade">
+                    name a workspace to work in
+                </span>
+            ) : null}
+
+            {drafting || workspaces.length === 0 ? (
                 <input
-                    autoFocus
+                    // Focus follows the person who asked for the box. On a first
+                    // run it appears on its own, and taking the cursor then would
+                    // steal it from whatever they had come to do.
+                    autoFocus={drafting}
                     className="w-28 rounded border border-reef bg-lagoon-deep px-1.5 py-[2px] text-[12px]"
                     placeholder="name"
                     value={name}
