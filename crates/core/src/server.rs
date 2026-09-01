@@ -26,7 +26,7 @@ use crate::dispatch::{Decision, Dispatch, DispatchState};
 use crate::embed::{EmbedderReport, EmbedderSettings};
 use crate::gateway::{CallRequest, ConnectRequest, Gateway, Integration};
 use crate::mail::{MailPolicy, Mailbox, Message as MailMessage, SendMessage};
-use crate::memory::{Memory, MemoryStore, ProposeMemory, Recalled, Scope};
+use crate::memory::{Memory, MemoryStore, ProposeMemory, Recalled};
 use crate::plans::{DraftPlan, Plan, Plans, StepState};
 use crate::routines::{CreateRoutine, Routine, Routines};
 use crate::metrics::{MetricsStore, Sample};
@@ -78,7 +78,15 @@ struct AppState {
     data_dir: Arc<PathBuf>,
     workspaces: Arc<Workspaces>,
     ui_commands: Arc<parking_lot::Mutex<Vec<String>>>,
-    torn_out: Arc<parking_lot::Mutex<BTreeMap<String, String>>>,
+    pane_views: Arc<parking_lot::Mutex<BTreeMap<String, PaneView>>>,
+    vault: Arc<crate::vault::Vault>,
+    /// Things the commander should be told when it is safe to type at it. The
+    /// supervisor's tick delivers these the same way it delivers its own news.
+    leader_words: Arc<parking_lot::Mutex<Vec<String>>>,
+    /// What each agent still has to be told, by agent id. An agent that asked a
+    /// question and was answered has to hear the answer, or it waits forever.
+    crew_words: Arc<parking_lot::Mutex<BTreeMap<String, Vec<String>>>>,
+    notices: Arc<crate::notices::Notices>,
 }
 
 #[derive(Deserialize)]
@@ -125,20 +133,20 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         ]);
 
     let data_dir = config.data_dir.clone();
+    // The vault is opened first: what the crew remembers lives in it, so the
+    // store that decides what an agent is told reads from the same files a
+    // person can open.
+    let vault = Arc::new(crate::vault::Vault::open(&data_dir)?);
     let state = AppState {
         manager,
         config: Arc::new(config),
         metrics: Arc::new(MetricsStore::new(data_dir.join("bench-results.jsonl"))),
         repos: Arc::new(RepoRegistry::new(data_dir.clone())),
         services: ServiceRegistry::new(manager_for_services),
-        crew: {
-            let crew = Crew::new(manager_for_crew, data_dir.clone());
-            crew.set_endpoint(port_for_crew, token_for_crew);
-            crew
-        },
+        crew: Crew::new(manager_for_crew, data_dir.clone()),
         board: Arc::new(Board::new(data_dir.clone())),
         dispatch: Arc::new(Dispatch::new(data_dir.clone())),
-        memories: Arc::new(MemoryStore::new(data_dir.clone())),
+        memories: Arc::new(MemoryStore::new(vault.clone(), data_dir.clone())),
         mail: Arc::new(Mailbox::new(data_dir.clone())),
         routines: Arc::new(Routines::new(data_dir.clone())),
         gateway: Arc::new(Gateway::new(data_dir.clone())),
@@ -150,12 +158,45 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         embedder: Arc::new(parking_lot::Mutex::new(crate::embed::load(&data_dir))),
         data_dir: Arc::new(data_dir.clone()),
         workspaces: Arc::new(Workspaces::new(data_dir.clone())),
+        vault: vault.clone(),
+        leader_words: Arc::new(parking_lot::Mutex::new(Vec::new())),
+        crew_words: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
+        notices: Arc::new(crate::notices::Notices::default()),
         ui_commands: Arc::new(parking_lot::Mutex::new(Vec::new())),
-        torn_out: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
+        pane_views: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
     };
 
     spawn_routine_ticker(state.clone());
     spawn_supervisor(state.clone());
+    spawn_pull_watcher(state.clone());
+
+    // The crew gets a key of its own rather than the app's. An agent can read and
+    // work with everything; it cannot reshape the crew or dismiss anyone, so the
+    // commander asking for more rope has to go through the human either way.
+    let for_the_crew = state.tokens.for_the_crew("the crew");
+    state.crew.set_endpoint(port_for_crew, for_the_crew);
+    let _ = token_for_crew;
+
+    // What was remembered before the vault held it moves in now, when the
+    // workspaces are known and each memory can be filed under the project it
+    // was actually about.
+    let workspace_of: BTreeMap<String, String> = state
+        .workspaces
+        .list()
+        .into_iter()
+        .flat_map(|workspace| {
+            workspace
+                .repository_ids
+                .into_iter()
+                .map(move |repository| (repository, crate::vault::slug_for(&workspace.name)))
+        })
+        .collect();
+    state.memories.take_in_what_was_kept_before(&workspace_of);
+
+    // Whoever was working when the app last went down comes back on its own.
+    // The endpoint has to be set first, or they would come up without the key
+    // their tools authenticate with.
+    tokio::spawn(bring_the_crew_back(state.clone()));
 
     let app = Router::new()
         .route("/sessions", get(list_sessions).post(spawn_session))
@@ -168,27 +209,30 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/bench", post(spawn_generator))
         .route("/metrics", get(read_metrics).post(record_metrics))
         .route("/repos", get(list_repos).post(add_repo))
+        .route("/repos/{id}", delete(forget_repo))
         .route("/repos/{id}/worktrees", get(list_worktrees).post(create_worktree))
         .route("/repos/{id}/worktrees/{name}", delete(remove_worktree))
         .route("/ports", get(list_ports))
         .route("/services", get(list_services))
         .route("/engines", get(list_engines))
         .route("/agents", get(list_agents).post(hire_agent))
-        .route("/agents/{id}", delete(dismiss_agent))
+        .route("/agents/{id}", delete(dismiss_agent).post(shape_agent))
         .route("/agents/{id}/start", post(start_agent))
         .route("/agents/{id}/stop", post(stop_agent))
         .route("/tasks", get(list_tasks).post(create_task))
         .route("/tasks/{id}", delete(delete_task))
         .route("/tasks/{id}/move", post(move_task))
-        .route("/tasks/{id}/assign", post(assign_task))
+        .route("/tasks/{id}/assign", post(assign_task).delete(release_task))
         .route("/dispatch", get(dispatch_status))
         .route("/dispatch/pause", post(pause_dispatch))
         .route("/dispatch/caps", post(set_caps))
         .route("/memories", get(list_memories).post(propose_memory))
         .route("/memories/search", get(search_memories))
         .route("/memories/embedder", get(read_embedder).post(set_embedder))
-        .route("/memories/{id}", delete(forget_memory))
-        .route("/memories/{id}/approve", post(approve_memory))
+        // A memory is addressed by its note's slug, which has slashes in it, so
+        // the answer carries the slug in the body and the wildcard sits last.
+        .route("/memories/answer", post(approve_memory))
+        .route("/memories/{*slug}", delete(forget_memory))
         .route("/mail", get(list_mail).post(send_mail))
         .route("/mail/policy", get(mail_policy).post(set_mail_policy))
         .route("/routines", get(list_routines).post(create_routine))
@@ -199,6 +243,9 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/integrations/call", post(call_integration))
         .route("/approvals", get(list_approvals).post(request_approval))
         .route("/approvals/{id}", post(answer_approval))
+        .route("/stacks", get(list_starters))
+        .route("/repos/{id}/commander", post(ignite))
+        .route("/start", post(begin))
         .route("/workspaces", get(list_workspaces).post(create_workspace))
         .route("/workspaces/{id}", delete(remove_workspace).post(set_workspace_repos))
         .route("/workspaces/active", post(activate_workspace))
@@ -216,12 +263,20 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/agents/{id}/skills/{skill_id}", delete(uninstall_skill))
         .route("/devices", get(list_devices).post(pair_device))
         .route("/devices/{id}", delete(revoke_device))
+        .route("/notes", get(list_notes).post(write_note))
+        .route("/vault", get(where_the_vault_is).post(redraw_the_maps))
+        .route("/notices", get(list_notices).post(mark_notices_seen))
+        .route("/notes/{*slug}", get(read_note).delete(forget_note))
         .route("/ui/commands", get(take_ui_commands).post(queue_ui_command))
         .route("/ui/windows", get(list_windows).post(set_window))
         .route("/dispatch/tasks/{id}", post(dispatch_task))
+        .route("/repos/{id}/files", get(list_project_files))
+        .route("/repos/{id}/file", get(read_project_file))
         .route("/repos/{id}/worktrees/{name}/review", get(review_worktree))
         .route("/repos/{id}/worktrees/{name}/commit", post(commit_worktree))
         .route("/repos/{id}/worktrees/{name}/pr", post(open_pull_request))
+        .route("/repos/{id}/worktrees/{name}/merge", post(merge_worktree))
+        .route("/repos/{id}/worktrees/{name}/review", post(submit_review))
         .route(
             "/repos/{id}/worktrees/{name}/service",
             post(start_service).delete(stop_service),
@@ -307,6 +362,11 @@ async fn guard(
             .into_response();
     }
 
+    // Handlers need to know who is asking: the same call means one thing from the
+    // app the human is looking at and another from an agent.
+    let mut request = request;
+    request.extensions_mut().insert(scope);
+
     next.run(request).await
 }
 
@@ -343,16 +403,57 @@ fn identity_for(state: &AppState, agent: &Agent) -> Option<String> {
     ))
 }
 
+/// The folder name a workspace uses in the vault.
+///
+/// Its name, not its id: `demos/svc-demo/…` is a path a person can read in
+/// Obsidian, and `ws2/svc-demo/…` is one they have to look up.
+fn active_workspace_folder(state: &AppState) -> Option<String> {
+    state
+        .workspaces
+        .active()
+        .map(|held| crate::vault::slug_for(&held.name))
+        .filter(|folder| !folder.is_empty())
+}
+
+/// Where a written scope points, resolved against the workspaces that exist.
+///
+/// A scope that names a project without saying whose — `project:svc-demo`, which
+/// is how an agent writes it — belongs to the workspace that actually holds that
+/// project, not to whichever workspace the person happens to be standing in.
+/// Filing it by where someone was standing put a note about svc-demo under a
+/// workspace called "test", which is exactly the sort of thing nobody finds again.
+fn scope_for(state: &AppState, written: &str) -> crate::vault::Scope {
+    let project = written
+        .trim()
+        .strip_prefix("project:")
+        .filter(|rest| !rest.contains('/'));
+
+    let owner = project.and_then(|project| {
+        state
+            .workspaces
+            .list()
+            .into_iter()
+            .find(|workspace| workspace.repository_ids.iter().any(|held| held == project))
+            .map(|workspace| crate::vault::slug_for(&workspace.name))
+    });
+
+    let workspace = owner.or_else(|| active_workspace_folder(state));
+    crate::vault::Scope::parse(written, workspace.as_deref())
+}
+
 const BRIEF_MEMORIES: usize = 6;
 
 async fn compose_brief(state: &AppState, agent: &Agent, base: &str) -> String {
     let vector = embed_text(state, base.to_owned()).await;
 
+    // An agent is told what its project remembers, and everything its workspace
+    // and the crew as a whole remember above that.
+    let scope = scope_for(&state, &format!("project:{}", agent.repository_id));
+
     let learned = state
         .memories
         .recall(
-            Scope::Repository,
-            &agent.repository_id,
+            &scope,
             base,
             vector.as_deref(),
             state.embedder.lock().min_similarity,
@@ -487,13 +588,42 @@ fn look_at(state: &AppState, watch: &Watch, previous_frame: &str, now: u64) -> O
     }
 }
 
+/// What the commander is told the moment a plan finishes.
+///
+/// The core knows a plan is finished; it does not know what the crew learned
+/// doing it. That is judgement, so the core hands over the evidence and asks the
+/// one whose job is judgement to write it down.
+pub fn plan_finished_word(plan: &crate::plans::Plan) -> String {
+    let steps: Vec<String> = plan
+        .steps
+        .iter()
+        .map(|step| match step.note.as_deref().map(str::trim).filter(|note| !note.is_empty()) {
+            Some(note) => format!("- {} ({})", step.title, note),
+            None => format!("- {}", step.title),
+        })
+        .collect();
+
+    format!(
+        "The plan \"{}\" is finished — {} step{} done. The steps were:\n{}\n\nWrite what the crew learned into the vault now, with note_write, before anything else: the contract that held, the trap that cost time, the thing the next agent should not have to rediscover. One note, linked to what it belongs with. Do that first and then say what you wrote.",
+        plan.goal.trim(),
+        plan.steps.len(),
+        if plan.steps.len() == 1 { "" } else { "s" },
+        steps.join("\n"),
+    )
+}
+
 fn news_text(news: &[Watch]) -> String {
     let mut text = String::from("While you were working:");
     for watch in news {
+        // A card with no plan behind it names itself; a plan step names both.
+        let what = if watch.step_id.is_empty() {
+            watch.task_id.clone()
+        } else {
+            format!("{} ({})", watch.step_id, watch.task_id)
+        };
+
         text.push_str(&format!(
-            "\n- {} ({}) — {}",
-            watch.step_id,
-            watch.task_id,
+            "\n- {what} — {}",
             watch.reason.as_deref().unwrap_or("settled")
         ));
     }
@@ -505,6 +635,8 @@ fn spawn_supervisor(state: AppState) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
         let mut last_frames: BTreeMap<String, String> = BTreeMap::new();
+        let mut asked_before: BTreeMap<String, bool> = BTreeMap::new();
+        let mut throttled: BTreeMap<String, bool> = BTreeMap::new();
 
         loop {
             interval.tick().await;
@@ -546,11 +678,32 @@ fn spawn_supervisor(state: AppState) {
                     }
                     Verdict::Finished(reason) => {
                         tracing::info!(watch = %watch.id, %reason, "a step settled");
+
+                        // The card's last word on this turn: who stopped, why,
+                        // and what the worktree looked like when they did. A
+                        // card that only ever collected remarks could not say
+                        // what had actually been done on it.
+                        let touched = state
+                            .repos
+                            .review(&watch.repository_id, &watch.worktree)
+                            .ok();
+
                         let _ = state.board.attach(
                             &watch.task_id,
-                            Evidence::Note {
-                                text: format!("supervisor: {reason}"),
+                            Evidence::Finished {
+                                summary: reason.clone(),
+                                files: touched.as_ref().map(|held| held.files).unwrap_or_default(),
+                                insertions: touched
+                                    .as_ref()
+                                    .map(|held| held.insertions)
+                                    .unwrap_or_default(),
+                                deletions: touched
+                                    .as_ref()
+                                    .map(|held| held.deletions)
+                                    .unwrap_or_default(),
                             },
+                            &watch.agent_id,
+                            now,
                         );
                         state.supervisor.settle(&watch.id, reason, now);
                     }
@@ -591,9 +744,204 @@ fn spawn_supervisor(state: AppState) {
                 }
             }
 
-            if state.supervisor.wake_is_due(now) {
+            // What the panes say about themselves, once per tick: an agent that
+            // finished its turn gives its slot back, and one that is mid-turn
+            // takes it. Without this an idle pane counts against the engine cap
+            // forever and the dispatcher queues work nobody is doing.
+            for agent in state.crew.list() {
+                let Some(session_id) = agent.session_id.clone() else {
+                    continue;
+                };
+
+                let tail = state
+                    .manager
+                    .read_log(&session_id, 8 * 1024)
+                    .map(|raw| strip_ansi(&raw))
+                    .unwrap_or_default();
+
+                if tail.is_empty() {
+                    continue;
+                }
+
+                let limit = crate::context::read_rate_limit(&tail);
+                let asking = crate::supervisor::asking_the_human(&tail);
+                let working = limit.is_none() && crate::supervisor::turn_running(&tail);
+
+                if state.crew.mark_busy(&agent.id, working) {
+                    tracing::debug!(agent = %agent.id, "the pane changed what the agent is doing");
+                }
+
+                // Said once, when it starts. A throttled pane redraws its
+                // counter every second and a notice per tick would bury the
+                // one thing worth reading.
+                let was_limited = throttled.get(&agent.id).copied().unwrap_or(false);
+                match (&limit, was_limited) {
+                    (Some(held), false) => {
+                        throttled.insert(agent.id.clone(), true);
+                        let wait = held
+                            .resets_in
+                            .as_deref()
+                            .map(|value| format!(", resets in {value}"))
+                            .unwrap_or_default();
+
+                        tracing::warn!(agent = %agent.id, "an agent is rate limited");
+                        state.notices.push(
+                            crate::notices::NewNotice {
+                                kind: crate::notices::Kind::Trouble,
+                                text: format!("{} is rate limited{wait}", agent.name),
+                                repository_id: Some(agent.repository_id.clone()),
+                                agent_id: Some(agent.id.clone()),
+                                opens: Some("crew".to_owned()),
+                                ..Default::default()
+                            },
+                            now,
+                        );
+                    }
+                    (None, true) => {
+                        throttled.insert(agent.id.clone(), false);
+                        tracing::info!(agent = %agent.id, "the rate limit cleared");
+                        state.notices.push(
+                            crate::notices::NewNotice {
+                                kind: crate::notices::Kind::Word,
+                                text: format!("{} is off the rate limit", agent.name),
+                                repository_id: Some(agent.repository_id.clone()),
+                                agent_id: Some(agent.id.clone()),
+                                opens: Some("crew".to_owned()),
+                                ..Default::default()
+                            },
+                            now,
+                        );
+                    }
+                    _ => {}
+                }
+
+                // A commander whose pane has filled up is traded for a fresh
+                // one. Everything it needs is in the core — plans, cards,
+                // evidence, the vault — so what a full pane costs is money and,
+                // past a point, correctness: an engine that compacts itself
+                // mid-message swallows whatever it was told at that moment.
+                // Only while resting, and never in the first minutes of a
+                // session, or this would be a restart loop.
+                if agent.role == "commander" {
+                    let alive_for = state
+                        .manager
+                        .get(&session_id)
+                        .map(|held| now.saturating_sub(held.stats().started_at))
+                        .unwrap_or_default();
+
+                    if crate::context::wants_a_fresh_session(
+                        crate::context::read_context(&tail),
+                        alive_for,
+                        working || asking,
+                    ) {
+                        let worktree = state
+                            .repos
+                            .worktrees()
+                            .into_iter()
+                            .find(|held| {
+                                held.worktree.repository_id == agent.repository_id
+                                    && held.worktree.name == agent.worktree
+                            })
+                            .map(|held| held.worktree);
+
+                        if let Some(worktree) = worktree {
+                            let _ = state.crew.stop(&agent.id);
+                            match state.crew.start(&agent.id, &worktree.path, false, None) {
+                                Ok(_) => {
+                                    tracing::info!(agent = %agent.id, "traded a full pane for a fresh one");
+                                    state.notices.push(
+                                        crate::notices::NewNotice {
+                                            kind: crate::notices::Kind::Word,
+                                            text: format!(
+                                                "{} started a fresh session — its pane was full. Its plans and notes are untouched.",
+                                                agent.name
+                                            ),
+                                            workspace_id: None,
+                                            repository_id: Some(agent.repository_id.clone()),
+                                            agent_id: Some(agent.id.clone()),
+                                            opens: Some(format!("agent:{}", agent.id)),
+                                        },
+                                        now,
+                                    );
+                                }
+                                Err(error) => {
+                                    tracing::warn!(%error, agent = %agent.id, "cannot open a fresh pane")
+                                }
+                            }
+
+                            continue;
+                        }
+                    }
+                }
+
+                // A question the engine holds open is only answerable by a
+                // person, and nothing else on screen says so. It reaches the
+                // bell once, when it appears — not on every tick after.
+                if asking != asked_before.get(&agent.id).copied().unwrap_or(false) {
+                    asked_before.insert(agent.id.clone(), asking);
+
+                    if asking {
+                        state.notices.push(
+                            crate::notices::NewNotice {
+                                kind: crate::notices::Kind::Waiting,
+                                text: format!("{} is holding a question open for you", agent.name),
+                                workspace_id: None,
+                                repository_id: Some(agent.repository_id.clone()),
+                                agent_id: Some(agent.id.clone()),
+                                opens: Some(format!("agent:{}", agent.id)),
+                            },
+                            now,
+                        );
+                    }
+                }
+            }
+
+            // Answers owed to the crew, delivered to the agent that asked.
+            let owed: Vec<(String, Vec<String>)> = state
+                .crew_words
+                .lock()
+                .iter()
+                .map(|(agent_id, words)| (agent_id.clone(), words.clone()))
+                .collect();
+
+            for (agent_id, words) in owed {
+                let Some(agent) = state.crew.list().into_iter().find(|held| held.id == agent_id) else {
+                    state.crew_words.lock().remove(&agent_id);
+                    continue;
+                };
+                let Some(session_id) = agent.session_id.clone() else {
+                    continue;
+                };
+
+                let frame = state
+                    .manager
+                    .read_log(&session_id, 8 * 1024)
+                    .map(|raw| strip_ansi(&raw))
+                    .unwrap_or_default();
+                let previous = last_frames.get(&session_id).cloned().unwrap_or_default();
+                last_frames.insert(session_id.clone(), frame.clone());
+
+                if !safe_to_type(&previous, &frame) {
+                    continue;
+                }
+
+                let text = words.join("\n\n");
+                let delivered = state
+                    .manager
+                    .get(&session_id)
+                    .map(|session| session.write_input(format!("{text}\r").as_bytes()));
+
+                if matches!(delivered, Some(Ok(()))) {
+                    state.crew_words.lock().remove(&agent_id);
+                    tracing::info!(agent = %agent_id, "told an agent what its question was answered");
+                }
+            }
+
+            let waiting_words = !state.leader_words.lock().is_empty();
+
+            if state.supervisor.wake_is_due(now) || waiting_words {
                 let news = state.supervisor.news_for_leader();
-                if news.is_empty() {
+                if news.is_empty() && !waiting_words {
                     continue;
                 }
 
@@ -622,16 +970,278 @@ fn spawn_supervisor(state: AppState) {
                     continue;
                 }
 
-                let text = news_text(&news);
+                // One thing at a time. A finished plan and a roundup of watches
+                // are different asks, and an agent given both does the one that
+                // came last — measured: it read the evidence and never wrote the
+                // note. So a queued word goes alone, and the roundup waits its
+                // turn on the next tick.
+                let words: Vec<String> = state.leader_words.lock().drain(..).collect();
+                let carrying_news = words.is_empty();
+
+                let text = if carrying_news {
+                    if news.is_empty() {
+                        continue;
+                    }
+                    news_text(&news)
+                } else {
+                    words.join("\n\n")
+                };
                 let delivered = state
                     .manager
                     .get(&session_id)
                     .map(|session| session.write_input(format!("{text}\r").as_bytes()));
 
                 if matches!(delivered, Some(Ok(()))) {
-                    let ids: Vec<String> = news.iter().map(|watch| watch.id.clone()).collect();
+                    let ids: Vec<String> = if carrying_news {
+                        news.iter().map(|watch| watch.id.clone()).collect()
+                    } else {
+                        Vec::new()
+                    };
                     state.supervisor.leader_was_told(&ids, now);
-                    tracing::info!(count = ids.len(), leader = %leader.name, "woke the commander");
+                    tracing::info!(
+                        count = ids.len(),
+                        words = words.len(),
+                        leader = %leader.name,
+                        "woke the commander"
+                    );
+                } else {
+                    // Nothing was typed, so nothing was said: put the words back
+                    // rather than losing what the commander was meant to hear.
+                    state.leader_words.lock().extend(words);
+                }
+            }
+        }
+    });
+}
+
+/// Follow every card whose work is on a pull request.
+///
+/// A card used to reach `review` and stop there: the diff was open, the branch
+/// was pushed, and after that nothing in the app ever looked again. Whether it
+/// merged, whether a check went red, whether the base had moved under it — all
+/// of that lived on a website. So the card's life after the diff was a thing a
+/// person had to carry in their head, and the agent that wrote the code never
+/// heard that its tests failed.
+/// How much of a failing run to carry. Enough for a stack trace and the summary
+/// under it; not so much that an agent is handed a log instead of a reason.
+const WHAT_A_FAILURE_IS_WORTH: usize = 1800;
+
+fn spawn_pull_watcher(state: AppState) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        // When each pull request was first seen, so a repository with no CI can
+        // be told from one whose CI has not started.
+        let mut first_seen: BTreeMap<String, u64> = BTreeMap::new();
+
+        loop {
+            interval.tick().await;
+            let now = now_secs();
+
+            let watching: Vec<Task> = state
+                .board
+                .list()
+                .into_iter()
+                .filter(|task| {
+                    matches!(task.column, Column::Review | Column::Ready)
+                        && task.worktree.is_some()
+                })
+                .collect();
+
+            for task in watching {
+                let Some(worktree) = task.worktree.clone() else {
+                    continue;
+                };
+
+                let pull = match state.repos.pull_request_state(&task.repository_id, &worktree) {
+                    Ok(Some(pull)) => pull,
+                    // No pull request, or no forge to ask. Neither is news.
+                    Ok(None) => continue,
+                    Err(error) => {
+                        tracing::debug!(card = %task.id, %error, "cannot read the pull request");
+                        continue;
+                    }
+                };
+
+                let seen_since = *first_seen.entry(task.id.clone()).or_insert(now);
+                let standing =
+                    crate::pulls::where_it_stands(&pull, now.saturating_sub(seen_since));
+                let said = crate::pulls::in_a_line(&standing);
+
+                // Only a change is worth writing down, and the card is where
+                // that memory belongs. Holding it in the watcher meant every
+                // restart re-stamped the current standing onto every card —
+                // measured, as the same line twice on a probe.
+                let line = format!("pull #{}: {said}", pull.number);
+                let already = task
+                    .evidence
+                    .iter()
+                    .rev()
+                    .find(|entry| entry.by == "the forge")
+                    .and_then(|entry| match &entry.what {
+                        Evidence::Note { text } => Some(text.as_str()),
+                        _ => None,
+                    });
+
+                // A standing that has not changed is not worth writing down
+                // again — but it is still worth acting on. Skipping the whole
+                // block meant a card dragged back into review sat there while
+                // its checks were still red, which is the board lying again.
+                let is_news = already != Some(line.as_str());
+
+                if is_news {
+                    let _ = state
+                        .board
+                        .attach(&task.id, Evidence::Note { text: line }, "the forge", now);
+                }
+
+                match &standing {
+                    crate::pulls::Standing::Merged => {
+                        let _ = state.board.move_to(&task.id, Column::Done);
+                        if is_news {
+                        state.notices.push(
+                            crate::notices::NewNotice {
+                                kind: crate::notices::Kind::Finished,
+                                text: format!("{} merged: {}", task.id, task.title.trim()),
+                                repository_id: Some(task.repository_id.clone()),
+                                opens: Some("board".to_owned()),
+                                ..Default::default()
+                            },
+                            now,
+                        );
+                        }
+                    }
+                    crate::pulls::Standing::Ready => {
+                        let _ = state.board.move_to(&task.id, Column::Ready);
+                        if is_news {
+                        state.notices.push(
+                            crate::notices::NewNotice {
+                                kind: crate::notices::Kind::Waiting,
+                                text: format!("{} is ready to merge", task.id),
+                                repository_id: Some(task.repository_id.clone()),
+                                opens: Some("board".to_owned()),
+                                ..Default::default()
+                            },
+                            now,
+                        );
+                        }
+                    }
+                    crate::pulls::Standing::Closed => {
+                        let _ = state.board.move_to(&task.id, Column::Backlog);
+                    }
+                    trouble if trouble.goes_back_to_the_agent() => {
+                        // The card goes back to the column where work happens,
+                        // and whoever wrote the code is told what broke. An
+                        // agent that never hears its test failed cannot fix it.
+                        let _ = state.board.move_to(&task.id, Column::Working);
+
+                        // What comes back with the card depends on what is
+                        // wrong with it. A red check needs the run's own words;
+                        // a conflict needs the list of files; being behind
+                        // needs neither, and saying "resolve the conflicts" to
+                        // somebody who has none wastes a turn while they look.
+                        // The pull request's own base, not the repository's
+                        // default: a pull request can target any branch, and
+                        // computing the conflict against the wrong one finds
+                        // none and tells the agent there is nothing to resolve.
+                        let base = if pull.base.is_empty() {
+                            state
+                                .repos
+                                .repositories()
+                                .into_iter()
+                                .find(|held| held.id == task.repository_id)
+                                .map(|held| held.default_branch)
+                                .unwrap_or_else(|| "main".to_owned())
+                        } else {
+                            pull.base.clone()
+                        };
+                        let branch = task
+                            .branch
+                            .clone()
+                            .unwrap_or_else(|| format!("agent/{worktree}"));
+
+                        let (evidence, telling) = match trouble {
+                            crate::pulls::Standing::ChecksFailing { .. } => {
+                                let excerpt = state
+                                    .repos
+                                    .failing_check_log(&task.repository_id, &worktree)
+                                    .ok()
+                                    .flatten()
+                                    .map(|log| {
+                                        crate::pulls::failure_excerpt(&log, WHAT_A_FAILURE_IS_WORTH)
+                                    })
+                                    .filter(|held| !held.is_empty());
+
+                                let telling = format!(
+                                    "Pull request #{} for {} is not mergeable: {}{}\n\nFix it on {worktree} \
+                                     and push; the card is back in working.",
+                                    pull.number,
+                                    task.id,
+                                    said,
+                                    excerpt
+                                        .as_ref()
+                                        .map(|held| format!("\n\nWhat the run said:\n{held}"))
+                                        .unwrap_or_default(),
+                                );
+
+                                (
+                                    excerpt.map(|held| format!("what the run said:\n{held}")),
+                                    telling,
+                                )
+                            }
+                            crate::pulls::Standing::Conflicted => {
+                                let files = state
+                                    .repos
+                                    .conflicting_files(&task.repository_id, &worktree, &base)
+                                    .unwrap_or_default();
+
+                                let listed = if files.is_empty() {
+                                    None
+                                } else {
+                                    Some(format!("conflicts with {base}: {}", files.join(", ")))
+                                };
+
+                                (
+                                    listed,
+                                    crate::pulls::conflict_brief(pull.number, &base, &branch, &files),
+                                )
+                            }
+                            _ => (
+                                None,
+                                crate::pulls::behind_brief(pull.number, &base, &branch),
+                            ),
+                        };
+
+                        // The excerpt and the telling are only fetched and
+                        // sent when something changed; the column above is set
+                        // either way.
+                        if is_news {
+                            if let Some(held) = evidence {
+                                let _ = state.board.attach(
+                                    &task.id,
+                                    Evidence::Note { text: held },
+                                    "the forge",
+                                    now,
+                                );
+                            }
+
+                            if let Some(who) = task.assignee.clone() {
+                                state.crew_words.lock().entry(who).or_default().push(telling);
+                            }
+                        }
+
+                        state.notices.push(
+                            crate::notices::NewNotice {
+                                kind: crate::notices::Kind::Trouble,
+                                text: format!("{}: {said}", task.id),
+                                repository_id: Some(task.repository_id.clone()),
+                                agent_id: task.assignee.clone(),
+                                opens: Some("board".to_owned()),
+                                ..Default::default()
+                            },
+                            now,
+                        );
+                    }
+                    _ => {}
                 }
             }
         }
@@ -660,6 +1270,8 @@ fn spawn_routine_ticker(state: AppState) {
                             title: routine.name.clone(),
                             body: routine.brief.clone(),
                             repository_id: agent.repository_id.clone(),
+                            // A routine runs where its agent lives.
+                            worktree: Some(agent.worktree.clone()),
                         });
 
                         match card {
@@ -801,6 +1413,10 @@ struct AddRepoBody {
     url: Option<String>,
     #[serde(default)]
     into: Option<String>,
+    /// Say yes to starting a git repository in a folder that is not one yet.
+    /// Off by default: it writes to somebody's folder.
+    #[serde(default)]
+    start_git: bool,
 }
 
 #[derive(Deserialize)]
@@ -818,22 +1434,66 @@ async fn list_repos(State(state): State<AppState>) -> Json<Vec<Repository>> {
     Json(state.repos.repositories())
 }
 
+/// The workspace new work belongs to, making one if there is nowhere yet.
+///
+/// Every path that opens a project goes through here. A project that joined no
+/// workspace was not a small thing: the rail said the workspace held nothing
+/// while the project sat in the list below it, and what its crew learned was
+/// filed under a vault folder called "workspace" that nobody would think to
+/// open. There is always somewhere to stand, and this is what makes it true.
+fn standing_in(state: &AppState, called: &str) -> Result<(Workspace, bool), ApiError> {
+    if let Some(held) = state.workspaces.active() {
+        return Ok((held, false));
+    }
+
+    let made = state.workspaces.create(CreateWorkspace {
+        name: called.to_owned(),
+        repository_ids: Vec::new(),
+    })?;
+
+    Ok((made, true))
+}
+
 async fn add_repo(
     State(state): State<AppState>,
     Json(body): Json<AddRepoBody>,
 ) -> Result<Json<Repository>, ApiError> {
-    if let Some(url) = body.url {
+    let opened = if let Some(url) = body.url {
         let into = body
             .into
             .map(PathBuf::from)
             .unwrap_or_else(|| state.config.data_dir.join("clones"));
-        return Ok(Json(state.repos.clone_repository(&url, &into)?));
-    }
+        state.repos.clone_repository(&url, &into)?
+    } else {
+        let path = body
+            .path
+            .ok_or_else(|| ApiError(anyhow::anyhow!("path or url is required")))?;
 
-    let path = body
-        .path
-        .ok_or_else(|| ApiError(anyhow::anyhow!("path or url is required")))?;
-    Ok(Json(state.repos.register(&PathBuf::from(path))?))
+        if body.start_git {
+            state.repos.adopt(&PathBuf::from(path))?
+        } else {
+            state.repos.register(&PathBuf::from(path))?
+        }
+    };
+
+    // A folder opened belongs to the workspace it was opened in, and when there
+    // is not one yet it gets one named after itself rather than nothing.
+    let (workspace, _) = standing_in(&state, &opened.name)?;
+    state.workspaces.include(&workspace.id, &opened.id)?;
+    state.workspaces.activate(Some(&workspace.id))?;
+
+    Ok(Json(opened))
+}
+
+async fn forget_repo(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.repos.forget(&id)?;
+    // A workspace that still lists a project nobody tracks any more shows a
+    // name that leads nowhere.
+    state.workspaces.forget_repository(&id);
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_worktrees(
@@ -896,12 +1556,252 @@ async fn move_task(
     Ok(Json(state.board.move_to(&id, body.column)?))
 }
 
+#[derive(Default, Deserialize)]
+struct DeleteTaskQuery {
+    /// The crew asking rather than the human: it may throw away a card that
+    /// carries nothing, and nothing else.
+    #[serde(default)]
+    as_the_crew: bool,
+}
+
 async fn delete_task(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(query): Query<DeleteTaskQuery>,
 ) -> Result<StatusCode, ApiError> {
-    state.board.delete(&id)?;
+    if query.as_the_crew {
+        state.board.discard(&id)?;
+    } else {
+        state.board.delete(&id)?;
+    }
+
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// What happened when an agent was given its next piece of work.
+enum HandOver {
+    /// It was typed into the pane the agent already had.
+    Typed,
+    /// A pane was started for it.
+    Started,
+    /// The agent is mid-turn; the work has to wait.
+    Busy,
+}
+
+/// Give an agent its next brief.
+///
+/// An agent that finished a step still has its pane, and that pane holds
+/// everything it learned doing the last one. On a plan whose steps all commit to
+/// one branch the next step is nearly always for the same agent — and handing it
+/// out used to mean starting a second process, which the core refuses with
+/// "ada is already running". Measured on the /ready plan: the commander retried
+/// that refusal in a loop while the agent sat idle at its prompt with the whole
+/// context in front of it. So a live pane at rest is handed the brief where it
+/// stands, a live pane mid-turn is left alone, and only an agent without a pane
+/// gets a new one.
+async fn hand_the_work_over(
+    state: &AppState,
+    agent: &Agent,
+    worktree_path: &std::path::Path,
+    brief: &str,
+) -> Result<HandOver, ApiError> {
+    let live = agent
+        .session_id
+        .as_ref()
+        .filter(|id| state.manager.get(id).is_some())
+        .cloned();
+
+    let Some(session_id) = live else {
+        state
+            .crew
+            .start(&agent.id, worktree_path, false, Some(brief))?;
+        return Ok(HandOver::Started);
+    };
+
+    let tail = state
+        .manager
+        .read_log(&session_id, 8 * 1024)
+        .map(|raw| strip_ansi(&raw))
+        .unwrap_or_default();
+
+    if crate::supervisor::turn_running(&tail) || crate::supervisor::asking_the_human(&tail) {
+        return Ok(HandOver::Busy);
+    }
+
+    // The brief and the Enter go separately. A brief runs to several lines, and
+    // a multi-line write arrives at the engine as a paste — one block, held in
+    // the composer — which swallows a carriage return tacked onto its end.
+    // Measured: a step handed over this way sat unsent as "[Pasted text #1 +20
+    // lines]" while the agent waited at an empty prompt and the plan stalled.
+    let Some(session) = state.manager.get(&session_id) else {
+        return Ok(HandOver::Busy);
+    };
+
+    if session.write_input(brief.as_bytes()).is_err() {
+        return Ok(HandOver::Busy);
+    }
+
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
+    match session.write_input(b"\r") {
+        Ok(()) => Ok(HandOver::Typed),
+        Err(_) => Ok(HandOver::Busy),
+    }
+}
+
+/// Follow a step that has just been handed out.
+///
+/// Whoever hands it out, the commander has to hear when it settles. Only the
+/// human path used to do this, so a step X delegated itself was never watched:
+/// the agent finished, committed, and nothing told anybody — measured on the
+/// /ready plan, where step one sat at "assigned" with the work already done.
+/// Put the crew back the way the app found it.
+///
+/// A pane dies with the app: a rebuild, a crash, a laptop closing. What the
+/// agent was doing is not lost — the plan, the cards and the evidence live in
+/// the core — but until now every agent had to be started again by hand, one at
+/// a time, and a commander that is not running plans nothing. So whoever was
+/// mid-work when the app went down is started again in its own worktree, asking
+/// its engine to continue where it left off when the engine knows how.
+/// Give an agent back the card it was holding when the app went down.
+///
+/// Coming back with a pane and no work is worse than not coming back at all: the
+/// board still says the card is being worked, the plan still names the agent,
+/// and the watch still points at a session that no longer exists — so it can
+/// never settle and the commander is never told. Measured from the outside by
+/// the commander itself, which wrote down the symptom before anyone found the
+/// cause: "a card in working while crew_list shows its assignee idle and
+/// waiting at a prompt".
+async fn hand_back_what_it_was_holding(state: &AppState, agent: &Agent) {
+    let held: Vec<Task> = state
+        .board
+        .list()
+        .into_iter()
+        .filter(|task| task.assignee.as_deref() == Some(agent.id.as_str()))
+        .filter(|task| matches!(task.column, crate::board::Column::Working))
+        .collect();
+
+    for task in held {
+        let brief = compose_brief(
+            state,
+            agent,
+            &format!(
+                "Picking this up again after Agentland restarted — your pane is new, the work is not.\n\n{}\n\n{}",
+                task.title, task.body
+            ),
+        )
+        .await;
+
+        let worktree = state
+            .repos
+            .worktrees()
+            .into_iter()
+            .find(|entry| {
+                entry.worktree.repository_id == agent.repository_id
+                    && entry.worktree.name == agent.worktree
+            })
+            .map(|entry| entry.worktree.path);
+
+        let Some(path) = worktree else {
+            continue;
+        };
+
+        match hand_the_work_over(state, agent, &path, &brief).await {
+            Ok(HandOver::Busy) => continue,
+            Ok(_) => {
+                // The old watch points at a pane that is gone; this one follows
+                // the session the work is actually in.
+                watch_the_step(state, agent, &task.id, task.title.trim());
+                tracing::info!(agent = %agent.id, task = %task.id, "handed back the card it was holding");
+            }
+            Err(error) => tracing::warn!(error = %error.0, agent = %agent.id, task = %task.id, "cannot hand the card back"),
+        }
+    }
+}
+
+async fn bring_the_crew_back(state: AppState) {
+    let interrupted = state.crew.take_the_interrupted();
+    if interrupted.is_empty() {
+        return;
+    }
+
+    let mut back = Vec::new();
+    for agent in interrupted {
+        let Some(worktree) = state
+            .repos
+            .worktrees()
+            .into_iter()
+            .find(|held| {
+                held.worktree.repository_id == agent.repository_id
+                    && held.worktree.name == agent.worktree
+            })
+            .map(|held| held.worktree)
+        else {
+            tracing::warn!(agent = %agent.id, "cannot bring it back: its worktree is gone");
+            continue;
+        };
+
+        match state.crew.start(&agent.id, &worktree.path, true, None) {
+            Ok(started) => {
+                back.push(agent.name.clone());
+                hand_back_what_it_was_holding(&state, &started).await;
+            }
+            Err(error) => tracing::warn!(%error, agent = %agent.id, "cannot bring it back"),
+        }
+    }
+
+    if back.is_empty() {
+        return;
+    }
+
+    tracing::info!(crew = ?back, "brought the crew back after a restart");
+    state.notices.push(
+        crate::notices::NewNotice {
+            kind: crate::notices::Kind::Word,
+            text: format!("{} came back after Agentland restarted", back.join(", ")),
+            workspace_id: None,
+            repository_id: None,
+            agent_id: None,
+            opens: Some("crew".to_owned()),
+        },
+        now_secs(),
+    );
+}
+
+fn watch_the_step(state: &AppState, agent: &Agent, task_id: &str, fingerprint: &str) {
+    // A card that is not a plan step is still work someone is waiting on. Only
+    // plan steps used to be watched, so a card the commander wrote beside its
+    // plan — the fix it noticed halfway through, the extra it split out —
+    // finished in silence, and the plan sat "assigned" over committed work
+    // while a person nudged by hand. Whoever holds a card gets watched; the
+    // plan and step are simply empty when there is no plan behind it.
+    let (plan_id, step_id) = state
+        .plans
+        .plan_of_task(task_id)
+        .map(|(plan, step)| (plan.id, step.id))
+        .unwrap_or_default();
+
+    let Some(session_id) = state
+        .crew
+        .list()
+        .into_iter()
+        .find(|held| held.id == agent.id)
+        .and_then(|held| held.session_id)
+    else {
+        return;
+    };
+
+    state.supervisor.watch(
+        &plan_id,
+        &step_id,
+        task_id,
+        &agent.id,
+        &session_id,
+        &agent.repository_id,
+        &agent.worktree,
+        fingerprint,
+        now_secs(),
+    );
 }
 
 async fn assign_task(
@@ -930,6 +1830,19 @@ async fn assign_task(
         )));
     }
 
+    // A card bound to a worktree is bound for a reason: the branch it commits to
+    // is checked out there and nowhere else.
+    if let Some(bound) = task.worktree.as_deref() {
+        if bound != agent.worktree {
+            return Err(ApiError(anyhow::anyhow!(
+                "{} belongs in the {bound} worktree, and {} stands in {}",
+                task.id,
+                agent.name,
+                agent.worktree
+            )));
+        }
+    }
+
     let worktree = state
         .repos
         .worktrees()
@@ -942,31 +1855,45 @@ async fn assign_task(
         .worktree;
 
     let brief = compose_brief(&state, &agent, &format!("{}\n\n{}", task.title, task.body)).await;
-    state
-        .crew
-        .start(&agent.id, &worktree.path, false, Some(&brief))?;
+    if matches!(
+        hand_the_work_over(&state, &agent, &worktree.path, &brief).await?,
+        HandOver::Busy
+    ) {
+        return Err(ApiError(anyhow::anyhow!(
+            "{} is in the middle of a turn — wait for it, or take the card back",
+            agent.name
+        )));
+    }
 
     let updated = state
         .board
         .record_assignment(&id, &agent.id, &worktree.name, &worktree.branch)?;
 
-    if let Some((plan, step)) = state.plans.plan_of_task(&id) {
-        if let Some(session_id) = state.crew.list().into_iter().find(|entry| entry.id == agent.id).and_then(|entry| entry.session_id) {
-            state.supervisor.watch(
-                &plan.id,
-                &step.id,
-                &id,
-                &agent.id,
-                &session_id,
-                &agent.repository_id,
-                &agent.worktree,
-                task.title.trim(),
-                now_secs(),
-            );
+    watch_the_step(&state, &agent, &id, task.title.trim());
+
+    Ok(Json(updated))
+}
+
+/// Take a card back from whoever holds it.
+///
+/// The agent it was handed to is left alone — it may be mid-sentence — but the
+/// supervisor stops chasing that step, so a card put on the wrong agent can be
+/// handed to the right one instead of being abandoned for a fresh card.
+async fn release_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Task>, ApiError> {
+    let released = state.board.release(&id)?;
+
+    for watch in state.supervisor.list() {
+        if watch.task_id == id && watch.state == crate::supervisor::WatchState::Working {
+            state
+                .supervisor
+                .give_up(&watch.id, "the card was taken back".to_owned(), now_secs());
         }
     }
 
-    Ok(Json(updated))
+    Ok(Json(released))
 }
 
 #[derive(Deserialize)]
@@ -999,10 +1926,24 @@ async fn set_caps(
     Json(state.dispatch.set_caps(caps))
 }
 
+#[derive(Default, Deserialize)]
+struct DispatchBody {
+    /// Where this work has to happen. Naming it pins the card: only an agent
+    /// standing in that worktree can be handed it.
+    #[serde(default)]
+    worktree: Option<String>,
+}
+
 async fn dispatch_task(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    body: Option<Json<DispatchBody>>,
 ) -> Result<Json<DispatchReport>, ApiError> {
+    let wanted = body.and_then(|Json(body)| body.worktree);
+    if let Some(worktree) = wanted.as_deref() {
+        state.board.bind_to_worktree(&id, Some(worktree))?;
+    }
+
     let task = state
         .board
         .get(&id)
@@ -1031,9 +1972,27 @@ async fn dispatch_task(
                 .worktree;
 
             let brief = compose_brief(&state, &agent, &format!("{}\n\n{}", task.title, task.body)).await;
-            state
-                .crew
-                .start(&agent.id, &worktree.path, false, Some(&brief))?;
+            if matches!(
+                hand_the_work_over(&state, &agent, &worktree.path, &brief).await?,
+                HandOver::Busy
+            ) {
+                let reason = format!("{} is in the middle of a turn", agent.name);
+                let snapshot = state.dispatch.enqueue(&task.id);
+                let noted = state.board.attach(
+                    &task.id,
+                    Evidence::Note {
+                        text: format!("X queued this: {reason}"),
+                    },
+                    "the dispatcher",
+                    now_secs(),
+                )?;
+
+                return Ok(Json(DispatchReport {
+                    state: snapshot,
+                    decision: Decision::Queue { reason },
+                    task: Some(noted),
+                }));
+            }
 
             let updated =
                 state
@@ -1044,7 +2003,11 @@ async fn dispatch_task(
                 Evidence::Note {
                     text: format!("X: {reason}"),
                 },
+                "the dispatcher",
+                now_secs(),
             )?;
+
+            watch_the_step(&state, &agent, &task.id, task.title.trim());
 
             let after = state.dispatch.record_assignment(&agent.id, &task.id, reason);
 
@@ -1063,6 +2026,8 @@ async fn dispatch_task(
                 Evidence::Note {
                     text: format!("X queued this: {reason}"),
                 },
+                "the dispatcher",
+                now_secs(),
             )?;
 
             Ok(Json(DispatchReport {
@@ -1077,6 +2042,56 @@ async fn dispatch_task(
             task: None,
         })),
     }
+}
+
+#[derive(Deserialize)]
+struct FilesQuery {
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    worktree: Option<String>,
+}
+
+/// Which checkout a request means: the project's own folder, or one of the
+/// folders an agent works in. They are different places on disk, and a panel
+/// that guessed would show a person the wrong branch's files.
+fn checkout_of(state: &AppState, id: &str, worktree: Option<&str>) -> Result<PathBuf, ApiError> {
+    if let Some(name) = worktree {
+        let held = state
+            .repos
+            .worktrees()
+            .into_iter()
+            .find(|tree| tree.worktree.repository_id == id && tree.worktree.name == name)
+            .ok_or_else(|| ApiError::from(anyhow::anyhow!("unknown worktree: {id}/{name}")))?;
+        return Ok(held.worktree.path);
+    }
+
+    let held = state
+        .repos
+        .repositories()
+        .into_iter()
+        .find(|repository| repository.id == id)
+        .ok_or_else(|| ApiError::from(anyhow::anyhow!("unknown repository: {id}")))?;
+
+    Ok(held.primary_path)
+}
+
+async fn list_project_files(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<FilesQuery>,
+) -> Result<Json<crate::files::Listing>, ApiError> {
+    let root = checkout_of(&state, &id, query.worktree.as_deref())?;
+    Ok(Json(crate::files::list(&root, &query.path)?))
+}
+
+async fn read_project_file(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<FilesQuery>,
+) -> Result<Json<crate::files::FileText>, ApiError> {
+    let root = checkout_of(&state, &id, query.worktree.as_deref())?;
+    Ok(Json(crate::files::read(&root, &query.path)?))
 }
 
 async fn review_worktree(
@@ -1099,6 +2114,132 @@ async fn commit_worktree(
     Ok(Json(state.repos.commit(&id, &name, &body.message)?))
 }
 
+#[derive(Deserialize)]
+struct MergeBody {
+    /// The card this merge finishes, when there is one.
+    #[serde(default)]
+    task_id: Option<String>,
+}
+
+/// Merge the pull request on a branch, and finish the card with it.
+///
+/// A person's call, and deliberately not something an agent reaches for on its
+/// own: merging puts code in front of everyone and cannot be taken back with a
+/// button. An agent that thinks it is time asks with `request_approval`.
+#[derive(Deserialize)]
+struct ReviewBody {
+    task_id: String,
+    /// approve, request_changes or comment.
+    verdict: String,
+    #[serde(default)]
+    summary: String,
+    /// Who reached it. An agent's tools fill this in from its own name.
+    #[serde(default)]
+    by: Option<String>,
+}
+
+/// Record a review of a card's work, and say it on the pull request.
+///
+/// The verdict is kept here rather than on the forge because every agent pushes
+/// as the same account and GitHub will not let an account approve its own pull
+/// request. What goes to GitHub is a comment naming the reviewer and the
+/// verdict, so the people reading the pull request see what the crew decided.
+async fn submit_review(
+    State(state): State<AppState>,
+    Path((id, name)): Path<(String, String)>,
+    Json(body): Json<ReviewBody>,
+) -> Result<Json<Task>, ApiError> {
+    let verdict = crate::pulls::Verdict::read(&body.verdict).ok_or_else(|| {
+        ApiError(anyhow::anyhow!(
+            "a verdict is approve, request_changes or comment — not {}",
+            body.verdict
+        ))
+    })?;
+
+    let task = state
+        .board
+        .get(&body.task_id)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("unknown task: {}", body.task_id)))?;
+
+    let reviewer = body
+        .by
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("a person")
+        .to_owned();
+
+    crate::pulls::may_review(&reviewer, task.assignee.as_deref())
+        .map_err(|why| ApiError(anyhow::anyhow!(why)))?;
+
+    let now = now_secs();
+    let comment = crate::pulls::review_comment(&reviewer, verdict, &body.summary);
+
+    // Said on the pull request when there is one. A review of work nobody has
+    // pushed yet is still a review, so this does not refuse for want of a forge.
+    if let Err(error) = state.repos.comment_on_pull_request(&id, &name, &comment) {
+        tracing::info!(%error, card = %task.id, "the review was kept but not posted");
+    }
+
+    let updated = state.board.attach(
+        &task.id,
+        Evidence::Reviewed {
+            verdict: verdict.word().to_owned(),
+            summary: body.summary.trim().to_owned(),
+        },
+        &reviewer,
+        now,
+    )?;
+
+    if verdict.sends_it_back() {
+        let updated = state.board.move_to(&task.id, Column::Working)?;
+
+        if let Some(who) = task.assignee.clone() {
+            state.crew_words.lock().entry(who).or_default().push(format!(
+                "{reviewer} reviewed {} and asked for changes: {}\n\nThe card is back in working.",
+                task.id,
+                if body.summary.trim().is_empty() {
+                    "no reason given".to_owned()
+                } else {
+                    body.summary.trim().to_owned()
+                }
+            ));
+        }
+
+        return Ok(Json(updated));
+    }
+
+    Ok(Json(updated))
+}
+
+async fn merge_worktree(
+    State(state): State<AppState>,
+    Path((id, name)): Path<(String, String)>,
+    body: Option<Json<MergeBody>>,
+) -> Result<Json<Task>, ApiError> {
+    let task_id = body
+        .and_then(|Json(body)| body.task_id)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("say which card this merge finishes")))?;
+
+    let said = state.repos.merge_pull_request(&id, &name)?;
+    let now = now_secs();
+
+    state.board.attach(
+        &task_id,
+        Evidence::Note {
+            text: if said.is_empty() {
+                "merged".to_owned()
+            } else {
+                said.lines().next().unwrap_or("merged").to_owned()
+            },
+        },
+        "a person",
+        now,
+    )?;
+
+    Ok(Json(state.board.move_to(&task_id, Column::Done)?))
+}
+
 async fn open_pull_request(
     State(state): State<AppState>,
     Path((id, name)): Path<(String, String)>,
@@ -1114,7 +2255,21 @@ async fn open_pull_request(
             Evidence::PullRequest {
                 url: request.url.clone(),
             },
+            "a person",
+            now_secs(),
         );
+
+        // The card knew its worktree and not its branch, so it opened saying
+        // "branch: none yet" while a pull request sat on one.
+        if let Some(worktree) = state
+            .repos
+            .worktrees()
+            .into_iter()
+            .find(|entry| entry.worktree.repository_id == id && entry.worktree.name == name)
+        {
+            let _ = state.board.record_branch(&task_id, &worktree.worktree.branch);
+        }
+
         let _ = state.board.move_to(&task_id, Column::Review);
     }
 
@@ -1143,32 +2298,50 @@ async fn queue_ui_command(
     StatusCode::ACCEPTED
 }
 
-#[derive(Deserialize)]
-struct WindowState {
-    session_id: String,
-    /// Which window holds this pane now: "grid" puts it back.
-    holder: String,
+/// How a pane is being shown.
+///
+/// One pty can be looked at in more than one way — as a cell in the grid or a
+/// window of its own, as a terminal or as plain readable text. The pty does not
+/// care; the windows have to agree, so the answer lives here rather than in
+/// either of them.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct PaneView {
+    #[serde(default)]
+    pub holder: String,
+    #[serde(default)]
+    pub readable: bool,
 }
 
-/// Which panes are showing in a window of their own.
-///
-/// One pty can have two views; what must not happen is both views drawing the
-/// same terminal in the same breath, or the grid holding a cell for a pane that
-/// is on another screen. The ledger lives here so every window agrees.
-async fn list_windows(State(state): State<AppState>) -> Json<BTreeMap<String, String>> {
-    Json(state.torn_out.lock().clone())
+#[derive(Deserialize)]
+struct SetPaneView {
+    session_id: String,
+    #[serde(default)]
+    holder: Option<String>,
+    #[serde(default)]
+    readable: Option<bool>,
+}
+
+async fn list_windows(State(state): State<AppState>) -> Json<BTreeMap<String, PaneView>> {
+    Json(state.pane_views.lock().clone())
 }
 
 async fn set_window(
     State(state): State<AppState>,
-    Json(body): Json<WindowState>,
-) -> Json<BTreeMap<String, String>> {
-    let mut held = state.torn_out.lock();
+    Json(body): Json<SetPaneView>,
+) -> Json<BTreeMap<String, PaneView>> {
+    let mut held = state.pane_views.lock();
+    let view = held.entry(body.session_id.clone()).or_default();
 
-    if body.holder == "grid" {
+    if let Some(holder) = body.holder {
+        view.holder = if holder == "grid" { String::new() } else { holder };
+    }
+    if let Some(readable) = body.readable {
+        view.readable = readable;
+    }
+
+    // A pane shown in the grid as a terminal is the default; it needs no entry.
+    if view.holder.is_empty() && !view.readable {
         held.remove(&body.session_id);
-    } else {
-        held.insert(body.session_id, body.holder);
     }
 
     Json(held.clone())
@@ -1187,7 +2360,23 @@ async fn request_approval(
     State(state): State<AppState>,
     Json(request): Json<RequestApproval>,
 ) -> Result<Json<Approval>, ApiError> {
-    Ok(Json(state.approvals.request(request)?))
+    let asked_by = request.requested_by.clone();
+    let approval = state.approvals.request(request)?;
+
+    // An agent that has stopped to ask is an agent that is not working: this is
+    // the kind of notice that should reach the human where they are looking.
+    state.notices.push(
+        crate::notices::NewNotice {
+            kind: crate::notices::Kind::Waiting,
+            text: format!("{asked_by} is asking: {}", approval.summary),
+            agent_id: Some(asked_by),
+            opens: Some("approvals".to_owned()),
+            ..Default::default()
+        },
+        now_secs(),
+    );
+
+    Ok(Json(approval))
 }
 
 async fn answer_approval(
@@ -1195,7 +2384,49 @@ async fn answer_approval(
     Path(id): Path<String>,
     Json(answer): Json<AnswerApproval>,
 ) -> Result<Json<Approval>, ApiError> {
-    Ok(Json(state.approvals.answer(&id, answer)?))
+    let answered = state.approvals.answer(&id, answer)?;
+
+    // Saying yes to a raise is the act, not a note about it.
+    if answered.verdict == crate::approvals::Verdict::Approved {
+        if let Some(grant) = answered.grants.clone() {
+            state.crew.shape(
+                &grant.agent_id,
+                crate::crew::Shaping {
+                    permissions: Some(grant.to.clone()),
+                    approved_raise: true,
+                    ..Default::default()
+                },
+            )?;
+            tracing::info!(agent = %grant.agent_id, from = %grant.from, to = %grant.to, "the human raised an agent");
+        }
+    }
+
+    // An answer nobody hears is not an answer. The agent that asked waits at its
+    // prompt until it is told, which on the /version plan meant a commander
+    // sitting on a settled question while the plan stood still.
+    let verdict = if answered.verdict == crate::approvals::Verdict::Approved {
+        "approved"
+    } else {
+        "not approved"
+    };
+    let note = answered
+        .answered_note
+        .clone()
+        .filter(|note| !note.trim().is_empty())
+        .map(|note| format!(" — {note}"))
+        .unwrap_or_default();
+
+    state
+        .crew_words
+        .lock()
+        .entry(answered.requested_by.clone())
+        .or_default()
+        .push(format!(
+            "Your question \"{}\" is {verdict}{note}. Carry on from there.",
+            answered.summary
+        ));
+
+    Ok(Json(answered))
 }
 
 #[derive(Deserialize)]
@@ -1249,11 +2480,13 @@ async fn propose_memory(
     State(state): State<AppState>,
     Json(request): Json<ProposeMemory>,
 ) -> Result<Json<Memory>, ApiError> {
-    Ok(Json(state.memories.propose(request)?))
+    let scope = scope_for(&state, &request.scope);
+    Ok(Json(state.memories.propose(request, &scope, now_secs())?))
 }
 
 #[derive(Deserialize)]
 struct ApproveBody {
+    slug: String,
     #[serde(default)]
     approved: bool,
 }
@@ -1262,10 +2495,10 @@ struct ApproveBody {
 struct SearchQuery {
     #[serde(default)]
     q: String,
+    /// Where to look, in the vault's words: "shared", "workspace:atolye",
+    /// "project:atolye/svc-demo". A scope also sees everything above it.
     #[serde(default)]
-    scope: Option<Scope>,
-    #[serde(default)]
-    scope_id: Option<String>,
+    scope: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
 }
@@ -1296,9 +2529,10 @@ async fn search_memories(
 
     let floor = state.embedder.lock().min_similarity;
 
+    let scope = scope_for(&state, query.scope.as_deref().unwrap_or_default());
+
     Json(state.memories.recall(
-        query.scope.unwrap_or(Scope::Workspace),
-        query.scope_id.as_deref().unwrap_or_default(),
+        &scope,
         &query.q,
         vector.as_deref(),
         floor,
@@ -1339,25 +2573,28 @@ async fn set_embedder(
 
 async fn approve_memory(
     State(state): State<AppState>,
-    Path(id): Path<String>,
     Json(body): Json<ApproveBody>,
-) -> Result<Json<Memory>, ApiError> {
-    let memory = state.memories.approve(&id, body.approved)?;
+) -> Result<Json<crate::memory::Approved>, ApiError> {
+    let answered = state.memories.approve(&body.slug, body.approved)?;
 
-    if memory.approved {
-        if let Some(vector) = embed_text(&state, memory.text.clone()).await {
-            state.memories.remember_vector(&memory.id, vector);
+    if answered.memory.approved {
+        if let Some(vector) = embed_text(&state, answered.memory.text.clone()).await {
+            state.memories.remember_vector(&answered.memory.id, vector);
         }
     }
 
-    Ok(Json(memory))
+    if let Some(replaced) = answered.replaced.as_deref() {
+        tracing::info!(kept = %answered.memory.id, %replaced, "a memory replaced the one it supersedes");
+    }
+
+    Ok(Json(answered))
 }
 
 async fn forget_memory(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(slug): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    state.memories.forget(&id)?;
+    state.memories.forget(&slug)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1445,8 +2682,6 @@ async fn list_engines() -> Json<Vec<Engine>> {
     Json(crate::crew::engines())
 }
 
-const SILENCE_BEFORE_ATTENTION: u64 = 90;
-
 #[derive(Serialize)]
 struct AgentPresence {
     #[serde(flatten)]
@@ -1454,6 +2689,36 @@ struct AgentPresence {
     presence: &'static str,
     since: u64,
     reason: String,
+}
+
+/// What an agent is doing, as one word.
+///
+/// Silence is not the signal it looks like: a modern TUI redraws its status line
+/// while nobody is doing anything, so a pane at an empty prompt never goes quiet.
+/// What the engine is doing is written on the pane instead.
+pub fn presence_name(
+    waiting_on_human: bool,
+    alive: bool,
+    turn_running: bool,
+    finished: bool,
+) -> (&'static str, &'static str) {
+    if waiting_on_human {
+        return ("attention", "asked for approval");
+    }
+
+    if alive {
+        return if turn_running {
+            ("working", "a turn is running")
+        } else {
+            ("waiting", "waiting at a prompt")
+        };
+    }
+
+    if finished {
+        ("done", "finished its run")
+    } else {
+        ("idle", "not started")
+    }
 }
 
 fn presence_of(state: &AppState, agent: &Agent, now: u64) -> AgentPresence {
@@ -1485,19 +2750,55 @@ fn presence_of(state: &AppState, agent: &Agent, now: u64) -> AgentPresence {
             let stats = session.stats();
             let silence = now.saturating_sub(stats.last_output_at);
 
-            if silence >= SILENCE_BEFORE_ATTENTION {
+            // Silence is not the signal it looks like: a modern TUI redraws its
+            // status line while nobody is doing anything, so a pane at an empty
+            // prompt never goes quiet. What the engine is actually doing is
+            // written on the pane, and the supervisor already knows how to read
+            // it — the same reading decides presence here.
+            let tail = state
+                .manager
+                .read_log(session.info().id.as_str(), 8 * 1024)
+                .map(|raw| strip_ansi(&raw))
+                .unwrap_or_default();
+
+            // Being throttled comes before everything the pane looks like it is
+            // doing: a retry counter redraws exactly like a turn, so this is
+            // the one state that would otherwise be reported as work.
+            if let Some(limit) = crate::context::read_rate_limit(&tail) {
+                return AgentPresence {
+                    agent: agent.clone(),
+                    presence: "attention",
+                    since: silence,
+                    reason: match limit.resets_in {
+                        Some(wait) => format!("rate limited, resets in {wait}"),
+                        None => "rate limited".to_owned(),
+                    },
+                };
+            }
+
+            // A question comes first: a pane stopped on its engine's picker is
+            // waiting on a person, and calling that "working" hides the one
+            // thing only a person can clear.
+            if crate::supervisor::asking_the_human(&tail) {
                 AgentPresence {
                     agent: agent.clone(),
                     presence: "attention",
                     since: silence,
-                    reason: "silent at a prompt".to_owned(),
+                    reason: "holding a question open".to_owned(),
                 }
-            } else {
+            } else if crate::supervisor::turn_running(&tail) {
                 AgentPresence {
                     agent: agent.clone(),
                     presence: "working",
                     since: silence,
-                    reason: "producing output".to_owned(),
+                    reason: "a turn is running".to_owned(),
+                }
+            } else {
+                AgentPresence {
+                    agent: agent.clone(),
+                    presence: "waiting",
+                    since: silence,
+                    reason: "waiting at a prompt".to_owned(),
                 }
             }
         }
@@ -1529,10 +2830,12 @@ async fn list_agents(State(state): State<AppState>) -> Json<Vec<AgentPresence>> 
     Json(agents)
 }
 
-async fn hire_agent(
-    State(state): State<AppState>,
-    Json(request): Json<HireRequest>,
-) -> Result<Json<Agent>, ApiError> {
+/// Put someone on the crew, with whatever their role has to know.
+///
+/// A commander that has not been given `commanding-a-crew` plans nothing, so the
+/// skill goes on at the moment of hiring rather than being something a person
+/// has to remember. Every path that hires goes through here for that reason.
+fn take_on(state: &AppState, request: HireRequest) -> Result<Agent, ApiError> {
     let known = state.repos.worktrees().into_iter().any(|entry| {
         entry.worktree.repository_id == request.repository_id
             && entry.worktree.name == request.worktree
@@ -1554,7 +2857,14 @@ async fn hire_agent(
         }
     }
 
-    Ok(Json(agent))
+    Ok(agent)
+}
+
+async fn hire_agent(
+    State(state): State<AppState>,
+    Json(request): Json<HireRequest>,
+) -> Result<Json<Agent>, ApiError> {
+    Ok(Json(take_on(&state, request)?))
 }
 
 async fn start_agent(
@@ -1596,6 +2906,219 @@ async fn stop_agent(
 ) -> Result<StatusCode, ApiError> {
     state.crew.stop(&id)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct NoteQuery {
+    #[serde(default)]
+    q: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct VaultReport {
+    path: String,
+    notes: usize,
+}
+
+#[derive(Serialize)]
+struct NoticeReport {
+    notices: Vec<crate::notices::Notice>,
+    unseen: usize,
+    loud: bool,
+}
+
+/// What the crew wants the human to know, newest first, with a count for the
+/// bell and whether any of it is the kind that should not wait.
+async fn list_notices(
+    State(state): State<AppState>,
+    Query(query): Query<NoteQuery>,
+) -> Json<NoticeReport> {
+    let (unseen, loud) = state.notices.unseen();
+
+    Json(NoticeReport {
+        notices: state.notices.list(query.limit.unwrap_or(40).clamp(1, 200)),
+        unseen,
+        loud,
+    })
+}
+
+#[derive(Deserialize)]
+struct SeenBody {
+    #[serde(default)]
+    ids: Vec<u64>,
+}
+
+async fn mark_notices_seen(
+    State(state): State<AppState>,
+    Json(body): Json<SeenBody>,
+) -> StatusCode {
+    state.notices.mark_seen(&body.ids);
+    StatusCode::NO_CONTENT
+}
+
+/// Where the vault is on disk, so the human can open the same folder in whatever
+/// they keep notes in.
+async fn where_the_vault_is(State(state): State<AppState>) -> Json<VaultReport> {
+    Json(VaultReport {
+        path: state.vault.root().to_string_lossy().to_string(),
+        notes: state.vault.list().len(),
+    })
+}
+
+/// Redraw every index. The maps are kept current as notes are written; this is
+/// for a vault someone has been editing by hand.
+async fn redraw_the_maps(State(state): State<AppState>) -> Result<Json<VaultReport>, ApiError> {
+    state.vault.reindex(now_secs())?;
+
+    Ok(Json(VaultReport {
+        path: state.vault.root().to_string_lossy().to_string(),
+        notes: state.vault.list().len(),
+    }))
+}
+
+/// The crew's notes: everything, or what answers a question.
+async fn list_notes(
+    State(state): State<AppState>,
+    Query(query): Query<NoteQuery>,
+) -> Json<Vec<crate::vault::Note>> {
+    let limit = query.limit.unwrap_or(20).clamp(1, 200);
+
+    match query.q.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
+        Some(wanted) => Json(state.vault.search(wanted, limit)),
+        None => Json(state.vault.list().into_iter().take(limit).collect()),
+    }
+}
+
+async fn read_note(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+) -> Result<Json<crate::vault::Note>, ApiError> {
+    state
+        .vault
+        .get(&slug)
+        .map(Json)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("no note called {slug}")))
+}
+
+#[derive(Deserialize)]
+struct NoteDraft {
+    title: String,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    written_by: Option<String>,
+    /// Where it belongs: "shared", "workspace:<id>", "project:<workspace>/<id>",
+    /// or a bare repository id. Left out, it goes to the shared shelf.
+    #[serde(default)]
+    scope: Option<String>,
+}
+
+/// A note written by whoever is asking. Notes are records, not instructions —
+/// what an agent reads from here is quoted as somebody's writing, never obeyed.
+async fn write_note(
+    State(state): State<AppState>,
+    Json(draft): Json<NoteDraft>,
+) -> Result<Json<crate::vault::Note>, ApiError> {
+    let by = draft.written_by.unwrap_or_else(|| "someone".to_owned());
+    let scope = scope_for(&state, draft.scope.as_deref().unwrap_or("shared"));
+
+    let written = state.vault.write(
+        &scope,
+        &draft.title,
+        &draft.body,
+        draft.tags,
+        &by,
+        now_secs(),
+    )?;
+
+    // The index is a map, and a map that goes stale is worse than none.
+    let _ = state.vault.reindex(now_secs());
+
+    Ok(Json(written))
+}
+
+async fn forget_note(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.vault.forget(&slug)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The commander deciding how one of its crew is set up: which model it runs on,
+/// what its pane is called, and the colour it is known by.
+async fn shape_agent(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    scope: Option<axum::Extension<crate::auth::Scope>>,
+    Json(wanted): Json<crate::crew::Shaping>,
+) -> Result<Json<Agent>, ApiError> {
+    // The human is the one who decides how much rope the crew gets, and this is
+    // their own machine: from the app a raise simply applies. From an agent it
+    // does not, whatever the agent says about itself.
+    let asked_by_a_human = matches!(
+        scope.map(|axum::Extension(held)| held),
+        Some(crate::auth::Scope::Full) | None
+    );
+    let raising = wanted
+        .permissions
+        .as_deref()
+        .map(str::trim)
+        .filter(|mode| !mode.is_empty())
+        .and_then(|mode| {
+            let agent = state.crew.list().into_iter().find(|entry| entry.id == id)?;
+            let held = agent
+                .permissions
+                .clone()
+                .unwrap_or_else(|| crate::crew::permission_for_role(&agent.role).to_owned());
+
+            crate::crew::is_a_raise(Some(&held), mode).then(|| (held, mode.to_owned()))
+        });
+
+    // A raise is not refused into silence: the human is asked, in words they can
+    // answer on a phone, and saying yes is what carries it out.
+    if let Some((held, wanted_mode)) = raising.filter(|_| !asked_by_a_human) {
+        let approval = state.approvals.request_grant(
+            format!("Let {id} run with {wanted_mode} instead of {held}?"),
+            format!(
+                "The commander asked for {id} to be raised from {held} to {wanted_mode}. Approving applies it; the agent takes it the next time it starts."
+            ),
+            "x",
+            crate::approvals::Grant {
+                agent_id: id.clone(),
+                from: held.clone(),
+                to: wanted_mode.clone(),
+            },
+        )?;
+
+        state.notices.push(
+            crate::notices::NewNotice {
+                kind: crate::notices::Kind::Waiting,
+                text: approval.summary.clone(),
+                agent_id: Some(id.clone()),
+                opens: Some("approvals".to_owned()),
+                ..Default::default()
+            },
+            now_secs(),
+        );
+
+        return Err(ApiError(anyhow::anyhow!(
+            "raising {id} from {held} to {wanted_mode} needs the human — asked as {}",
+            approval.id
+        )));
+    }
+
+    Ok(Json(state.crew.shape(
+        &id,
+        crate::crew::Shaping {
+            approved_raise: asked_by_a_human,
+            ..wanted
+        },
+    )?))
 }
 
 async fn dismiss_agent(
@@ -1647,6 +3170,714 @@ async fn create_workspace(
     Json(body): Json<CreateWorkspace>,
 ) -> Result<Json<Workspace>, ApiError> {
     Ok(Json(state.workspaces.create(body)?))
+}
+
+const DESK: &str = "desk";
+
+/// The worktree a project's commander sits in.
+///
+/// A desk of its own, not the branch the work happens on. A commander parked in
+/// the worktree a step commits to is a commander standing where an implementer
+/// has to be, and the branch is checked out in exactly one place — so the card
+/// that names it cannot be handed to anybody.
+fn desk_for(state: &AppState, repository_id: &str) -> Result<Worktree, ApiError> {
+    let standing = state.repos.worktrees().into_iter().find(|entry| {
+        entry.worktree.repository_id == repository_id && entry.worktree.name == DESK
+    });
+
+    match standing {
+        Some(entry) => Ok(entry.worktree),
+        None => Ok(state.repos.create_worktree(repository_id, DESK)?),
+    }
+}
+
+/// What a commander is told when nobody has given it a goal yet.
+fn take_the_project_on(repository: &Repository) -> String {
+    format!(
+        "You are commanding {}. Nobody has handed you a goal yet, so start by reading the project: \
+         what it is, what state it is in, and what the board already holds. Then say what you would \
+         do first and what crew that needs — who to hire, what each of them is for, and which steps \
+         can run at once. Hire only for work you can name. Wait for a person before you start \
+         anything you have not been asked for.",
+        repository.name
+    )
+}
+
+#[derive(Deserialize)]
+struct Ignition {
+    /// What to set it going on. Left out, it is told to take the project on.
+    #[serde(default)]
+    brief: Option<String>,
+    #[serde(default)]
+    engine_id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Serialize)]
+struct Ignited {
+    commander: Agent,
+    worktree: Worktree,
+    did: Vec<String>,
+}
+
+/// Put this project's commander at its desk and set it going.
+///
+/// The same call whether there is nobody yet, somebody who is not started, or
+/// somebody already at work: hire if missing, start if stopped, hand over the
+/// brief either way. One button can mean all three because this decides which.
+async fn ignite(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    body: Option<Json<Ignition>>,
+) -> Result<Json<Ignited>, ApiError> {
+    let Json(body) = body.unwrap_or(Json(Ignition {
+        brief: None,
+        engine_id: None,
+        name: None,
+    }));
+
+    let repository = state
+        .repos
+        .repositories()
+        .into_iter()
+        .find(|repository| repository.id == id)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("there is no project called {id}")))?;
+
+    let mut did = Vec::new();
+    let held = state
+        .crew
+        .list()
+        .into_iter()
+        .find(|agent| agent.role == "commander" && agent.repository_id == repository.id);
+
+    let commander = match held {
+        Some(commander) => commander,
+        None => {
+            let desk = desk_for(&state, &repository.id)?;
+            if desk.name == DESK {
+                did.push(format!("gave {} a desk on {}", repository.name, desk.branch));
+            }
+
+            let engine_id = match body
+                .engine_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                Some(chosen) => chosen.to_owned(),
+                None => crate::start::engine_for_a_commander(&crate::crew::engines()).ok_or_else(
+                    || {
+                        ApiError(anyhow::anyhow!(
+                            "no coding agent is installed — put one on PATH and start again"
+                        ))
+                    },
+                )?,
+            };
+
+            let hired = take_on(
+                &state,
+                HireRequest {
+                    name: body
+                        .name
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or("X")
+                        .to_owned(),
+                    role: "commander".to_owned(),
+                    engine_id,
+                    repository_id: repository.id.clone(),
+                    worktree: desk.name.clone(),
+                    model: None,
+                    title: None,
+                    colour: None,
+                    permissions: None,
+                },
+            )?;
+
+            did.push(format!("hired {} to command {}", hired.name, repository.name));
+            hired
+        }
+    };
+
+    let worktree = state
+        .repos
+        .worktrees()
+        .into_iter()
+        .find(|entry| {
+            entry.worktree.repository_id == commander.repository_id
+                && entry.worktree.name == commander.worktree
+        })
+        .ok_or_else(|| ApiError(anyhow::anyhow!("{}'s worktree is gone", commander.name)))?
+        .worktree;
+
+    let base = body
+        .brief
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| take_the_project_on(&repository));
+
+    let brief = compose_brief(&state, &commander, &base).await;
+    match hand_the_work_over(&state, &commander, &worktree.path, &brief).await? {
+        HandOver::Busy => {
+            return Err(ApiError(anyhow::anyhow!(
+                "{} is in the middle of a turn — it is already working",
+                commander.name
+            )))
+        }
+        HandOver::Started => did.push(format!("started {} at its desk", commander.name)),
+        HandOver::Typed => did.push(format!("told {} to take it on", commander.name)),
+    }
+
+    let commander = state
+        .crew
+        .list()
+        .into_iter()
+        .find(|agent| agent.id == commander.id)
+        .unwrap_or(commander);
+
+    Ok(Json(Ignited {
+        commander,
+        worktree,
+        did,
+    }))
+}
+
+#[derive(Serialize)]
+struct StarterOffer {
+    id: &'static str,
+    label: &'static str,
+    what: &'static str,
+    why: &'static str,
+    /// What has to be on PATH, and whether it is.
+    needs: Vec<&'static str>,
+    installed: bool,
+    /// Which tools are missing, so the panel can name them rather than saying no.
+    missing: Vec<&'static str>,
+    /// What its headline package is at this moment, asked of the tool that would
+    /// install it. Null when nothing could be asked — never a number this
+    /// repository wrote down, because that number is wrong within the month.
+    version: Option<String>,
+    /// The exact commands that would run, with the name filled in. Shown before
+    /// anybody presses anything: this downloads and executes other people's code.
+    commands: Vec<String>,
+    /// The auditor that would be run afterwards, and whether it is installed.
+    audit: Option<&'static str>,
+    audit_installed: bool,
+    /// What can be put on top of this one, and what those are today.
+    extras: Vec<ExtraOffer>,
+}
+
+#[derive(Serialize)]
+struct ExtraOffer {
+    id: &'static str,
+    label: &'static str,
+    what: &'static str,
+    why: &'static str,
+    version: Option<String>,
+    commands: Vec<String>,
+    /// What it writes into the environment, and which of those Agentland
+    /// generates rather than leaves for a person to paste in.
+    env: Vec<(&'static str, bool)>,
+    env_file: &'static str,
+}
+
+#[derive(Deserialize)]
+struct StarterQuery {
+    /// The name to show in the commands. Only ever displayed — the scaffolder
+    /// validates it again before anything runs.
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// What a new project could be made of, and what those things are today.
+///
+/// The versions are asked of npm and cargo at the moment the panel opens, and a
+/// starter whose tools are not installed still comes back — with the tool named,
+/// so a person is told what to install rather than shown a shorter list.
+async fn list_starters(
+    State(_state): State<AppState>,
+    Query(query): Query<StarterQuery>,
+) -> Json<Vec<StarterOffer>> {
+    let name = query
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| crate::stacks::valid_name(value).is_ok())
+        .unwrap_or("my-project")
+        .to_owned();
+
+    // Every probe is a process and a second of waiting, and there are five
+    // starters; asked one after another the panel would open in five seconds.
+    let asked: Vec<_> = crate::stacks::CATALOG.iter().map(|starter| {
+        let name = name.clone();
+        tokio::spawn(async move {
+            let needs = starter.needs();
+            let mut missing = Vec::new();
+            for tool in &needs {
+                if !crate::stacks::installed(tool).await {
+                    missing.push(*tool);
+                }
+            }
+
+            let auditor = starter.audit.map(|audit| audit.tool());
+            let audit_installed = match starter.audit {
+                Some(audit) if missing.is_empty() => crate::stacks::installed(audit.tool()).await,
+                _ => false,
+            };
+
+            let version = if missing.is_empty() {
+                crate::stacks::headline_version(starter).await
+            } else {
+                None
+            };
+
+            let commands = starter
+                .steps
+                .iter()
+                .map(|step| {
+                    format!("{} {}", step.tool, crate::stacks::fill(step.argv, &name).join(" "))
+                })
+                .collect();
+
+            let mut extras = Vec::new();
+            for held in crate::stacks::extras_for(starter.id) {
+                let version = if missing.is_empty() {
+                    crate::stacks::version_of(held.headline).await
+                } else {
+                    None
+                };
+
+                extras.push(ExtraOffer {
+                    id: held.id,
+                    label: held.label,
+                    what: held.what,
+                    why: held.why,
+                    commands: held
+                        .steps
+                        .iter()
+                        .map(|step| {
+                            // `{version}` is resolved from what lands in
+                            // node_modules, which nothing here can read yet —
+                            // so the card shows the version the registry says
+                            // that package is, which is what will land.
+                            let argv = step.argv.join(" ").replace(
+                                "{version}",
+                                version.as_deref().unwrap_or("<the client's version>"),
+                            );
+                            format!("{} {argv}", step.tool)
+                        })
+                        .collect(),
+                    env: held.env.to_vec(),
+                    env_file: held.env_file,
+                    version,
+                });
+            }
+
+            StarterOffer {
+                id: starter.id,
+                label: starter.label,
+                what: starter.what,
+                why: starter.why,
+                installed: missing.is_empty(),
+                needs,
+                missing,
+                version,
+                commands,
+                audit: auditor,
+                audit_installed,
+                extras,
+            }
+        })
+    }).collect();
+
+    let mut offers = Vec::with_capacity(asked.len());
+    for handle in asked {
+        if let Ok(offer) = handle.await {
+            offers.push(offer);
+        }
+    }
+
+    Json(offers)
+}
+
+#[derive(Deserialize)]
+struct Beginning {
+    /// What the crew is being asked for. It becomes the commander's first brief.
+    goal: String,
+    /// A folder on this machine, or the git URL of something to clone. One of
+    /// the two; a folder that is not a repository yet needs `start_git` as well.
+    #[serde(default)]
+    path: Option<String>,
+    /// A project that does not exist yet: what to make it out of, and what to
+    /// call it. `path` is then the folder to make it under.
+    #[serde(default)]
+    stack: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    /// What to put on top of the starter — authentication, and whatever else
+    /// the catalog grows. Only the ones that fit the starter are accepted.
+    #[serde(default)]
+    extras: Vec<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    into: Option<String>,
+    /// Start a git repository in the folder when there is none. Never assumed:
+    /// `git init` writes into somebody's folder, so it waits for a yes.
+    #[serde(default)]
+    start_git: bool,
+    /// Names, where the person had one in mind. Left out, each is chosen.
+    #[serde(default)]
+    workspace: Option<String>,
+    #[serde(default)]
+    worktree: Option<String>,
+    #[serde(default)]
+    engine_id: Option<String>,
+    #[serde(default)]
+    commander: Option<String>,
+}
+
+#[derive(Serialize)]
+struct Begun {
+    workspace: Workspace,
+    repository: Repository,
+    worktree: Worktree,
+    commander: Agent,
+    /// What this call did, in the order it did it. The panel reads it back, so
+    /// a person can see which parts were made now and which were already there.
+    did: Vec<String>,
+    /// What the ecosystem's own auditor found in what was just installed. Only
+    /// on a project this call made — nobody's existing repository gets audited
+    /// because they opened it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vetting: Option<crate::stacks::Vetting>,
+}
+
+/// Open a project, put a crew in it, and hand the commander the goal — one call.
+///
+/// Every piece of this was already possible one panel at a time: a workspace, a
+/// project, a worktree, an agent, a brief. Nothing said in what order, and the
+/// first thing a person met for getting it wrong was an error about a worktree
+/// rather than a crew at work. Here the order is the code's problem.
+///
+/// Each step is skipped when what it would make is already there, so running it
+/// twice is not a mistake: the second run finds the project, finds the worktree,
+/// finds the commander, and hands it the new goal.
+async fn begin(
+    State(state): State<AppState>,
+    Json(body): Json<Beginning>,
+) -> Result<Json<Begun>, ApiError> {
+    let goal = body.goal.trim().to_owned();
+    if goal.is_empty() {
+        return Err(ApiError(anyhow::anyhow!(
+            "a project starts with something to do"
+        )));
+    }
+
+    // Everything that can be refused for free is refused before anything is
+    // made. A contradiction found afterwards still leaves the folder behind.
+    if body.url.as_deref().map(str::trim).is_some_and(|value| !value.is_empty())
+        && body.stack.as_deref().map(str::trim).is_some_and(|value| !value.is_empty())
+    {
+        return Err(ApiError(anyhow::anyhow!(
+            "a project is either made here or cloned from somewhere, not both"
+        )));
+    }
+
+    let mut did: Vec<String> = Vec::new();
+    let known_before: Vec<String> = state
+        .repos
+        .repositories()
+        .into_iter()
+        .map(|repository| repository.id)
+        .collect();
+
+    // A project that does not exist yet is made before anything else, and what
+    // it is made of decides the folder everything below then works in.
+    let mut vetting = None;
+    let mut made_here: Option<String> = None;
+
+    if let Some(id) = body.stack.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        let starter = crate::stacks::starter(id)
+            .ok_or_else(|| ApiError(anyhow::anyhow!("there is no starter called {id}")))?;
+
+        let under = body
+            .path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| ApiError(anyhow::anyhow!("a new project needs a folder to go under")))?;
+
+        let name = body
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| ApiError(anyhow::anyhow!("a new project needs a name")))?;
+
+        // Refused before the scaffolder runs: an extra that does not fit is a
+        // mistake worth catching while nothing has been written yet.
+        let mut wanted = Vec::new();
+        for id in &body.extras {
+            let id = id.trim();
+            if id.is_empty() {
+                continue;
+            }
+
+            let held = crate::stacks::extra(id)
+                .ok_or_else(|| ApiError(anyhow::anyhow!("there is nothing called {id} to add")))?;
+
+            if !held.fits_starter(starter.id) {
+                return Err(ApiError(anyhow::anyhow!(
+                    "{} does not go on {}",
+                    held.label,
+                    starter.label
+                )));
+            }
+
+            wanted.push(held);
+        }
+
+        let made = crate::stacks::scaffold(starter, &PathBuf::from(under), name).await?;
+        did.extend(made.did);
+
+        // Before the audit, so what an extra brought in is audited too.
+        for held in &wanted {
+            did.extend(crate::stacks::add(held, &made.path).await?);
+        }
+
+        // An extra that runs later writes to the same .gitignore. Nothing seen
+        // so far replaces it rather than appending, and the day one does is
+        // exactly the day a generated secret becomes committable — so the last
+        // word on it is checked once everything has had its turn.
+        for held in &wanted {
+            if held.env.iter().any(|(_, generated)| *generated)
+                && crate::stacks::keep_out_of_git(&made.path, held.env_file)?
+            {
+                did.push(format!(
+                    "put {} back into .gitignore, which something else had dropped",
+                    held.env_file
+                ));
+            }
+        }
+
+        if let Some(audit) = starter.audit {
+            let found = crate::stacks::vet(audit, &made.path).await;
+            did.push(found.summary.clone());
+            vetting = Some(found);
+        }
+
+        made_here = Some(made.path.to_string_lossy().into_owned());
+    }
+
+    let url = body.url.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    let repository = match url {
+        Some(url) => {
+            let into = body
+                .into
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| state.config.data_dir.join("clones"));
+            state.repos.clone_repository(url, &into)?
+        }
+        None => {
+            let path = made_here
+                .as_deref()
+                .or_else(|| {
+                    body.path
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                })
+                .ok_or_else(|| {
+                    ApiError(anyhow::anyhow!("a project needs a folder or a git URL"))
+                })?;
+
+            // A folder Agentland just made is one it may start a repository in
+            // without asking: nobody's work is in it yet, and some scaffolders
+            // leave a checkout behind while others leave a plain folder.
+            if body.start_git || made_here.is_some() {
+                state.repos.adopt(&PathBuf::from(path))?
+            } else {
+                state.repos.register(&PathBuf::from(path))?
+            }
+        }
+    };
+
+    did.push(if known_before.iter().any(|held| held == &repository.id) {
+        format!("found {}, already open", repository.name)
+    } else {
+        format!("opened {}", repository.name)
+    });
+
+    let wanted_workspace = body
+        .workspace
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    // A workspace nobody named is the one the person is standing in, and when
+    // they are standing nowhere it is named after what they just opened.
+    let workspace = match wanted_workspace {
+        Some(name) => {
+            let made = state.workspaces.create(CreateWorkspace {
+                name: name.to_owned(),
+                repository_ids: Vec::new(),
+            })?;
+            did.push(format!("made the {} workspace", made.name));
+            made
+        }
+        None => {
+            let (held, made) = standing_in(&state, &repository.name)?;
+            if made {
+                did.push(format!("made the {} workspace", held.name));
+            }
+            held
+        }
+    };
+
+    let workspace = state.workspaces.include(&workspace.id, &repository.id)?;
+    state.workspaces.activate(Some(&workspace.id))?;
+
+    let crew = state.crew.list();
+    let held = crew
+        .iter()
+        .find(|agent| agent.role == "commander" && agent.repository_id == repository.id)
+        .cloned();
+
+    let asked_for = body
+        .worktree
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+
+    let taken: Vec<String> = state
+        .repos
+        .worktrees()
+        .into_iter()
+        .filter(|entry| entry.worktree.repository_id == repository.id)
+        .map(|entry| entry.worktree.name)
+        .collect();
+
+    let name = asked_for.unwrap_or_else(|| crate::start::worktree_name(&goal, &taken));
+
+    let standing = state.repos.worktrees().into_iter().find(|entry| {
+        entry.worktree.repository_id == repository.id && entry.worktree.name == name
+    });
+
+    let worktree = match standing {
+        Some(entry) => entry.worktree,
+        None => {
+            let made = state.repos.create_worktree(&repository.id, &name)?;
+            did.push(format!("cut the {} worktree on {}", made.name, made.branch));
+            made
+        }
+    };
+
+    // The commander sits at its own desk rather than in the branch the work
+    // commits to: a branch is checked out in one place, and a commander parked
+    // there is a commander standing where the implementer has to be.
+    let desk = desk_for(&state, &repository.id)?;
+
+    let commander = match held {
+        Some(commander) => commander,
+        None => {
+            let engine_id = match body
+                .engine_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                Some(chosen) => chosen.to_owned(),
+                None => crate::start::engine_for_a_commander(&crate::crew::engines()).ok_or_else(
+                    || {
+                        ApiError(anyhow::anyhow!(
+                            "no coding agent is installed — put one on PATH and start again"
+                        ))
+                    },
+                )?,
+            };
+
+            let ids: Vec<String> = crew.iter().map(|agent| agent.id.clone()).collect();
+            let hired = take_on(
+                &state,
+                HireRequest {
+                    name: crate::start::commander_name(body.commander.as_deref(), &ids),
+                    role: "commander".to_owned(),
+                    engine_id,
+                    repository_id: repository.id.clone(),
+                    worktree: desk.name.clone(),
+                    model: None,
+                    title: None,
+                    colour: None,
+                    permissions: None,
+                },
+            )?;
+
+            did.push(format!("hired {} to command, on {}", hired.name, hired.engine_id));
+            hired
+        }
+    };
+
+    let sitting = state
+        .repos
+        .worktrees()
+        .into_iter()
+        .find(|entry| {
+            entry.worktree.repository_id == commander.repository_id
+                && entry.worktree.name == commander.worktree
+        })
+        .map(|entry| entry.worktree)
+        .unwrap_or_else(|| desk.clone());
+
+    let brief = compose_brief(&state, &commander, &goal).await;
+    match hand_the_work_over(&state, &commander, &sitting.path, &brief).await? {
+        HandOver::Busy => {
+            return Err(ApiError(anyhow::anyhow!(
+                "{} is in the middle of a turn — wait for it, then start again",
+                commander.name
+            )))
+        }
+        HandOver::Started => did.push(format!("started {} on the goal", commander.name)),
+        HandOver::Typed => did.push(format!("gave {} the goal", commander.name)),
+    }
+
+    // Read back rather than reused: the pane it was just given is what the
+    // panel opens, and the copy from before it started does not carry one.
+    let commander = state
+        .crew
+        .list()
+        .into_iter()
+        .find(|agent| agent.id == commander.id)
+        .unwrap_or(commander);
+
+    state.notices.push(
+        crate::notices::NewNotice {
+            kind: crate::notices::Kind::Word,
+            text: format!("{} is on: {goal}", commander.name),
+            repository_id: Some(repository.id.clone()),
+            agent_id: Some(commander.id.clone()),
+            opens: Some("commander".to_owned()),
+            ..Default::default()
+        },
+        now_secs(),
+    );
+
+    Ok(Json(Begun {
+        workspace,
+        repository,
+        worktree,
+        commander,
+        did,
+        vetting,
+    }))
 }
 
 async fn activate_workspace(
@@ -1730,7 +3961,26 @@ async fn mark_step(
         state.plans.attach_task(&id, &step, &task_id)?;
     }
 
-    Ok(Json(state.plans.mark(&id, &step, body.state, body.note)?))
+    let (plan, just_finished) = state
+        .plans
+        .mark_and_notice(&id, &step, body.state, body.note)?;
+
+    if just_finished {
+        state.leader_words.lock().push(plan_finished_word(&plan));
+        state.notices.push(
+            crate::notices::NewNotice {
+                kind: crate::notices::Kind::Finished,
+                text: format!("Plan finished: {}", plan.goal.trim()),
+                repository_id: Some(plan.repository_id.clone()),
+                agent_id: Some(plan.created_by.clone()),
+                opens: Some("commander".to_owned()),
+                ..Default::default()
+            },
+            now_secs(),
+        );
+    }
+
+    Ok(Json(plan))
 }
 
 async fn abandon_plan(
@@ -1946,5 +4196,163 @@ impl IntoResponse for ApiError {
             }),
         )
             .into_response()
+    }
+}
+
+#[cfg(test)]
+mod presence_tests {
+    use super::presence_name;
+
+    #[test]
+    fn an_agent_mid_turn_is_working() {
+        assert_eq!(presence_name(false, true, true, false).0, "working");
+    }
+
+    #[test]
+    fn an_agent_at_an_empty_prompt_is_waiting_rather_than_working() {
+        // The pane keeps printing its status line, so the clock would say
+        // "working" forever; the pane itself says otherwise.
+        assert_eq!(presence_name(false, true, false, false).0, "waiting");
+    }
+
+    #[test]
+    fn an_approval_outranks_whatever_the_pane_shows() {
+        assert_eq!(presence_name(true, true, true, false).0, "attention");
+        assert_eq!(presence_name(true, false, false, true).0, "attention");
+    }
+
+    #[test]
+    fn a_closed_session_is_done_if_it_ran_and_idle_if_it_never_did() {
+        assert_eq!(presence_name(false, false, false, true).0, "done");
+        assert_eq!(presence_name(false, false, false, false).0, "idle");
+    }
+}
+
+
+#[cfg(test)]
+mod plan_word_tests {
+    use super::plan_finished_word;
+    use crate::plans::{Plan, PlanState, Step, StepState};
+
+    fn plan() -> Plan {
+        Plan {
+            id: "p1".into(),
+            goal: "svc-demo answers /health".into(),
+            repository_id: "demo".into(),
+            created_by: "x".into(),
+            state: PlanState::Done,
+            steps: vec![
+                Step {
+                    id: "p1s1".into(),
+                    title: "Serve /health".into(),
+                    brief: String::new(),
+                    needs: vec![],
+                    task_id: None,
+                    note: Some("the port comes from PORT".into()),
+                    state: StepState::Done,
+                },
+                Step {
+                    id: "p1s2".into(),
+                    title: "Prove it".into(),
+                    brief: String::new(),
+                    needs: vec!["p1s1".into()],
+                    task_id: None,
+                    note: None,
+                    state: StepState::Done,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn it_asks_for_the_note_and_hands_over_the_evidence() {
+        let word = plan_finished_word(&plan());
+
+        assert!(word.contains("note_write"), "it asks for a note: {word}");
+        assert!(word.contains("svc-demo answers /health"), "it names the plan");
+        assert!(word.contains("Serve /health"), "it lists the steps");
+        assert!(word.contains("the port comes from PORT"), "a step's note is evidence");
+        assert!(word.contains("2 steps done"), "it says how much was done");
+    }
+
+    #[test]
+    fn one_step_is_not_called_steps() {
+        let mut single = plan();
+        single.steps.truncate(1);
+        assert!(plan_finished_word(&single).contains("1 step done"));
+    }
+}
+
+#[cfg(test)]
+mod hand_over_tests {
+    use crate::supervisor::{asking_the_human, turn_running};
+
+    /// The two readings `hand_the_work_over` leans on, checked against the panes
+    /// they were written from. A pane that is neither running nor asking is a
+    /// pane that can be handed the next step where it stands.
+    #[test]
+    fn an_idle_pane_is_ready_for_the_next_step() {
+        let resting = "✻ Baked for 22s · done 10:04 PM\n❯\n⏵⏵ bypass permissions on (shift+tab to cycle)";
+
+        assert!(!turn_running(resting));
+        assert!(!asking_the_human(resting));
+    }
+
+    #[test]
+    fn a_pane_mid_turn_is_left_alone() {
+        let working = "● Bash(npm test)\n  ⎿  Running…\n✢ Sprouting… (28s · ↓ 2.1k tokens)";
+
+        assert!(turn_running(working));
+    }
+
+    #[test]
+    fn a_pane_holding_a_question_is_left_alone_too() {
+        let asking = "This command requires approval\nDo you want to proceed?\n❯ 1. Yes\nEsc to cancel · Tab to amend";
+
+        assert!(asking_the_human(asking));
+    }
+}
+
+#[cfg(test)]
+mod news_tests {
+    use crate::supervisor::{Watch, WatchState};
+
+    fn settled(step_id: &str, task_id: &str) -> Watch {
+        Watch {
+            id: "w1".to_owned(),
+            plan_id: String::new(),
+            step_id: step_id.to_owned(),
+            task_id: task_id.to_owned(),
+            agent_id: "ada".to_owned(),
+            session_id: "pane-1".to_owned(),
+            repository_id: "svc".to_owned(),
+            worktree: "ada-tree".to_owned(),
+            fingerprint: "close idle connections".to_owned(),
+            delivered: true,
+            resends: 0,
+            state: WatchState::Settled,
+            started_at: 0,
+            settled_at: 100,
+            reason: Some("ada attached evidence".to_owned()),
+            told_leader: false,
+            wake_attempts: 0,
+            last_wake: 0,
+            reaped: false,
+        }
+    }
+
+    #[test]
+    fn a_card_with_no_plan_behind_it_names_itself() {
+        let text = super::news_text(&[settled("", "t358")]);
+
+        assert!(text.contains("t358"), "the card names itself: {text}");
+        assert!(!text.contains("()"), "no empty brackets where a step would be: {text}");
+    }
+
+    #[test]
+    fn a_plan_step_still_names_both() {
+        let text = super::news_text(&[settled("p12s2", "t359")]);
+
+        assert!(text.contains("p12s2 (t359)"), "{text}");
     }
 }

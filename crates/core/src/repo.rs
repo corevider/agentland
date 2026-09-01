@@ -165,6 +165,12 @@ impl RepoRegistry {
         let state = Self::load(&data_dir);
         let ports = SharedPorts::new(state.ports.clone());
 
+        for worktree in state.worktrees.values() {
+            if worktree.path.exists() {
+                write_mcp_config(&worktree.path, &data_dir);
+            }
+        }
+
         Self {
             state: Mutex::new(state),
             data_dir,
@@ -249,6 +255,44 @@ impl RepoRegistry {
         Ok(repository)
     }
 
+    /// Take a plain folder as a project, starting a git repository in it.
+    ///
+    /// Not everything a person wants the crew to work on is a checkout yet — a
+    /// folder of notes, a sketch of an app, something they made this morning.
+    /// Agentland gives each agent its own worktree, and a worktree needs a repo
+    /// with at least one commit behind it, so adopting a folder means `git init`
+    /// and a first commit. That writes to somebody's folder, so it is never
+    /// automatic: the panel asks first, and this only runs on a yes.
+    pub fn adopt(&self, path: &Path) -> Result<Repository> {
+        let canonical = path
+            .canonicalize()
+            .with_context(|| format!("path does not exist: {}", path.display()))?;
+
+        if !canonical.is_dir() {
+            bail!("{} is not a folder", canonical.display());
+        }
+
+        if git(&["rev-parse", "--show-toplevel"], Some(&canonical)).is_ok() {
+            return self.register(&canonical);
+        }
+
+        git(&["init", "-b", "main"], Some(&canonical))?;
+        git(&["add", "-A"], Some(&canonical))?;
+
+        // An empty folder has nothing to commit, and a repository with no HEAD
+        // cannot have a worktree cut from it — so it gets an empty commit rather
+        // than a repository the crew cannot work in.
+        let staged = git(&["diff", "--cached", "--name-only"], Some(&canonical)).unwrap_or_default();
+        let message = "chore: start tracking this folder with Agentland";
+        if staged.trim().is_empty() {
+            git(&["commit", "--allow-empty", "-m", message], Some(&canonical))?;
+        } else {
+            git(&["commit", "-m", message], Some(&canonical))?;
+        }
+
+        self.register(&canonical)
+    }
+
     pub fn clone_repository(&self, url: &str, into: &Path) -> Result<Repository> {
         let name = url
             .rsplit('/')
@@ -265,6 +309,37 @@ impl RepoRegistry {
         fs::create_dir_all(into)?;
         git(&["clone", url, target.to_string_lossy().as_ref()], None)?;
         self.register(&target)
+    }
+
+    /// Stop tracking a project. The folder on disk is not touched.
+    ///
+    /// Opening the wrong folder is a normal mistake and has to be undoable, but
+    /// a project with worktrees cut from it is not forgotten by accident: those
+    /// are branches someone is working on, so they have to go first.
+    pub fn forget(&self, id: &str) -> Result<()> {
+        let mut state = self.state.lock();
+        if !state.repositories.contains_key(id) {
+            bail!("unknown repository: {id}");
+        }
+
+        let held: Vec<String> = state
+            .worktrees
+            .values()
+            .filter(|worktree| worktree.repository_id == id)
+            .map(|worktree| worktree.name.clone())
+            .collect();
+
+        if !held.is_empty() {
+            bail!(
+                "{id} still has {} worktree(s) — remove {} first",
+                held.len(),
+                held.join(", ")
+            );
+        }
+
+        state.repositories.remove(id);
+        self.persist(&state);
+        Ok(())
     }
 
     pub fn repositories(&self) -> Vec<Repository> {
@@ -341,7 +416,7 @@ impl RepoRegistry {
         git(&args, Some(&repository.primary_path))?;
 
         let port = self.ports.allocate(&key)?;
-        write_mcp_config(&path);
+        write_mcp_config(&path, &self.data_dir);
         let worktree = Worktree {
             name: name.to_owned(),
             repository_id: repository_id.to_owned(),
@@ -464,20 +539,73 @@ fn diff_untracked(worktree: &Path, file: &str) -> Option<String> {
     }
 }
 
-fn mcp_binary() -> String {
+const TOOL_NAME: &str = "agentland-mcp";
+
+fn built_tool() -> Option<PathBuf> {
     std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("agentland-mcp")))
+        .and_then(|exe| exe.parent().map(|dir| dir.join(TOOL_NAME)))
         .filter(|candidate| candidate.exists())
-        .map(|candidate| candidate.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "agentland-mcp".to_owned())
 }
 
-fn write_mcp_config(worktree: &Path) {
+fn is_current(built: &Path, kept: &Path) -> bool {
+    let (Ok(built), Ok(kept)) = (fs::metadata(built), fs::metadata(kept)) else {
+        return false;
+    };
+
+    built.len() == kept.len()
+        && match (built.modified(), kept.modified()) {
+            (Ok(built), Ok(kept)) => kept >= built,
+            _ => false,
+        }
+}
+
+/// Keep the crew's tool program somewhere a rebuild cannot reach.
+///
+/// A working agent holds an open pipe to this program. Building Agentland
+/// overwrites the copy under `target/`, and every agent mid-turn loses its
+/// tools and stops to ask what happened. Copying it beside the data and
+/// putting it in place by rename leaves running agents on the file they
+/// already opened, while the next agent to start picks up the new one.
+fn kept_tool(built: &Path, data_dir: &Path) -> Option<PathBuf> {
+    let shelf = data_dir.join("bin");
+    fs::create_dir_all(&shelf).ok()?;
+    let kept = shelf.join(TOOL_NAME);
+
+    if is_current(built, &kept) {
+        return Some(kept);
+    }
+
+    let arriving = shelf.join(format!("{TOOL_NAME}.arriving"));
+    fs::copy(built, &arriving).ok()?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&arriving, fs::Permissions::from_mode(0o755));
+    }
+
+    match fs::rename(&arriving, &kept) {
+        Ok(()) => Some(kept),
+        Err(_) => {
+            let _ = fs::remove_file(&arriving);
+            None
+        }
+    }
+}
+
+fn mcp_binary(data_dir: &Path) -> String {
+    built_tool()
+        .and_then(|built| kept_tool(&built, data_dir).or(Some(built)))
+        .map(|candidate| candidate.to_string_lossy().into_owned())
+        .unwrap_or_else(|| TOOL_NAME.to_owned())
+}
+
+fn write_mcp_config(worktree: &Path, data_dir: &Path) {
     let config = serde_json::json!({
         "mcpServers": {
             "agentland": {
-                "command": mcp_binary(),
+                "command": mcp_binary(data_dir),
                 "args": [],
                 "env": {
                     "AGENTLAND_PORT": "${AGENTLAND_PORT}",
@@ -492,6 +620,38 @@ fn write_mcp_config(worktree: &Path) {
     }
 
     exclude_from_git(worktree, ".mcp.json");
+    trust_our_own_tools(worktree);
+}
+
+/// Say, in the worktree, that the tools Agentland put there are wanted.
+///
+/// The engine asks a person before loading a project's MCP servers, and it ties
+/// that answer to what the file says. Agentland writes the file itself, so the
+/// question is one nobody can usefully answer — and when the tool's path moved,
+/// every earlier answer was silently invalidated and whole sessions came up with
+/// no tools while looking perfectly healthy. The crew's own config is trusted by
+/// the app that wrote it.
+fn trust_our_own_tools(worktree: &Path) {
+    let settings = worktree.join(".claude");
+    if fs::create_dir_all(&settings).is_err() {
+        return;
+    }
+
+    let file = settings.join("settings.local.json");
+    let mut held: serde_json::Value = fs::read_to_string(&file)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    if let Some(map) = held.as_object_mut() {
+        map.insert("enableAllProjectMcpServers".to_owned(), serde_json::Value::Bool(true));
+    }
+
+    if let Ok(rendered) = serde_json::to_string_pretty(&held) {
+        let _ = fs::write(&file, rendered);
+    }
+
+    exclude_from_git(worktree, ".claude/settings.local.json");
 }
 
 fn exclude_from_git(worktree: &Path, pattern: &str) {
@@ -655,6 +815,193 @@ impl RepoRegistry {
         })
     }
 
+    /// What the forge says about the pull request on this worktree's branch.
+    ///
+    /// `Ok(None)` when there is no pull request, which is different from an
+    /// error: a branch nobody has opened one for is an ordinary state, and a
+    /// card should not be told its checks failed because `gh` is not installed.
+    pub fn pull_request_state(
+        &self,
+        repository_id: &str,
+        worktree_name: &str,
+    ) -> Result<Option<crate::pulls::PullState>> {
+        let (_, worktree) = self.locate(repository_id, worktree_name)?;
+
+        let output = Command::new("gh")
+            .args([
+                "pr",
+                "view",
+                &worktree.branch,
+                "--json",
+                "number,url,state,mergeable,mergeStateStatus,baseRefName,reviewDecision,statusCheckRollup",
+            ])
+            .current_dir(&worktree.path)
+            .output()
+            .context("gh could not be run")?;
+
+        if !output.status.success() {
+            let said = String::from_utf8_lossy(&output.stderr);
+            if said.contains("no pull requests found") || said.contains("no open pull requests") {
+                return Ok(None);
+            }
+            bail!("gh could not read the pull request: {}", said.trim());
+        }
+
+        Ok(Some(serde_json::from_slice(&output.stdout)?))
+    }
+
+    /// Which files would conflict if this branch were merged into its base.
+    ///
+    /// Asked of `merge-tree`, which computes the merge and writes nothing: the
+    /// worktree the agent is standing in is not a place to run a trial merge.
+    /// The base is fetched first, because the conflict is with what the base is
+    /// now and not with the copy this machine last saw.
+    pub fn conflicting_files(
+        &self,
+        repository_id: &str,
+        worktree_name: &str,
+        base: &str,
+    ) -> Result<Vec<String>> {
+        let (_, worktree) = self.locate(repository_id, worktree_name)?;
+        let base = base.to_owned();
+
+        let against = if git(&["fetch", "origin", &base], Some(&worktree.path)).is_ok() {
+            format!("origin/{base}")
+        } else {
+            base
+        };
+
+        let output = Command::new("git")
+            .args(["merge-tree", "--write-tree", "--name-only", &against, &worktree.branch])
+            .current_dir(&worktree.path)
+            .output()
+            .context("git could not be run")?;
+
+        // A clean merge exits zero and names nothing; a conflict exits one and
+        // names the files. Anything else is git failing, not a conflict.
+        if output.status.code() == Some(0) {
+            return Ok(Vec::new());
+        }
+
+        if output.status.code() != Some(1) {
+            bail!(
+                "git could not work the merge out: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+
+        Ok(crate::pulls::merge_tree_conflicts(
+            &String::from_utf8_lossy(&output.stdout),
+        ))
+    }
+
+    /// What the failing checks on this branch actually said.
+    ///
+    /// `--log-failed` is the whole point: a run's full log is tens of thousands
+    /// of lines of setup, and only the steps that failed are the reason.
+    pub fn failing_check_log(&self, repository_id: &str, worktree_name: &str) -> Result<Option<String>> {
+        let (_, worktree) = self.locate(repository_id, worktree_name)?;
+
+        let listed = Command::new("gh")
+            .args([
+                "run",
+                "list",
+                "--branch",
+                &worktree.branch,
+                "--limit",
+                "1",
+                "--json",
+                "databaseId,conclusion",
+            ])
+            .current_dir(&worktree.path)
+            .output()
+            .context("gh could not be run")?;
+
+        if !listed.status.success() {
+            return Ok(None);
+        }
+
+        #[derive(serde::Deserialize)]
+        struct Run {
+            #[serde(rename = "databaseId")]
+            id: u64,
+            #[serde(default)]
+            conclusion: String,
+        }
+
+        let runs: Vec<Run> = serde_json::from_slice(&listed.stdout).unwrap_or_default();
+        let Some(run) = runs.into_iter().find(|run| run.conclusion == "failure") else {
+            return Ok(None);
+        };
+
+        let log = Command::new("gh")
+            .args(["run", "view", &run.id.to_string(), "--log-failed"])
+            .current_dir(&worktree.path)
+            .output()
+            .context("gh could not be run")?;
+
+        if !log.status.success() {
+            return Ok(None);
+        }
+
+        let text = String::from_utf8_lossy(&log.stdout).into_owned();
+        Ok(if text.trim().is_empty() { None } else { Some(text) })
+    }
+
+    /// Leave a review on this branch's pull request.
+    ///
+    /// Always a comment, never an approval: every agent here pushes as the same
+    /// GitHub account, and an account cannot approve its own pull request. The
+    /// verdict is Agentland's to keep; this is so the people reading the pull
+    /// request see it too.
+    pub fn comment_on_pull_request(
+        &self,
+        repository_id: &str,
+        worktree_name: &str,
+        body: &str,
+    ) -> Result<()> {
+        let (_, worktree) = self.locate(repository_id, worktree_name)?;
+
+        let output = Command::new("gh")
+            .args(["pr", "review", &worktree.branch, "--comment", "--body", body])
+            .current_dir(&worktree.path)
+            .output()
+            .context("gh could not be run")?;
+
+        if !output.status.success() {
+            bail!(
+                "the review could not be posted: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Merge the pull request on this worktree's branch.
+    ///
+    /// Squashed, because a card is one piece of work and its branch is the
+    /// workings. The branch is left alone: deleting it is destroying something
+    /// and belongs to whoever decides to.
+    pub fn merge_pull_request(&self, repository_id: &str, worktree_name: &str) -> Result<String> {
+        let (_, worktree) = self.locate(repository_id, worktree_name)?;
+
+        let output = Command::new("gh")
+            .args(["pr", "merge", &worktree.branch, "--squash"])
+            .current_dir(&worktree.path)
+            .output()
+            .context("gh could not be run")?;
+
+        if !output.status.success() {
+            bail!(
+                "the merge was refused: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    }
+
     pub fn open_pull_request(
         &self,
         repository_id: &str,
@@ -773,4 +1120,161 @@ fn git_command(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<Strin
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("agentland-repo-{name}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn a_folder(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("agentland-adopt-{name}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn a_registry(name: &str) -> RepoRegistry {
+        RepoRegistry::new(std::env::temp_dir().join(format!("agentland-adopt-data-{name}")))
+    }
+
+    #[test]
+    fn a_plain_folder_becomes_a_project_with_something_to_branch_from() {
+        let dir = a_folder("with-files");
+        fs::write(dir.join("notes.md"), "a sketch\n").unwrap();
+
+        let repository = a_registry("with-files").adopt(&dir).unwrap();
+
+        assert_eq!(repository.default_branch, "main");
+        assert!(dir.join(".git").exists(), "it is a repository now");
+        let log = git(&["log", "--oneline"], Some(&dir)).unwrap();
+        assert!(log.contains("start tracking this folder"), "and it has a commit: {log}");
+    }
+
+    #[test]
+    fn an_empty_folder_still_gets_a_commit_to_branch_from() {
+        let dir = a_folder("empty");
+
+        a_registry("empty").adopt(&dir).unwrap();
+
+        let log = git(&["log", "--oneline"], Some(&dir)).unwrap();
+        assert_eq!(log.lines().count(), 1, "one empty commit: {log}");
+    }
+
+    #[test]
+    fn a_folder_that_is_already_a_repository_is_left_exactly_as_it_is() {
+        let dir = a_folder("already");
+        git(&["init", "-b", "trunk"], Some(&dir)).unwrap();
+        fs::write(dir.join("thing.txt"), "x\n").unwrap();
+        git(&["add", "-A"], Some(&dir)).unwrap();
+        git(&["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-m", "first"], Some(&dir)).unwrap();
+
+        let repository = a_registry("already").adopt(&dir).unwrap();
+
+        assert_eq!(repository.default_branch, "trunk", "nothing was re-initialised");
+        let log = git(&["log", "--oneline"], Some(&dir)).unwrap();
+        assert_eq!(log.lines().count(), 1, "no extra commit was made");
+    }
+
+    #[test]
+    fn a_project_can_be_forgotten_without_touching_the_folder() {
+        let dir = a_folder("forget");
+        fs::write(dir.join("notes.md"), "x\n").unwrap();
+        let registry = a_registry("forget");
+        let repository = registry.adopt(&dir).unwrap();
+
+        registry.forget(&repository.id).unwrap();
+
+        assert!(dir.exists(), "the folder is still there");
+        assert!(registry.repositories().is_empty());
+        assert!(registry.forget(&repository.id).is_err(), "and it is gone from the registry");
+    }
+
+    #[test]
+    fn a_worktree_is_told_the_tools_agentland_wrote_are_wanted() {
+        let dir = a_folder("trust");
+
+        write_mcp_config(&dir, &dir.join("data"));
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(dir.join(".claude/settings.local.json")).unwrap())
+                .unwrap();
+
+        assert_eq!(settings["enableAllProjectMcpServers"], serde_json::Value::Bool(true));
+        assert!(dir.join(".mcp.json").exists());
+    }
+
+    #[test]
+    fn whatever_else_is_in_the_settings_is_left_alone() {
+        let dir = a_folder("trust-existing");
+        fs::create_dir_all(dir.join(".claude")).unwrap();
+        fs::write(
+            dir.join(".claude/settings.local.json"),
+            r#"{"permissions":{"allow":["Bash(npm test)"]}}"#,
+        )
+        .unwrap();
+
+        write_mcp_config(&dir, &dir.join("data"));
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(dir.join(".claude/settings.local.json")).unwrap())
+                .unwrap();
+
+        assert_eq!(settings["enableAllProjectMcpServers"], serde_json::Value::Bool(true));
+        assert!(settings["permissions"]["allow"].is_array(), "somebody else's setting survived");
+    }
+
+    #[test]
+    fn the_tool_is_copied_out_of_the_build_directory() {
+        let dir = scratch("kept");
+        let built = dir.join("built");
+        fs::write(&built, b"first").unwrap();
+
+        let kept = kept_tool(&built, &dir).expect("a copy");
+
+        assert_eq!(kept, dir.join("bin").join(TOOL_NAME));
+        assert_eq!(fs::read(&kept).unwrap(), b"first");
+        assert_ne!(kept, built);
+    }
+
+    #[test]
+    fn a_rebuilt_tool_replaces_the_copy_without_touching_the_old_file() {
+        let dir = scratch("replaced");
+        let built = dir.join("built");
+        fs::write(&built, b"first").unwrap();
+        let kept = kept_tool(&built, &dir).expect("a copy");
+        let opened = fs::File::open(&kept).unwrap();
+
+        fs::write(&built, b"second build").unwrap();
+        let again = kept_tool(&built, &dir).expect("a fresh copy");
+
+        assert_eq!(again, kept);
+        assert_eq!(fs::read(&kept).unwrap(), b"second build");
+
+        let mut held = String::new();
+        use std::io::Read;
+        let mut opened = opened;
+        opened.read_to_string(&mut held).unwrap();
+        assert_eq!(held, "first", "a running agent keeps the file it opened");
+    }
+
+    #[test]
+    fn an_unchanged_tool_is_left_alone() {
+        let dir = scratch("unchanged");
+        let built = dir.join("built");
+        fs::write(&built, b"same").unwrap();
+        let kept = kept_tool(&built, &dir).expect("a copy");
+        let stamped = fs::metadata(&kept).unwrap().modified().unwrap();
+
+        let again = kept_tool(&built, &dir).expect("the same copy");
+
+        assert_eq!(again, kept);
+        assert_eq!(fs::metadata(&kept).unwrap().modified().unwrap(), stamped);
+    }
 }

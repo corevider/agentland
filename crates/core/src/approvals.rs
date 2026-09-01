@@ -24,6 +24,24 @@ pub struct Approval {
     pub verdict: Verdict,
     #[serde(default)]
     pub answered_note: Option<String>,
+    /// What saying yes actually does, when the answer is not just a word. Only
+    /// the core sets this — an agent asking for approval cannot describe an act
+    /// the core will then carry out on its behalf.
+    #[serde(default)]
+    pub grants: Option<Grant>,
+    /// When it was asked, and when it was answered.
+    #[serde(default)]
+    pub at: u64,
+    #[serde(default)]
+    pub answered_at: u64,
+}
+
+/// A permission raise waiting on a human.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct Grant {
+    pub agent_id: String,
+    pub from: String,
+    pub to: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -99,10 +117,32 @@ impl Approvals {
             requested_by: request.requested_by,
             verdict: Verdict::Pending,
             answered_note: None,
+            grants: None,
+            at: now_secs(),
+            answered_at: 0,
         };
 
         state.approvals.insert(id, approval.clone());
         self.persist(&state);
+        Ok(approval)
+    }
+
+    /// An approval the core raised itself, carrying what saying yes will do.
+    pub fn request_grant(&self, summary: String, detail: String, by: &str, grant: Grant) -> Result<Approval> {
+        let approval = self.request(RequestApproval {
+            summary,
+            detail,
+            requested_by: by.to_owned(),
+        })?;
+
+        let mut state = self.state.lock();
+        if let Some(stored) = state.approvals.get_mut(&approval.id) {
+            stored.grants = Some(grant);
+            let carried = stored.clone();
+            self.persist(&state);
+            return Ok(carried);
+        }
+
         Ok(approval)
     }
 
@@ -123,6 +163,7 @@ impl Approvals {
             Verdict::Rejected
         };
         approval.answered_note = answer.note;
+        approval.answered_at = now_secs();
 
         let updated = approval.clone();
         self.persist(&state);
@@ -210,4 +251,11 @@ mod tests {
             })
             .is_err());
     }
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_secs())
+        .unwrap_or_default()
 }

@@ -89,6 +89,14 @@ impl Workspaces {
         Ok(workspace)
     }
 
+    /// Stand in a workspace.
+    ///
+    /// There is no standing nowhere while there is somewhere to stand. Every
+    /// question the rest of the app asks — which project a folder just opened
+    /// belongs to, which workspace's folder a note goes in — is answered by
+    /// where you are, and "nowhere" is not an answer to any of them: a project
+    /// opened that way joined no workspace, and what its crew learned was filed
+    /// under a vault folder literally called "workspace".
     pub fn activate(&self, id: Option<&str>) -> Result<Option<Workspace>> {
         let mut state = self.state.lock();
 
@@ -98,6 +106,9 @@ impl Workspaces {
                     bail!("there is no workspace called {id}");
                 }
                 state.active = Some(id.to_owned());
+            }
+            None if !state.workspaces.is_empty() => {
+                bail!("open a workspace and work from there — there is nowhere else to stand")
             }
             None => state.active = None,
         }
@@ -119,14 +130,38 @@ impl Workspaces {
         Ok(updated)
     }
 
+    /// Put a project into a workspace, unless it is already there.
+    ///
+    /// A folder opened while a workspace is active belongs to that workspace —
+    /// otherwise it lands nowhere and the rail keeps saying the workspace holds
+    /// nothing while the project sits in the list below it.
+    pub fn include(&self, id: &str, repository_id: &str) -> Result<Workspace> {
+        let mut state = self.state.lock();
+        let Some(workspace) = state.workspaces.get_mut(id) else {
+            bail!("there is no workspace called {id}");
+        };
+
+        if !workspace.repository_ids.iter().any(|held| held == repository_id) {
+            workspace.repository_ids.push(repository_id.to_owned());
+        }
+
+        let updated = workspace.clone();
+        self.persist(&state);
+
+        Ok(updated)
+    }
+
     pub fn remove(&self, id: &str) -> Result<()> {
         let mut state = self.state.lock();
         if state.workspaces.remove(id).is_none() {
             bail!("there is no workspace called {id}");
         }
 
+        // Standing somewhere is the whole idea: deleting the workspace you were
+        // in moves you to another one rather than to nowhere. Nowhere is only
+        // where you are when there is nothing left to stand in.
         if state.active.as_deref() == Some(id) {
-            state.active = None;
+            state.active = state.workspaces.keys().next().cloned();
         }
 
         self.persist(&state);
@@ -200,8 +235,8 @@ mod tests {
     }
 
     #[test]
-    fn everything_can_be_shown_by_activating_nothing() {
-        let store = workspaces("all");
+    fn there_is_no_standing_nowhere_while_there_is_somewhere_to_stand() {
+        let store = workspaces("nowhere");
         store
             .create(CreateWorkspace {
                 name: "Product".into(),
@@ -209,24 +244,39 @@ mod tests {
             })
             .expect("create");
 
-        assert!(store.active().is_some());
-        assert_eq!(store.activate(None).expect("clear"), None);
-        assert_eq!(store.active(), None);
+        let refused = store.activate(None).expect_err("nowhere is not a place");
+        assert!(refused.to_string().contains("open a workspace"), "{refused}");
+        assert!(store.active().is_some(), "and it left you where you were");
     }
 
     #[test]
-    fn removing_a_workspace_clears_it_from_focus() {
+    fn removing_the_workspace_you_are_in_moves_you_to_another_one() {
         let store = workspaces("remove");
-        let created = store
+        let first = store
             .create(CreateWorkspace {
                 name: "Product".into(),
                 repository_ids: vec![],
             })
             .expect("create");
+        let second = store
+            .create(CreateWorkspace {
+                name: "Infra".into(),
+                repository_ids: vec![],
+            })
+            .expect("create a second");
 
-        store.remove(&created.id).expect("remove");
-        assert_eq!(store.active(), None);
-        assert!(store.remove(&created.id).is_err(), "removing it twice is an error");
+        assert_eq!(store.active().map(|entry| entry.id), Some(first.id.clone()));
+
+        store.remove(&first.id).expect("remove");
+        assert_eq!(
+            store.active().map(|entry| entry.id),
+            Some(second.id.clone()),
+            "you are moved, not stranded"
+        );
+
+        store.remove(&second.id).expect("remove the last one");
+        assert_eq!(store.active(), None, "nowhere, only when there is nothing left");
+        assert!(store.remove(&second.id).is_err(), "removing it twice is an error");
     }
 
     #[test]
@@ -260,5 +310,26 @@ mod tests {
             .expect("replace");
         assert_eq!(updated.repository_ids, vec!["b".to_owned(), "c".to_owned()]);
         assert!(store.set_repositories("nope", vec![]).is_err());
+    }
+
+    #[test]
+    fn a_project_opened_here_joins_this_workspace_once() {
+        let held = workspaces("include");
+        let made = held
+            .create(CreateWorkspace {
+                name: "test".to_owned(),
+                repository_ids: Vec::new(),
+            })
+            .unwrap();
+
+        held.include(&made.id, "svc-demo").unwrap();
+        let twice = held.include(&made.id, "svc-demo").unwrap();
+
+        assert_eq!(twice.repository_ids, vec!["svc-demo".to_owned()]);
+    }
+
+    #[test]
+    fn including_into_a_workspace_that_is_gone_says_so() {
+        assert!(workspaces("include-missing").include("nope", "svc-demo").is_err());
     }
 }

@@ -181,6 +181,21 @@ impl Plans {
         })
     }
 
+    /// Mark a step, and say whether that was the one that finished the plan —
+    /// the moment worth telling the commander about.
+    pub fn mark_and_notice(
+        &self,
+        plan_id: &str,
+        step_id: &str,
+        state: StepState,
+        note: Option<String>,
+    ) -> Result<(Plan, bool)> {
+        let before = self.get(plan_id).map(|plan| plan.state);
+        let plan = self.mark(plan_id, step_id, state, note)?;
+        let just_finished = plan.state == PlanState::Done && before != Some(PlanState::Done);
+        Ok((plan, just_finished))
+    }
+
     pub fn mark(&self, plan_id: &str, step_id: &str, state: StepState, note: Option<String>) -> Result<Plan> {
         let plan = self.change(plan_id, step_id, |step| {
             step.state = state;

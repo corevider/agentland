@@ -37,6 +37,9 @@ pub struct DispatchEvent {
     pub agent_id: String,
     pub task_id: String,
     pub reason: String,
+    /// When the decision was taken.
+    #[serde(default)]
+    pub at: u64,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -63,6 +66,7 @@ impl DispatchState {
             agent_id: agent_id.to_owned(),
             task_id: task_id.to_owned(),
             reason: reason.to_owned(),
+            at: now_secs(),
         });
 
         while self.events.len() > EVENT_HISTORY {
@@ -120,6 +124,31 @@ pub fn decide(state: &DispatchState, task: &Task, crew: &[Agent]) -> Decision {
             ),
         };
     }
+
+    // A card that names a worktree can only be done there. A branch lives in
+    // exactly one worktree, so handing such a step to an agent somewhere else
+    // means its commit lands on the wrong branch — which is what happened to
+    // the README step of the /version plan, caught only by reading the reply.
+    let in_repository: Vec<&Agent> = match task.worktree.as_deref() {
+        None => in_repository,
+        Some(wanted) => {
+            let here: Vec<&Agent> = in_repository
+                .into_iter()
+                .filter(|agent| agent.worktree == wanted)
+                .collect();
+
+            if here.is_empty() {
+                return Decision::Refuse {
+                    reason: format!(
+                        "{} belongs in the {wanted} worktree and nobody is working there — hire an agent in it",
+                        task.id
+                    ),
+                };
+            }
+
+            here
+        }
+    };
 
     let working_here = in_repository
         .iter()
@@ -255,6 +284,10 @@ mod tests {
             worktree: format!("{id}-tree"),
             session_id: None,
             state,
+            model: None,
+            title: None,
+            colour: None,
+            permissions: None,
         }
     }
 
@@ -269,6 +302,40 @@ mod tests {
             worktree: None,
             branch: None,
             evidence: Vec::new(),
+            at: 0,
+        }
+    }
+
+    #[test]
+    fn a_card_bound_to_a_worktree_only_goes_to_an_agent_standing_in_it() {
+        let state = DispatchState::default();
+        let crew = vec![
+            agent("nova", "ops", AgentState::Idle),
+            agent("ada", "implementer", AgentState::Idle),
+        ];
+        let mut card = task("document the endpoint in the README");
+        card.worktree = Some("ada-tree".to_owned());
+
+        match decide(&state, &card, &crew) {
+            // Nova reads like the better role for documenting, and would win
+            // without the binding — the branch is what decides here.
+            Decision::Assign { agent_id, .. } => assert_eq!(agent_id, "ada"),
+            other => panic!("expected an assignment, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_card_bound_to_an_empty_worktree_says_so_rather_than_landing_elsewhere() {
+        let state = DispatchState::default();
+        let crew = vec![agent("nova", "ops", AgentState::Idle)];
+        let mut card = task("document the endpoint");
+        card.worktree = Some("ada-tree".to_owned());
+
+        match decide(&state, &card, &crew) {
+            Decision::Refuse { reason } => {
+                assert!(reason.contains("ada-tree"), "the reason names the worktree: {reason}");
+            }
+            other => panic!("expected a refusal, got {other:?}"),
         }
     }
 
@@ -398,4 +465,11 @@ mod store_tests {
         assert!(after.queue.is_empty(), "{:?}", after.queue);
         assert_eq!(after.events.len(), 1);
     }
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_secs())
+        .unwrap_or_default()
 }
