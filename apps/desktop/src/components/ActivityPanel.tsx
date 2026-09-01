@@ -5,12 +5,107 @@ import {
     read_budget,
     read_journal,
     set_ceilings,
+    type Allowance,
     type Budget,
     type JournalEntry,
     type Room,
 } from "@/lib/core";
 import { families_in, family_of, meters_of, moments_ago, short_count } from "@/lib/activity";
 import { use_poll } from "@/lib/poll";
+
+/// One subscription's allowance: what it has left, and what it is spending.
+///
+/// A block each rather than one set of numbers, because two subscriptions are
+/// two weeks. A single global figure meant an exhausted Claude account stopped a
+/// Codex agent whose own week had not been touched.
+function Spend({
+    allowance,
+    now,
+    editing,
+    draft,
+    on_draft,
+    on_edit,
+    on_save,
+    on_cancel,
+}: {
+    allowance: Allowance;
+    now: number;
+    editing: boolean;
+    draft: { requests: string; input: string; output: string };
+    on_draft: (next: { requests: string; input: string; output: string }) => void;
+    on_edit: () => void;
+    on_save: () => void;
+    on_cancel: () => void;
+}) {
+    const meters = meters_of(allowance.last_minute, allowance.ceilings);
+
+    return (
+        <section className="flex flex-col gap-2 rounded-lg border border-reef bg-lagoon-deep p-2">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <span className="font-mono text-[11px] text-linen">{allowance.identity}</span>
+                <span className={`font-mono text-[11px] ${ROOM_TINT[allowance.room]}`}>
+                    {allowance.says}
+                </span>
+            </div>
+
+            <p className="font-mono text-[10px] text-shade">
+                {allowance.weekly_percent === undefined
+                    ? "No pane on this one has said what it has left yet — it is read off the engine's own status line."
+                    : `${allowance.weekly_percent}% of the week spent, ${allowance.session_percent}% of this session, read ${moments_ago(now - (allowance.read_seconds_ago ?? 0), now)} ago.`}
+                {allowance.agents.length > 0 ? ` Spent by ${allowance.agents.join(", ")}.` : " Nobody is hired on it."}
+            </p>
+
+            <div className="flex flex-col gap-1">
+                {meters.map((meter) => (
+                    <div key={meter.label} className="flex items-center gap-2">
+                        <span className="w-24 shrink-0 font-mono text-[10px] text-shade">{meter.label}</span>
+                        <span className="h-1.5 min-w-0 flex-1 rounded-full bg-lagoon">
+                            <span
+                                className={`block h-1.5 rounded-full ${meter.tightest ? "bg-sun" : "bg-turquoise"}`}
+                                style={{ width: `${Math.round(meter.share * 100)}%` }}
+                            />
+                        </span>
+                        <span
+                            className={`w-28 shrink-0 text-right font-mono text-[10px] ${meter.tightest ? "text-sun" : "text-shell"}`}
+                        >
+                            {short_count(meter.used)} / {short_count(meter.ceiling)}
+                        </span>
+                    </div>
+                ))}
+            </div>
+
+            {editing ? (
+                <div className="flex flex-wrap items-center gap-2">
+                    {(["requests", "input", "output"] as const).map((key) => (
+                        <input
+                            key={key}
+                            className="w-28 rounded-lg border border-reef bg-lagoon px-2 py-1 font-mono text-[11px]"
+                            placeholder={key}
+                            value={draft[key]}
+                            onChange={(event) => on_draft({ ...draft, [key]: event.target.value })}
+                        />
+                    ))}
+                    <button
+                        className="rounded-lg border border-turquoise px-2 py-0.5 font-mono text-[11px] text-turquoise"
+                        onClick={on_save}
+                    >
+                        set
+                    </button>
+                    <button
+                        className="rounded-lg border border-reef px-2 py-0.5 font-mono text-[11px] text-shell"
+                        onClick={on_cancel}
+                    >
+                        keep them
+                    </button>
+                </div>
+            ) : (
+                <button className="self-start font-mono text-[10px] text-shade hover:text-shell" onClick={on_edit}>
+                    per minute, counted from what its engines wrote · change the ceilings
+                </button>
+            )}
+        </section>
+    );
+}
 
 const ROOM_TINT: Record<Room, string> = {
     plenty: "text-palm",
@@ -38,7 +133,7 @@ export function ActivityPanel({ active }: { active: boolean }) {
     const [budget, set_budget] = useState<Budget | null>(null);
     const [entries, set_entries] = useState<JournalEntry[]>([]);
     const [family, set_family] = useState<string | null>(null);
-    const [editing, set_editing] = useState(false);
+    const [editing, set_editing] = useState<string | null>(null);
     const [draft, set_draft] = useState({ requests: "", input: "", output: "" });
     const [notice, set_notice] = useState<string | null>(null);
     const [now, set_now] = useState(() => Math.floor(Date.now() / 1000));
@@ -57,7 +152,7 @@ export function ActivityPanel({ active }: { active: boolean }) {
         refresh().catch((cause) => set_notice(cause instanceof Error ? cause.message : String(cause)));
     }, 5000, active);
 
-    const save = useCallback(async () => {
+    const save = useCallback(async (identity: string) => {
         try {
             const wanted = {
                 requests: Number(draft.requests),
@@ -70,8 +165,8 @@ export function ActivityPanel({ active }: { active: boolean }) {
                 return;
             }
 
-            await set_ceilings(wanted);
-            set_editing(false);
+            await set_ceilings(identity, wanted);
+            set_editing(null);
             set_notice(null);
             await refresh();
         } catch (cause) {
@@ -82,104 +177,39 @@ export function ActivityPanel({ active }: { active: boolean }) {
     // The families come from what is actually in the journal rather than a list
     // written here, so a kind added to the core shows up without being added twice.
     const families = families_in(entries);
-    const meters = budget ? meters_of(budget.last_minute, budget.ceilings) : [];
 
     return (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2.5 overflow-y-auto p-2.5">
-            <section className="flex flex-col gap-2 rounded-lg border border-reef bg-lagoon-deep p-2">
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                    <h3 className="font-mono text-[9px] uppercase tracking-[0.14em] text-shade">
-                        What it may spend
-                    </h3>
-                    {budget ? (
-                        <span className={`font-mono text-[11px] ${ROOM_TINT[budget.room]}`}>
-                            {budget.says}
-                        </span>
-                    ) : null}
-                </div>
+            {!budget ? (
+                <Waiting says="reading the meters…" className="font-mono text-[11px] text-shade" />
+            ) : null}
 
-                {!budget ? <Waiting says="reading the meters…" className="font-mono text-[11px] text-shade" /> : null}
+            {budget && budget.allowances.length === 0 ? (
+                <p className="font-mono text-[11px] text-shade">
+                    Nobody is hired yet, so there is no allowance to watch.
+                </p>
+            ) : null}
 
-                {budget ? (
-                    <>
-                        <p className="font-mono text-[10px] text-shade">
-                            {budget.weekly_percent === undefined
-                                ? "No engine has said what the account has left yet — it is read off a pane's own status line."
-                                : `The account: ${budget.weekly_percent}% of the week spent, ${budget.session_percent}% of this session, read ${moments_ago(now - (budget.read_seconds_ago ?? 0), now)} ago.`}
-                        </p>
-
-                        <div className="flex flex-col gap-1">
-                            {meters.map((meter) => (
-                                <div key={meter.label} className="flex items-center gap-2">
-                                    <span className="w-24 shrink-0 font-mono text-[10px] text-shade">
-                                        {meter.label}
-                                    </span>
-                                    <span className="h-1.5 min-w-0 flex-1 rounded-full bg-lagoon">
-                                        <span
-                                            className={`block h-1.5 rounded-full ${meter.tightest ? "bg-sun" : "bg-turquoise"}`}
-                                            style={{ width: `${Math.round(meter.share * 100)}%` }}
-                                        />
-                                    </span>
-                                    <span
-                                        className={`w-28 shrink-0 text-right font-mono text-[10px] ${meter.tightest ? "text-sun" : "text-shell"}`}
-                                    >
-                                        {short_count(meter.used)} / {short_count(meter.ceiling)}
-                                    </span>
-                                </div>
-                            ))}
-                        </div>
-
-                        <p className="font-mono text-[10px] text-shade">
-                            Per minute, counted from what the engines wrote. This app makes none of
-                            those requests, so the only honest way to count them is to read what the
-                            engines recorded.
-                        </p>
-
-                        {editing ? (
-                            <div className="flex flex-wrap items-center gap-2">
-                                {(["requests", "input", "output"] as const).map((key) => (
-                                    <input
-                                        key={key}
-                                        className="w-28 rounded-lg border border-reef bg-lagoon px-2 py-1 font-mono text-[11px]"
-                                        placeholder={key}
-                                        value={draft[key]}
-                                        onChange={(event) =>
-                                            set_draft({ ...draft, [key]: event.target.value })
-                                        }
-                                    />
-                                ))}
-                                <button
-                                    className="rounded-lg border border-turquoise px-2 py-0.5 font-mono text-[11px] text-turquoise"
-                                    onClick={() => void save()}
-                                >
-                                    set
-                                </button>
-                                <button
-                                    className="rounded-lg border border-reef px-2 py-0.5 font-mono text-[11px] text-shell"
-                                    onClick={() => set_editing(false)}
-                                >
-                                    keep them
-                                </button>
-                            </div>
-                        ) : (
-                            <button
-                                className="self-start font-mono text-[10px] text-shade hover:text-shell"
-                                onClick={() => {
-                                    set_draft({
-                                        requests: String(budget.ceilings.requests),
-                                        input: String(budget.ceilings.input),
-                                        output: String(budget.ceilings.output),
-                                    });
-                                    set_editing(true);
-                                }}
-                            >
-                                change the ceilings — they are a fact about your plan, not something
-                                this can measure
-                            </button>
-                        )}
-                    </>
-                ) : null}
-            </section>
+            {budget?.allowances.map((allowance) => (
+                <Spend
+                    key={allowance.identity}
+                    allowance={allowance}
+                    now={now}
+                    editing={editing === allowance.identity}
+                    draft={draft}
+                    on_draft={set_draft}
+                    on_edit={() => {
+                        set_draft({
+                            requests: String(allowance.ceilings.requests),
+                            input: String(allowance.ceilings.input),
+                            output: String(allowance.ceilings.output),
+                        });
+                        set_editing(allowance.identity);
+                    }}
+                    on_save={() => void save(allowance.identity)}
+                    on_cancel={() => set_editing(null)}
+                />
+            ))}
 
             {notice ? <p className="font-mono text-[11px] text-coral">{notice}</p> : null}
 

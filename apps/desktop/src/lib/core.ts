@@ -355,12 +355,16 @@ export interface Ceilings {
     output: number;
 }
 
-/// What the crew is allowed to spend, and what it has.
+/// One subscription's worth of allowance.
 ///
-/// The weekly numbers are read off an engine's own status line, so they are
-/// absent until a pane has been open long enough to say. The minute is counted
-/// from what the engines wrote in their transcripts.
-export interface Budget {
+/// `identity` is the engine, and a login within it when somebody has said there
+/// is more than one — `claude`, `claude/work`, `codex`. The weekly numbers are
+/// read off that engine's own status line, so they are absent until one of its
+/// panes has been open long enough to say. The minute is counted from what its
+/// engines wrote in their transcripts.
+export interface Allowance {
+    identity: string;
+    agents: string[];
     weekly_percent?: number;
     session_percent?: number;
     read_seconds_ago?: number;
@@ -371,12 +375,22 @@ export interface Budget {
     says: string;
 }
 
+/// There is no single number here on purpose: two subscriptions are two weeks,
+/// and one running out says nothing about the other.
+export interface Budget {
+    allowances: Allowance[];
+    room: Room;
+}
+
 export function read_budget(): Promise<Budget> {
     return request<Budget>("/budget");
 }
 
-export function set_ceilings(ceilings: Ceilings): Promise<Ceilings> {
-    return request<Ceilings>("/budget", { method: "POST", body: JSON.stringify(ceilings) });
+export function set_ceilings(identity: string, ceilings: Ceilings): Promise<Ceilings> {
+    return request<Ceilings>("/budget", {
+        method: "POST",
+        body: JSON.stringify({ identity, ...ceilings }),
+    });
 }
 
 /// One thing the app decided or did.
