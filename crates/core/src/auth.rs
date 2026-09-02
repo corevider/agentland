@@ -56,10 +56,12 @@ pub struct TokenStore {
 /// crew, or hand out a key. Shaping an agent stays open to the commander, because
 /// lowering another agent is its job — the raise inside that call is refused
 /// separately, by whoever is asking rather than by the route.
-fn is_the_humans_alone(method: &str, path: &str) -> bool {
-    let one_agent = path.starts_with("/agents/") && path.matches('/').count() == 2;
-
-    (method == "DELETE" && one_agent) || path == "/devices"
+fn is_the_humans_alone(_method: &str, path: &str) -> bool {
+    // Letting an agent go used to be the human's alone. It is now allowed to
+    // the crew for somebody holding nothing — an idle agent nobody is going to
+    // use again is the commander's to tidy — and the handler refuses the rest,
+    // where a person still has to see what would be lost.
+    path == "/devices"
 }
 
 pub fn permits(scope: Scope, method: &str, path: &str) -> bool {
@@ -198,7 +200,7 @@ impl TokenStore {
 mod tests {
     use super::*;
     #[test]
-    fn the_crews_key_works_but_cannot_dismiss_or_hand_out_keys() {
+    fn the_crews_key_works_but_cannot_hand_out_keys() {
         assert!(permits(Scope::Agent, "GET", "/tasks"));
         assert!(permits(Scope::Agent, "POST", "/plans"));
         assert!(permits(Scope::Agent, "POST", "/notes"));
@@ -206,8 +208,12 @@ mod tests {
             permits(Scope::Agent, "POST", "/agents/ada"),
             "lowering another agent is the commander's job",
         );
+        assert!(
+            permits(Scope::Agent, "DELETE", "/agents/ada"),
+            "letting go of an idle agent is the commander's job too — what it may \
+             not do is throw work away, which the handler decides on what is held",
+        );
 
-        assert!(!permits(Scope::Agent, "DELETE", "/agents/ada"), "nobody fires anybody");
         assert!(!permits(Scope::Agent, "POST", "/devices"), "and nobody mints a key");
     }
 

@@ -10,7 +10,7 @@ use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode}
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -3726,9 +3726,14 @@ struct Dismissal {
 /// no ro to ask about it.
 async fn dismiss_agent(
     State(state): State<AppState>,
+    Extension(scope): Extension<TokenScope>,
     Path(id): Path<String>,
     Query(ask): Query<Dismissal>,
 ) -> Result<StatusCode, ApiError> {
+    // Being shown what would be lost and going ahead is a person's call. The
+    // crew may let go of somebody holding nothing and nothing else, so a
+    // commander tidying an idle crew cannot quietly throw work away.
+    let a_person_is_asking = scope != TokenScope::Agent;
     let agent = state.crew.list().into_iter().find(|held| held.id == id);
 
     if let Some(agent) = &agent {
@@ -3737,6 +3742,13 @@ async fn dismiss_agent(
         // The guard is here rather than only in the panel: the same call is
         // reachable from the tools the crew itself is handed.
         if let Some(says) = holding_says(&holding) {
+            if !a_person_is_asking {
+                return Err(anyhow::anyhow!(
+                    "{id} is holding {says} — ask a person before letting it go"
+                )
+                .into());
+            }
+
             if !ask.anyway {
                 return Err(
                     anyhow::anyhow!("{id} is holding {says} — dismiss it anyway to let it go")
@@ -3752,8 +3764,26 @@ async fn dismiss_agent(
         }
     }
 
+    let name = agent.as_ref().map_or(id.clone(), |held| held.name.clone());
+    let project = agent
+        .as_ref()
+        .map(|held| held.repository_id.clone())
+        .unwrap_or_default();
+
     state.crew.dismiss(&id)?;
     state.skills.forget_agent(&id);
+
+    // Everything else the app decides is on the record; three agents left and
+    // nothing said so. It matters more now than it did: letting somebody go is
+    // no longer the human's alone, so who did it is part of what happened.
+    note(
+        &state,
+        "agent.dismissed",
+        if a_person_is_asking { "a person" } else { "the crew" },
+        &project,
+        &name,
+    );
+
     Ok(StatusCode::NO_CONTENT)
 }
 

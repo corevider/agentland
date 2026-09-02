@@ -118,6 +118,15 @@ fn tools() -> Value {
             }
         },
         {
+            "name": "crew_dismiss",
+            "description": "Let an agent go. Allowed only for one holding nothing — no unfinished card, no open pane, nothing uncommitted, no commit that exists on its branch alone. Anything else is refused and belongs to a person, who is shown what would be lost. Its worktree is left on disk either way.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "id": { "type": "string" } },
+                "required": ["id"]
+            }
+        },
+        {
             "name": "crew_list",
             "description": "List the crew: name, role, engine, worktree and current state.",
             "inputSchema": { "type": "object", "properties": {} }
@@ -482,6 +491,7 @@ fn call_tool(core: &Core, name: &str, arguments: &Value) -> Result<Value, String
             &format!("/tasks/{}/project", text("id")?),
             Some(json!({ "repository_id": text("repository_id")?, "as_the_crew": true })),
         ),
+        "crew_dismiss" => core.call("DELETE", &format!("/agents/{}", text("id")?), None),
         "crew_list" => core.call("GET", "/agents", None),
         "note_write" => core.call(
             "POST",
