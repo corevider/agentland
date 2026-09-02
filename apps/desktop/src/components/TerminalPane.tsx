@@ -46,6 +46,9 @@ export interface PaneMetrics {
 interface Props {
     session: SessionInfo;
     label?: string;
+    /// The project's commander. Marked because it is the one to talk to: it
+    /// hands the work out and everybody else is working to what it decided.
+    crowned?: boolean;
     on_close?: (id: string) => void;
     on_zoom?: (id: string) => void;
     zoomed?: boolean;
@@ -86,7 +89,7 @@ function collapse_to_tail(data: Uint8Array): Uint8Array {
     return result;
 }
 
-export function TerminalPane({ session, focused, on_focus, on_metrics, label, on_close, on_zoom, zoomed, on_branch, on_tear_out, readable = false, on_readable, on_menu, stats_from, now_from, on_pick_up, on_drop_on, wanted = false }: Props) {
+export function TerminalPane({ session, crowned, focused, on_focus, on_metrics, label, on_close, on_zoom, zoomed, on_branch, on_tear_out, readable = false, on_readable, on_menu, stats_from, now_from, on_pick_up, on_drop_on, wanted = false }: Props) {
     const host_ref = useRef<HTMLDivElement>(null);
     const screen_ref = useRef<Terminal | null>(null);
     const gpu_ref = useRef<WebglAddon | null>(null);
@@ -400,7 +403,20 @@ export function TerminalPane({ session, focused, on_focus, on_metrics, label, on
                 title={on_pick_up ? "drag this bar to move the terminal" : undefined}
             >
                 <span className={`size-[7px] shrink-0 rounded-full ${tint}`} title={state} />
-                <span className="truncate text-[12px] text-linen">{label ?? session.id}</span>
+                {crowned ? (
+                    <span
+                        className="shrink-0 text-[11px] leading-none"
+                        title="the commander of this project — it hands the work out"
+                        aria-label="commander"
+                    >
+                        ♔
+                    </span>
+                ) : null}
+                <span
+                    className={`truncate text-[12px] ${crowned ? "font-semibold text-sun" : "text-linen"}`}
+                >
+                    {label ?? session.id}
+                </span>
                 <span className="shrink-0 rounded bg-lagoon px-1 py-[1px] font-mono text-[9px] text-shade">
                     {session.command.split(/\s+/)[0]}
                 </span>

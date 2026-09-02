@@ -37,7 +37,8 @@ export function SoloPane({ session_id }: { session_id: string }) {
         return () => window.removeEventListener("beforeunload", put_back);
     }, [session_id]);
 
-    const label = crew.find((agent) => agent.session_id === session_id)?.name;
+    const held = crew.find((agent) => agent.session_id === session_id);
+    const label = held?.name;
 
     return (
         <div className="flex h-screen flex-col bg-lagoon-deep text-linen">
@@ -61,6 +62,7 @@ export function SoloPane({ session_id }: { session_id: string }) {
                     <TerminalPane
                         session={session}
                         label={label}
+                        crowned={held?.role === "commander"}
                         focused
                         readable={readable}
                         on_readable={(wanted) => {

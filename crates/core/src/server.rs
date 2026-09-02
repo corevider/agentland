@@ -1933,11 +1933,41 @@ async fn hand_the_work_over(
 
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
 
-    match session.write_input(b"\r") {
-        Ok(()) => Ok(HandOver::Typed),
-        Err(_) => Ok(HandOver::Busy),
+    if session.write_input(b"\r").is_err() {
+        return Ok(HandOver::Busy);
     }
+
+    // One Enter is not proof the turn began. A pane brought back with
+    // `--resume` is still loading when the brief lands, and the carriage return
+    // falls into an engine that is not reading yet: measured after a restart,
+    // where the whole brief sat at the prompt unsent while the commander
+    // counted as woken. So the turn is looked for, and the Enter — never the
+    // text — is repeated until it starts.
+    for _ in 0..ENTER_ATTEMPTS {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+        let frame = state
+            .manager
+            .read_log(&session_id, 8 * 1024)
+            .map(|raw| strip_ansi(&raw))
+            .unwrap_or_default();
+
+        if crate::supervisor::turn_running(&frame) || crate::supervisor::asking_the_human(&frame) {
+            return Ok(HandOver::Typed);
+        }
+
+        if session.write_input(b"\r").is_err() {
+            return Ok(HandOver::Busy);
+        }
+    }
+
+    Ok(HandOver::Typed)
 }
+
+/// How many times the Enter is repeated while waiting for the turn to start.
+/// Pressing it on a prompt that is already empty does nothing, so the cost of
+/// being wrong here is a keystroke.
+const ENTER_ATTEMPTS: usize = 5;
 
 /// Follow a step that has just been handed out.
 ///
@@ -2050,6 +2080,30 @@ async fn take_the_project_back_on(state: &AppState, agent: &Agent, worktree: &st
     };
 
     let brief = take_the_project_on(&repository);
+
+    // A resumed pane carries the conversation it had before, so handing the
+    // same brief again reads as a stutter rather than a fresh start — the
+    // commander said as much: "if the repetition means the brief isn't reaching
+    // you, say so". Once it is in the pane, it has been said.
+    if let Some(session_id) = &agent.session_id {
+        let seen = state
+            .manager
+            .read_log(session_id, 64 * 1024)
+            .map(|raw| strip_ansi(&raw))
+            .unwrap_or_default();
+
+        let squashed: String = seen.chars().filter(|c| !c.is_whitespace()).collect();
+        let opening: String = brief
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .take(60)
+            .collect();
+
+        if squashed.contains(&opening) {
+            return;
+        }
+    }
+
     match hand_the_work_over(state, agent, worktree, &brief).await {
         Ok(HandOver::Busy) => {}
         Ok(_) => {

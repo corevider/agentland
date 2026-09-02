@@ -395,6 +395,10 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                         const held = services.crew.find((agent) => agent.session_id === session.id);
                         return held?.title ?? held?.name;
                     })()}
+                    crowned={
+                        services.crew.find((agent) => agent.session_id === session.id)?.role ===
+                        "commander"
+                    }
                     focused={
                         active &&
                         (services.focused_id
