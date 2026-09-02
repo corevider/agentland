@@ -1009,6 +1009,57 @@ fn spawn_supervisor(state: AppState) {
                     }
                 }
 
+                // A goal is written down, so it can be handed over again. A
+                // commander idle at a prompt, with a goal standing and no sign
+                // in its own transcript of ever having been told it, was told
+                // and did not hear: measured after a restart, the brief typed
+                // into the pane and the turn never started.
+                if agent.role == "commander" && !working && !asking {
+                    if let Some(goal) = state.goals.for_project(&agent.repository_id) {
+                        let worktree = state
+                            .repos
+                            .worktrees()
+                            .into_iter()
+                            .find(|held| {
+                                held.worktree.repository_id == agent.repository_id
+                                    && held.worktree.name == agent.worktree
+                            })
+                            .map(|held| held.worktree.path);
+
+                        let opening: String = goal.text.chars().take(60).collect();
+                        let told = worktree
+                            .as_deref()
+                            .and_then(|path| crate::transcript::was_told(path, &opening))
+                            .unwrap_or(false);
+
+                        if !told {
+                            if let Some(path) = worktree {
+                                let repository = state
+                                    .repos
+                                    .repositories()
+                                    .into_iter()
+                                    .find(|held| held.id == agent.repository_id);
+
+                                if let Some(repository) = repository {
+                                    let brief = what_it_is_for(&repository, Some(&goal));
+                                    if let Ok(HandOver::Typed) =
+                                        hand_the_work_over(&state, &agent, &path, &brief).await
+                                    {
+                                        note(
+                                            &state,
+                                            "goal.handed",
+                                            "the supervisor",
+                                            &agent.repository_id,
+                                            &agent.id,
+                                        );
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // A plan the agent wrote for the step it was handed is not a
                 // question for a person: it is the agent asking whether to do
                 // the work it was already given. Answered here, the way the
@@ -2074,13 +2125,17 @@ async fn say_it(state: &AppState, session_id: &str, text: &str) -> bool {
         }
     }
 
-    true
+    // Out of attempts with no turn in flight: the text is sitting in a composer
+    // nobody submitted. Saying "told" here is how a commander came back, was
+    // handed its goal, and sat at a prompt with the goal typed in front of it
+    // while the journal recorded that it had been woken.
+    false
 }
 
 /// How many times the Enter is repeated while waiting for the turn to start.
 /// Pressing it on a prompt that is already empty does nothing, so the cost of
 /// being wrong here is a keystroke.
-const ENTER_ATTEMPTS: usize = 5;
+const ENTER_ATTEMPTS: usize = 15;
 
 /// Follow a step that has just been handed out.
 ///
