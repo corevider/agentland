@@ -415,6 +415,37 @@ export default function App() {
         }
     }, [clear, pane_count, rate, settings.duration_ms]);
 
+    // Photographing the window belonged to the island panel, so it happened only
+    // while that panel was open: the command was queued, drained, dispatched and
+    // fell on nobody, silently, for hours. A picture of the window is not the
+    // island's business.
+    useEffect(() => {
+        const listener = (event: Event) => {
+            if ((event as CustomEvent<string>).detail !== "capture-window") {
+                return;
+            }
+
+            void (async () => {
+                try {
+                    const { toPng } = await import("html-to-image");
+                    const data = await toPng(document.body, { pixelRatio: 1 });
+
+                    if (!is_tauri()) {
+                        return;
+                    }
+
+                    const { invoke } = await import("@tauri-apps/api/core");
+                    await invoke<string>("save_capture", { name: "window", data });
+                } catch (cause) {
+                    set_error(cause instanceof Error ? cause.message : String(cause));
+                }
+            })();
+        };
+
+        window.addEventListener("agentland:command", listener);
+        return () => window.removeEventListener("agentland:command", listener);
+    }, []);
+
     useEffect(() => {
         const listener = (event: Event) => {
             const command = (event as CustomEvent<string>).detail;
