@@ -960,8 +960,26 @@ fn spawn_supervisor(state: AppState) {
                         if let Some(worktree) = worktree {
                             let _ = state.crew.stop(&agent.id);
                             match state.crew.start(&agent.id, &worktree.path, false, None) {
-                                Ok(_) => {
+                                Ok(started) => {
                                     tracing::info!(agent = %agent.id, "traded a full pane for a fresh one");
+
+                                    // The new pane knows nothing: the
+                                    // conversation it was traded out of is
+                                    // gone. Measured — a commander was handed a
+                                    // goal, its pane filled while it read, and
+                                    // the fresh one sat at an empty prompt for
+                                    // half an hour with the goal lost in the
+                                    // pane it replaced. It is handed what it
+                                    // should be doing, the same as after a
+                                    // restart.
+                                    hand_back_what_it_was_holding(&state, &started).await;
+                                    take_the_project_back_on(
+                                        &state,
+                                        &started,
+                                        &worktree.path,
+                                        true,
+                                    )
+                                    .await;
                                     state.notices.push(
                                         crate::notices::NewNotice {
                                             kind: crate::notices::Kind::Word,
@@ -2136,7 +2154,12 @@ async fn hand_back_what_it_was_holding(state: &AppState, agent: &Agent) {
 /// usually holds none, so it came back to an empty prompt and sat there until
 /// somebody pressed the ignition. Its job is the project itself, which does not
 /// stop being true across a restart.
-async fn take_the_project_back_on(state: &AppState, agent: &Agent, worktree: &std::path::Path) {
+async fn take_the_project_back_on(
+    state: &AppState,
+    agent: &Agent,
+    worktree: &std::path::Path,
+    said_before_is_fine: bool,
+) {
     if agent.role != "commander" {
         return;
     }
@@ -2178,9 +2201,13 @@ async fn take_the_project_back_on(state: &AppState, agent: &Agent, worktree: &st
     // engine's own transcript rather than the pane, because a pane that has
     // just come back has not finished drawing its history and answered no to a
     // question it had already been asked five times.
-    let opening: String = brief.chars().take(80).collect();
-    if crate::transcript::was_told(worktree, &opening).unwrap_or(false) {
-        return;
+    // A session traded for a fresh one has none of the conversation the old one
+    // had, so having said this before is exactly why it has to be said again.
+    if !said_before_is_fine {
+        let opening: String = brief.chars().take(80).collect();
+        if crate::transcript::was_told(worktree, &opening).unwrap_or(false) {
+            return;
+        }
     }
 
     match hand_the_work_over(state, agent, worktree, &brief).await {
@@ -2220,7 +2247,7 @@ async fn bring_the_crew_back(state: AppState) {
             Ok(started) => {
                 back.push(agent.name.clone());
                 hand_back_what_it_was_holding(&state, &started).await;
-                take_the_project_back_on(&state, &started, &worktree.path).await;
+                take_the_project_back_on(&state, &started, &worktree.path, false).await;
             }
             Err(error) => tracing::warn!(%error, agent = %agent.id, "cannot bring it back"),
         }
