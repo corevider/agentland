@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { families_in, family_of, meters_of, moments_ago, short_count } from "@/lib/activity";
+import { families_in, family_of, meters_of, moments_ago, rule_reads, short_count } from "@/lib/activity";
 import type { JournalEntry } from "@/lib/core";
 
 const CEILINGS = { requests: 500, input: 1_000_000, output: 200_000 };
@@ -79,5 +79,23 @@ describe("numbers and times a person can hold", () => {
 
     it("never says a negative age", () => {
         expect(moments_ago(200, 100)).toBe("0s");
+    });
+});
+
+describe("rule_reads", () => {
+    it("says a command rule as the command", () => {
+        expect(rule_reads("Bash(npm test:*)")).toBe("run npm test…");
+    });
+
+    it("keeps an exact command exact, because the trailing star is the difference", () => {
+        expect(rule_reads("Bash(npm test)")).toBe("run npm test");
+    });
+
+    it("says a folder rule as the folder, which is a different kind of permission", () => {
+        expect(rule_reads("Dir(/tmp)")).toBe("reach anything under /tmp");
+    });
+
+    it("leaves a shape it does not know alone rather than mangling it", () => {
+        expect(rule_reads("WebFetch(domain:example.com)")).toBe("WebFetch(domain:example.com)");
     });
 });

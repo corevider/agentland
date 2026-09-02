@@ -393,6 +393,24 @@ export function set_ceilings(identity: string, ceilings: Ceilings): Promise<Ceil
     });
 }
 
+/// What a project's agents may do without stopping to ask.
+export interface ProjectPermits {
+    repository_id: string;
+    rules: string[];
+    running: string[];
+}
+
+export function read_permits(): Promise<ProjectPermits[]> {
+    return request<ProjectPermits[]>("/permits");
+}
+
+export function forget_permit(repository_id: string, rule: string): Promise<void> {
+    return request<void>("/permits", {
+        method: "DELETE",
+        body: JSON.stringify({ repository_id, rule }),
+    });
+}
+
 /// One thing the app decided or did.
 export interface JournalEntry {
     at: number;

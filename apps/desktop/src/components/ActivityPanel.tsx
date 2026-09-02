@@ -2,15 +2,18 @@ import { useCallback, useState } from "react";
 
 import { Waiting } from "@/components/Spinner";
 import {
+    forget_permit,
     read_budget,
     read_journal,
+    read_permits,
     set_ceilings,
     type Allowance,
     type Budget,
     type JournalEntry,
+    type ProjectPermits,
     type Room,
 } from "@/lib/core";
-import { families_in, family_of, meters_of, moments_ago, short_count } from "@/lib/activity";
+import { families_in, family_of, meters_of, moments_ago, rule_reads, short_count } from "@/lib/activity";
 import { use_poll } from "@/lib/poll";
 
 /// One subscription's allowance: what it has left, and what it is spending.
@@ -107,6 +110,48 @@ function Spend({
     );
 }
 
+/// What a project's agents may do without asking, and a way to take it back.
+///
+/// Saying yes is one click and holds forever; until this there was no matching
+/// no. A grant that can only be undone by editing the database is a grant
+/// nobody will undo.
+function Granted({
+    permits,
+    on_forget,
+}: {
+    permits: ProjectPermits;
+    on_forget: (rule: string) => void;
+}) {
+    return (
+        <section className="flex flex-col gap-1 rounded-lg border border-reef bg-lagoon-deep p-2">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <span className="font-mono text-[11px] text-linen">{permits.repository_id}</span>
+                <span className="font-mono text-[10px] text-shade">
+                    {permits.running.length > 0
+                        ? `${permits.running.join(", ")} running — a pane keeps what it started with`
+                        : "no pane open"}
+                </span>
+            </div>
+
+            <ul className="flex flex-col gap-0.5">
+                {permits.rules.map((rule) => (
+                    <li key={rule} className="flex items-baseline gap-2">
+                        <span className="min-w-0 flex-1 font-mono text-[10px] text-shell">
+                            {rule_reads(rule)}
+                        </span>
+                        <button
+                            className="shrink-0 rounded border border-reef px-1.5 py-[1px] font-mono text-[10px] text-shade hover:border-coral hover:text-coral"
+                            onClick={() => on_forget(rule)}
+                        >
+                            take it back
+                        </button>
+                    </li>
+                ))}
+            </ul>
+        </section>
+    );
+}
+
 const ROOM_TINT: Record<Room, string> = {
     plenty: "text-palm",
     tight: "text-sun",
@@ -132,6 +177,7 @@ const FAMILY_TINT: Record<string, string> = {
 export function ActivityPanel({ active }: { active: boolean }) {
     const [budget, set_budget] = useState<Budget | null>(null);
     const [entries, set_entries] = useState<JournalEntry[]>([]);
+    const [permits, set_permits] = useState<ProjectPermits[]>([]);
     const [family, set_family] = useState<string | null>(null);
     const [editing, set_editing] = useState<string | null>(null);
     const [draft, set_draft] = useState({ requests: "", input: "", output: "" });
@@ -139,12 +185,14 @@ export function ActivityPanel({ active }: { active: boolean }) {
     const [now, set_now] = useState(() => Math.floor(Date.now() / 1000));
 
     const refresh = useCallback(async () => {
-        const [held, log] = await Promise.all([
+        const [held, log, granted] = await Promise.all([
             read_budget(),
             read_journal(family ? { kind: family } : {}),
+            read_permits(),
         ]);
         set_budget(held);
         set_entries(log);
+        set_permits(granted);
         set_now(Math.floor(Date.now() / 1000));
     }, [family]);
 
@@ -173,6 +221,16 @@ export function ActivityPanel({ active }: { active: boolean }) {
             set_notice(cause instanceof Error ? cause.message : String(cause));
         }
     }, [draft, refresh]);
+
+    const forget = useCallback(async (repository_id: string, rule: string) => {
+        try {
+            await forget_permit(repository_id, rule);
+            set_notice(null);
+            await refresh();
+        } catch (cause) {
+            set_notice(cause instanceof Error ? cause.message : String(cause));
+        }
+    }, [refresh]);
 
     // The families come from what is actually in the journal rather than a list
     // written here, so a kind added to the core shows up without being added twice.
@@ -210,6 +268,21 @@ export function ActivityPanel({ active }: { active: boolean }) {
                     on_cancel={() => set_editing(null)}
                 />
             ))}
+
+            {permits.length > 0 ? (
+                <section className="flex flex-col gap-1.5">
+                    <h3 className="font-mono text-[9px] uppercase tracking-[0.14em] text-shade">
+                        Allowed without asking
+                    </h3>
+                    {permits.map((held) => (
+                        <Granted
+                            key={held.repository_id}
+                            permits={held}
+                            on_forget={(rule) => void forget(held.repository_id, rule)}
+                        />
+                    ))}
+                </section>
+            ) : null}
 
             {notice ? <p className="font-mono text-[11px] text-coral">{notice}</p> : null}
 

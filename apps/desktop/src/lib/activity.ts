@@ -76,3 +76,21 @@ export function moments_ago(at: number, now: number): string {
     }
     return `${Math.round(seconds / 86_400)}d`;
 }
+
+/// A rule as somebody would say it out loud.
+///
+/// The stored forms are the engine's — `Bash(npm test:*)`, `Dir(/tmp)` — and
+/// reading a list of them is how a grant nobody understands gets left in place.
+export function rule_reads(rule: string): string {
+    const folder = rule.match(/^Dir\((.+)\)$/);
+    if (folder) {
+        return `reach anything under ${folder[1]}`;
+    }
+
+    const command = rule.match(/^Bash\((.+?)(:\*)?\)$/);
+    if (command) {
+        return `run ${command[1]}${command[2] ? "…" : ""}`;
+    }
+
+    return rule;
+}

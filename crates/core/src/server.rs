@@ -270,6 +270,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/approvals/{id}", post(answer_approval))
         .route("/budget", get(read_budget).post(set_ceilings))
         .route("/journal", get(read_journal))
+        .route("/permits", get(read_permits).delete(forget_permit))
         .route("/stacks", get(list_starters))
         .route("/repos/{id}/commander", post(ignite))
         .route("/start", post(begin))
@@ -3718,6 +3719,72 @@ async fn ignite(
         worktree,
         did,
     }))
+}
+
+#[derive(Serialize)]
+struct ProjectPermits {
+    repository_id: String,
+    rules: Vec<String>,
+    /// Panes running in that project right now. They were handed the rules when
+    /// they started and hold them until they are started again, so taking one
+    /// back does not reach into a pane that is already open.
+    running: Vec<String>,
+}
+
+/// What has been said yes to, per project.
+///
+/// A grant is permanent and silent by design — that is the point of it — which
+/// makes it exactly the kind of thing that has to be readable. A list nobody can
+/// see is a list nobody can correct.
+async fn read_permits(State(state): State<AppState>) -> Json<Vec<ProjectPermits>> {
+    let crew = state.crew.list();
+
+    Json(
+        state
+            .permits
+            .everything()
+            .into_iter()
+            .map(|(repository_id, rules)| ProjectPermits {
+                running: crew
+                    .iter()
+                    .filter(|agent| agent.repository_id == repository_id)
+                    .filter(|agent| agent.session_id.is_some())
+                    .map(|agent| agent.id.clone())
+                    .collect(),
+                repository_id,
+                rules,
+            })
+            .collect(),
+    )
+}
+
+#[derive(Deserialize)]
+struct ForgetPermit {
+    repository_id: String,
+    rule: String,
+}
+
+/// Take a grant back.
+///
+/// Yes was answered once and holds forever; no had no way of being said at all
+/// until this. The next pane in that project starts without the rule.
+async fn forget_permit(
+    State(state): State<AppState>,
+    Json(body): Json<ForgetPermit>,
+) -> Result<StatusCode, ApiError> {
+    if !state.permits.forget(&body.repository_id, &body.rule) {
+        return Err(anyhow::anyhow!(
+            "{} was not granted for {}",
+            body.rule,
+            body.repository_id
+        )
+        .into());
+    }
+
+    state.crew.set_learned(state.permits.everything());
+    note(&state, "permit.revoked", "a person", &body.repository_id, &body.rule);
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// What the app has been doing, and why.
