@@ -102,48 +102,73 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
     const aiming_now = useRef(aiming);
     aiming_now.current = aiming;
 
+    /// Where each column's cards sat when the drag first reached it.
+    ///
+    /// Measured once per column and not again: reading live positions fed the
+    /// drag back into itself — the gap opened, the cards below moved, a
+    /// different card was under the pointer, the gap moved back. That loop is
+    /// the up-and-down flicker. Boundaries taken before the gap exists do not
+    /// move under it.
+    const seats = useRef(
+        new Map<string, { scrolled: number; cards: Array<{ id: string; middle: number }> }>(),
+    );
+
     /// What is under the pointer: which column, and which card it would sit
-    /// above. Read off the elements rather than kept in step by hand, so a
-    /// scrolled column or a resized panel needs no bookkeeping.
+    /// above.
     const read_aim = useCallback(
         (x: number, y: number) => {
             const under = document.elementFromPoint(x, y);
-            const column = under?.closest("[data-column]")?.getAttribute("data-column");
+            const holder = under?.closest("[data-column]") as HTMLElement | null;
+            const column = holder?.getAttribute("data-column");
 
-            if (!column) {
+            if (!holder || !column) {
                 return;
             }
 
-            const over = under?.closest("[data-card]");
-            const card = over?.getAttribute("data-card");
+            const scroller = holder.querySelector("[data-cards]") as HTMLElement | null;
+            const scrolled = scroller?.scrollTop ?? 0;
 
-            if (!card) {
-                aim(column as Column, null);
-                return;
+            // The first move can arrive before the carried card has left the
+            // column, and a measurement taken then has a card's worth of space
+            // in it that is about to close. Measure again next time rather than
+            // keeping that one.
+            const still_there = carried_now.current
+                ? holder.querySelector(`[data-card="${CSS.escape(carried_now.current)}"]`) !== null
+                : false;
+
+            let measured = still_there ? undefined : seats.current.get(column);
+            if (!measured) {
+                measured = {
+                    scrolled,
+                    cards: Array.from(holder.querySelectorAll("[data-card]"))
+                        .map((card) => {
+                            const box = card.getBoundingClientRect();
+                            return {
+                                id: card.getAttribute("data-card") ?? "",
+                                middle: box.top + box.height / 2,
+                            };
+                        })
+                        .filter((card) => card.id && card.id !== carried_now.current),
+                };
+
+                if (!still_there) {
+                    seats.current.set(column, measured);
+                }
             }
 
-            const box = over!.getBoundingClientRect();
-            const above = y < box.top + box.height / 2;
+            // A column scrolled since it was measured moves its boundaries with
+            // it, which is arithmetic rather than another measurement.
+            const drift = scrolled - measured.scrolled;
+            const above = measured.cards.find((card) => y < card.middle - drift);
 
-            if (above) {
-                aim(column as Column, card);
-                return;
-            }
-
-            // Below this card means above the next one, or the bottom.
-            const held = in_order(
-                tasks_now.current.filter(
-                    (task) => task.column === column && task.id !== carried_now.current,
-                ),
-            );
-            const seat = held.findIndex((task) => task.id === card);
-            aim(column as Column, held[seat + 1]?.id ?? null);
+            aim(column as Column, above?.id ?? null);
         },
         [aim],
     );
 
     const take = useCallback((task_id: string, event: React.PointerEvent<HTMLElement>) => {
         const box = event.currentTarget.getBoundingClientRect();
+        seats.current.clear();
 
         set_carry({
             id: task_id,
@@ -228,6 +253,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
 
         const released = () => {
             const wanted = aiming_now.current;
+            seats.current.clear();
             set_carry(null);
             set_aiming(null);
 
@@ -514,7 +540,7 @@ function Column({
               : (shown.find((row) => row.index === seat)?.start ?? seat * 96);
 
     return (
-        <div ref={holder} className="min-h-0 flex-1 overflow-y-auto p-2">
+        <div ref={holder} data-cards className="min-h-0 flex-1 overflow-y-auto p-2">
             <div className="relative w-full" style={{ height: rows.getTotalSize() + room }}>
                 {gap ? (
                     <div
