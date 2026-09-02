@@ -608,18 +608,28 @@ fn look_at(state: &AppState, watch: &Watch, previous_frame: &str, now: u64) -> O
         idle_seconds: idle,
         tail,
         changed_files,
-        // Records of work, not remarks about it. Any evidence at all counted
-        // here, and handing a card out writes a note onto it — "X: Ada is the
-        // free agent with the closest role" — so a card arrived already
-        // carrying "evidence" and the first tick ten seconds later called the
-        // step finished. Measured: three cards were marked settled 35 to 42
-        // seconds before the commit that did the work, and a review card was
-        // settled one second after it was handed over, so nobody reviewed
-        // anything. The distinction already existed for discarding.
+        // Records of work put there since this watch began.
+        //
+        // Any evidence at all counted here, and handing a card out writes a
+        // note onto it — "X: Ada is the free agent with the closest role" — so
+        // a card arrived already carrying "evidence" and the tick ten seconds
+        // later called the step finished. Measured: three cards were marked
+        // settled 35 to 42 seconds before the commit that did the work, and a
+        // review card one second after it was handed over, so nobody reviewed
+        // anything.
+        //
+        // Ruling out remarks was not enough. A card handed out a second time
+        // still carried the record from the first attempt, and settled in nine
+        // seconds again — measured, four seconds before that attempt's commit.
+        // What counts is work recorded since this attempt started.
         card_has_evidence: state
             .board
             .get(&watch.task_id)
-            .map(|task| task.evidence.iter().any(|entry| entry.what.is_a_record()))
+            .map(|task| {
+                task.evidence
+                    .iter()
+                    .any(|entry| entry.what.is_a_record() && entry.at >= watch.started_at)
+            })
             .unwrap_or(false),
         transcript_says,
         age_seconds: now.saturating_sub(watch.started_at),
@@ -679,6 +689,7 @@ fn spawn_supervisor(state: AppState) {
         loop {
             interval.tick().await;
             let now = now_secs();
+            tracing::debug!(watches = state.supervisor.working().len(), "supervisor tick");
 
             for watch in state.supervisor.working() {
                 let previous = last_frames.get(&watch.session_id).cloned().unwrap_or_default();
@@ -959,6 +970,27 @@ fn spawn_supervisor(state: AppState) {
 
                             continue;
                         }
+                    }
+                }
+
+                // A plan the agent wrote for the step it was handed is not a
+                // question for a person: it is the agent asking whether to do
+                // the work it was already given. Answered here, the way the
+                // role was hired to work.
+                if crate::supervisor::plan_is_waiting(&tail) {
+                    tracing::info!(agent = %agent.id, "a plan is waiting to run");
+                    let answer =
+                        crate::supervisor::answer_for_the_plan(agent.permissions.as_deref());
+
+                    if say_it(&state, &session_id, answer).await {
+                        note(
+                            &state,
+                            "plan.approved",
+                            "the supervisor",
+                            &agent.id,
+                            "the plan it wrote for its own step",
+                        );
+                        continue;
                     }
                 }
 

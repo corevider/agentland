@@ -242,9 +242,27 @@ pub fn safe_to_type(previous: &str, latest: &str) -> bool {
 /// Whether the pane is holding a question open — the engine's own picker, not
 /// ours. An agent that has stopped on one is waiting on a person, and saying it
 /// is "at a prompt" hides that from the only person who can answer.
-pub fn asking_the_human(frame: &str) -> bool {
+/// The last `lines` lines that actually say something, lowercased.
+///
+/// Blank lines are not counted, because a redrawing pane is mostly blank lines:
+/// measured on a plan picker, taking the last 16 lines reached only as far back
+/// as its second option — the question itself was four blank lines further up
+/// and the pane sat unanswered.
+fn the_end_of(frame: &str, lines: usize) -> String {
     let lowered = frame.to_lowercase();
-    let tail: String = lowered.lines().rev().take(16).collect::<Vec<_>>().join("\n");
+    let mut held: Vec<&str> = lowered
+        .lines()
+        .rev()
+        .filter(|line| !line.trim().is_empty())
+        .take(lines)
+        .collect();
+
+    held.reverse();
+    held.join("\n")
+}
+
+pub fn asking_the_human(frame: &str) -> bool {
+    let tail = the_end_of(frame, 16);
 
     // A picker draws its hint line differently depending on what it is asking —
     // "enter to select" for a list, "esc to cancel · tab to amend" for a command
@@ -253,7 +271,13 @@ pub fn asking_the_human(frame: &str) -> bool {
     let squashed: String = tail.chars().filter(|c| !c.is_whitespace()).collect();
     let has_a_way_out = tail.contains("esc to cancel")
         || squashed.contains("esctocancel")
-        || tail.contains("to navigate");
+        || tail.contains("to navigate")
+        // The plan picker has no escape hint at all: it offers "shift+tab to
+        // approve with this feedback" and a path to edit in Vim. A reviewer sat
+        // on one of these having finished its review, and nothing in the app
+        // counted it as a question, so nobody ever answered it.
+        || squashed.contains("shift+tabtoapprove")
+        || squashed.contains("wouldyouliketoproceed");
     // Both halves are read squashed as well as spaced. A pane redraws its hint
     // line a character at a time, and what lands in the frame is often
     // "Entertoconfirm·Esctocancel" — which matched the way out and missed the
@@ -267,6 +291,34 @@ pub fn asking_the_human(frame: &str) -> bool {
         || squashed.contains("1.yes");
 
     has_a_way_out && offers_a_choice
+}
+
+/// Claude having written a plan and waiting to be told to run it.
+///
+/// This is not a permission question — the agent was handed a step and the plan
+/// is for that step — so it does not belong in front of a person. It sat
+/// unanswered because nothing recognised it: a reviewer finished its review,
+/// wrote a plan, and waited at "Would you like to proceed?" until somebody
+/// noticed by eye.
+pub fn plan_is_waiting(frame: &str) -> bool {
+    let tail = the_end_of(frame, 16);
+    let squashed: String = tail.chars().filter(|c| !c.is_whitespace()).collect();
+
+    squashed.contains("wouldyouliketoproceed")
+        && squashed.contains("1.yes")
+        && squashed.contains("2.yes")
+}
+
+/// Which way to answer it: the way this agent was hired to work.
+///
+/// "Auto mode" for somebody already trusted to edit without asking, and
+/// "manually approve edits" for anybody else — the picker is answered, but not
+/// with more rope than the role was given.
+pub fn answer_for_the_plan(permissions: Option<&str>) -> &'static str {
+    match permissions {
+        Some("bypassPermissions") | Some("acceptEdits") => "1",
+        _ => "2",
+    }
 }
 
 pub fn turn_running(frame: &str) -> bool {
@@ -937,6 +989,40 @@ mod tests {
 #[cfg(test)]
 mod asking_tests {
     use super::asking_the_human;
+
+    /// Measured on a reviewer that had finished its review and written a plan:
+    /// the pane sat here and the app saw nothing to answer.
+    const PLAN_PICKER: &str = "Claudehaswrittenupaplanandisreadytoexecute.Wouldyouliketoproceed?\n❯1.Yes,anduseautomode\n2.Yes,manuallyapproveedits\n3.TellClaudewhattochange\nshift+tabtoapprovewiththisfeedback";
+
+    /// The frame as the pane actually draws it, blank lines and all. Taking the
+    /// last sixteen lines of this reaches only the second option.
+    #[test]
+    fn the_blank_lines_a_pane_redraws_do_not_hide_the_question() {
+        let frame = "Claude has written up a plan and is ready to execute. Would you like to proceed?\n\n\n❯1.Yes,anduseautomode\n\n\n2.Yes,manuallyapproveedits\n\n\n3.TellClaudewhattochange\n\n\nshift+tabtoapprovewiththisfeedback\n\n\n\n\n\nctrl+gtoeditinVim·~/.claude/plans/one.md\n\n\n";
+
+        assert!(super::plan_is_waiting(frame));
+        assert!(asking_the_human(frame));
+    }
+
+    #[test]
+    fn a_plan_waiting_to_run_is_a_question() {
+        assert!(asking_the_human(PLAN_PICKER));
+        assert!(super::plan_is_waiting(PLAN_PICKER));
+    }
+
+    #[test]
+    fn it_is_answered_the_way_the_agent_was_hired_to_work() {
+        assert_eq!(super::answer_for_the_plan(Some("bypassPermissions")), "1");
+        assert_eq!(super::answer_for_the_plan(Some("acceptEdits")), "1");
+        assert_eq!(super::answer_for_the_plan(Some("default")), "2");
+        assert_eq!(super::answer_for_the_plan(None), "2");
+    }
+
+    #[test]
+    fn an_ordinary_permission_question_is_not_a_plan() {
+        let frame = "❯ No, exit\n  Yes, I trust this folder\nEnter to confirm · Esc to cancel";
+        assert!(!super::plan_is_waiting(frame));
+    }
 
     /// Measured off a live pane: Claude asking whether the folder is trusted,
     /// with the hint line as the frame actually carried it.
