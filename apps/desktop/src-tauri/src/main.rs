@@ -1,10 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use agentland_core::{generate_token, serve, PtyManager, ServerConfig};
 use serde::Serialize;
 use tauri::Manager;
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 const DEFAULT_PORT: u16 = 9470;
 
@@ -204,6 +206,10 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
+        // The window opens where it was left, at the size it was left. The
+        // panel layout already survived a restart; the window around it did
+        // not, so every start began by dragging it back.
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(endpoint)
         .invoke_handler(tauri::generate_handler![core_endpoint, updater_status, save_capture, open_pane_window, close_pane_window])
         .setup(move |app| {
@@ -213,6 +219,39 @@ fn main() {
             tauri::async_runtime::spawn(async move {
                 if let Err(error) = serve(manager, config).await {
                     tracing::error!(%error, "core server stopped");
+                }
+            });
+
+            // The plugin writes the window's size and place when the app exits
+            // cleanly, which is not how it always ends: a rebuild, a crash or a
+            // kill leaves nothing, and the next start is back to the default
+            // 1480x920. So a move or a resize marks it, and the mark is written
+            // out a few seconds later — a small file, written only after
+            // something changed.
+            let handle = app.handle().clone();
+            let moved_or_resized = Arc::new(AtomicBool::new(false));
+            let watching = moved_or_resized.clone();
+
+            if let Some(window) = app.get_webview_window("main") {
+                window.on_window_event(move |event| {
+                    if matches!(
+                        event,
+                        tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_)
+                    ) {
+                        watching.store(true, Ordering::Relaxed);
+                    }
+                });
+            }
+
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+                    if moved_or_resized.swap(false, Ordering::Relaxed) {
+                        if let Err(error) = handle.save_window_state(StateFlags::all()) {
+                            tracing::warn!(%error, "cannot remember where the window is");
+                        }
+                    }
                 }
             });
 
