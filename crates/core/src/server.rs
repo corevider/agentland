@@ -99,6 +99,7 @@ struct AppState {
     /// transcripts. This app makes none of the requests it is throttling, so
     /// the only honest way to count them is to read what the engines wrote.
     journal: Arc<crate::journal::Journal>,
+    goals: Arc<crate::goals::Goals>,
     /// What a person has already said one project may run without asking.
     permits: Arc<crate::permits::Permits>,
     spending: Arc<parking_lot::Mutex<BTreeMap<String, crate::meter::Window>>>,
@@ -181,6 +182,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         crew_words: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
         notices: Arc::new(crate::notices::Notices::default()),
         journal: Arc::new(crate::journal::Journal::new(data_dir.clone())),
+        goals: Arc::new(crate::goals::Goals::new(data_dir.clone())),
         permits: Arc::new(crate::permits::Permits::new(data_dir.clone())),
         quota: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
         spending: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
@@ -280,6 +282,8 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/approvals/{id}", post(answer_approval))
         .route("/budget", get(read_budget).post(set_ceilings))
         .route("/journal", get(read_journal))
+        .route("/goals", get(read_goals))
+        .route("/repos/{id}/goal", post(set_goal).delete(clear_goal))
         .route("/permits", get(read_permits).delete(forget_permit))
         .route("/stacks", get(list_starters))
         .route("/repos/{id}/commander", post(ignite))
@@ -2193,7 +2197,7 @@ async fn take_the_project_back_on(
         return;
     };
 
-    let brief = take_the_project_on(&repository);
+    let brief = what_it_is_for(&repository, state.goals.for_project(&repository.id).as_ref());
 
     // A resumed conversation carries what was already said, so handing the same
     // brief again reads as a stutter — the commander said as much: "if the
@@ -3930,6 +3934,20 @@ fn desk_for(state: &AppState, repository_id: &str) -> Result<Worktree, ApiError>
 }
 
 /// What a commander is told when nobody has given it a goal yet.
+fn what_it_is_for(repository: &Repository, goal: Option<&crate::goals::Goal>) -> String {
+    match goal {
+        Some(held) => format!(
+            "You are commanding {}. What is being asked for, in the words of the person who \
+             asked: \"{}\" Read the project and the board first, then say how you would do it \
+             and what crew that needs. Hire only for work you can name. When it is done, say so \
+             — it stands until somebody says otherwise, and you will be handed it again every \
+             time you come back.",
+            repository.name, held.text
+        ),
+        None => take_the_project_on(repository),
+    }
+}
+
 fn take_the_project_on(repository: &Repository) -> String {
     format!(
         "You are commanding {}. Nobody has handed you a goal yet, so start by reading the project: \
@@ -4067,13 +4085,25 @@ async fn ignite(
         .ok_or_else(|| ApiError(anyhow::anyhow!("{}'s worktree is gone", commander.name)))?
         .worktree;
 
-    let base = body
+    // A brief handed to the ignition is what the person wants doing, so it is
+    // written down as the project's goal rather than only typed at a pane. A
+    // pane is traded for a fresh one when it fills, and whatever was only ever
+    // said to it goes with it.
+    let asked_for = body
         .brief
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| take_the_project_on(&repository));
+        .filter(|value| !value.is_empty());
+
+    if let Some(text) = asked_for {
+        if state.goals.set(&repository.id, text, "a person", now_secs()).is_some() {
+            note(&state, "goal.set", "a person", &repository.id, text);
+        }
+    }
+
+    let base = asked_for.map(str::to_owned).unwrap_or_else(|| {
+        what_it_is_for(&repository, state.goals.for_project(&repository.id).as_ref())
+    });
 
     let brief = compose_brief(&state, &commander, &base).await;
     match hand_the_work_over(&state, &commander, &worktree.path, &brief).await? {
@@ -4170,6 +4200,50 @@ async fn forget_permit(
     state.crew.set_learned(state.permits.everything());
     note(&state, "permit.revoked", "a person", &body.repository_id, &body.rule);
 
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct SetGoal {
+    text: String,
+}
+
+/// What a project is for, in the words of the person who asked for it.
+///
+/// Kept here rather than in a pane so it survives the pane: every time a
+/// commander comes back, or is traded for a fresh session, it is handed this
+/// again.
+async fn set_goal(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<SetGoal>,
+) -> Result<Json<crate::goals::Goal>, ApiError> {
+    if !state.repos.repositories().into_iter().any(|held| held.id == id) {
+        return Err(anyhow::anyhow!("there is no project called {id}").into());
+    }
+
+    let goal = state
+        .goals
+        .set(&id, &body.text, "a person", now_secs())
+        .ok_or_else(|| anyhow::anyhow!("a goal is a paragraph: not empty, and not an essay"))?;
+
+    note(&state, "goal.set", "a person", &id, &goal.text);
+    Ok(Json(goal))
+}
+
+async fn read_goals(State(state): State<AppState>) -> Json<Vec<crate::goals::Goal>> {
+    Json(state.goals.everything())
+}
+
+async fn clear_goal(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    if !state.goals.clear(&id) {
+        return Err(anyhow::anyhow!("{id} has no goal standing").into());
+    }
+
+    note(&state, "goal.cleared", "a person", &id, "");
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -449,6 +449,32 @@ export interface Ignited {
 ///
 /// The same call whether there is nobody yet, somebody stopped, or somebody
 /// already working — the core decides which of the three it is.
+/// What a project is for, in the words of the person who asked.
+///
+/// Kept by the core rather than in a pane, because a pane traded for a fresh
+/// one takes everything said to it with it.
+export interface Goal {
+    repository_id: string;
+    text: string;
+    set_by: string;
+    at: number;
+}
+
+export function read_goals(): Promise<Goal[]> {
+    return request<Goal[]>("/goals");
+}
+
+export function set_goal(repository_id: string, text: string): Promise<Goal> {
+    return request<Goal>(`/repos/${encodeURIComponent(repository_id)}/goal`, {
+        method: "POST",
+        body: JSON.stringify({ text }),
+    });
+}
+
+export function clear_goal(repository_id: string): Promise<void> {
+    return request<void>(`/repos/${encodeURIComponent(repository_id)}/goal`, { method: "DELETE" });
+}
+
 export function ignite_commander(repository_id: string, brief?: string): Promise<Ignited> {
     return request<Ignited>(`/repos/${encodeURIComponent(repository_id)}/commander`, {
         method: "POST",

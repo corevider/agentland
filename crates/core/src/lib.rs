@@ -11,6 +11,7 @@ pub mod dispatch;
 pub mod embed;
 pub mod files;
 pub mod gateway;
+pub mod goals;
 pub mod journal;
 pub mod mail;
 pub mod memory;

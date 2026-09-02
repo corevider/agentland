@@ -2,6 +2,9 @@ import { use_poll } from "@/lib/poll";
 import { useCallback, useEffect, useState } from "react";
 
 import {
+    clear_goal,
+    read_goals,
+    set_goal,
     ignite_commander,
     list_plans,
     list_repos,
@@ -11,6 +14,7 @@ import {
     type Plan,
     type PlanStep,
     type ReadyStep,
+    type Goal,
     type Repository,
     type Watch,
 } from "@/lib/core";
@@ -32,18 +36,23 @@ export function CommanderPanel({ active }: { active: boolean }) {
     const [repos, set_repos] = useState<Repository[]>([]);
     const [igniting, set_igniting] = useState<string | null>(null);
     const [notice, set_notice] = useState<string | null>(null);
+    const [goals, set_goals] = useState<Goal[]>([]);
+    const [writing, set_writing] = useState<string | null>(null);
+    const [draft, set_draft] = useState("");
 
     const refresh = useCallback(async () => {
-        const [held, next, watching, known] = await Promise.all([
+        const [held, next, watching, known, wanted] = await Promise.all([
             list_plans(),
             ready_steps(),
             supervisor_watches(),
             list_repos(),
+            read_goals(),
         ]);
         set_plans(held);
         set_ready(next);
         set_watches(watching);
         set_repos(known);
+        set_goals(wanted);
     }, []);
 
     use_poll(() => {
@@ -56,6 +65,33 @@ export function CommanderPanel({ active }: { active: boolean }) {
     const mine = repositories ? repos.filter((repo) => repositories.includes(repo.id)) : repos;
     const commander_of = (repository_id: string) =>
         crew.find((agent) => agent.role === "commander" && agent.repository_id === repository_id);
+
+    const save_goal = useCallback(
+        async (repository_id: string) => {
+            try {
+                await set_goal(repository_id, draft);
+                set_writing(null);
+                set_notice(null);
+                await refresh();
+            } catch (cause) {
+                set_notice(cause instanceof Error ? cause.message : String(cause));
+            }
+        },
+        [draft, refresh],
+    );
+
+    const drop_goal = useCallback(
+        async (repository_id: string) => {
+            try {
+                await clear_goal(repository_id);
+                set_notice(null);
+                await refresh();
+            } catch (cause) {
+                set_notice(cause instanceof Error ? cause.message : String(cause));
+            }
+        },
+        [refresh],
+    );
 
     const ignite = useCallback(
         async (repository_id: string) => {
@@ -96,8 +132,11 @@ export function CommanderPanel({ active }: { active: boolean }) {
                     const held = commander_of(repo.id);
                     const at_work = Boolean(held?.session_id);
 
+                    const goal = goals.find((held) => held.repository_id === repo.id);
+
                     return (
-                        <div key={repo.id} className="flex flex-wrap items-center gap-2">
+                        <div key={repo.id} className="flex flex-col gap-1">
+                        <div className="flex flex-wrap items-center gap-2">
                             <span className="font-mono text-[11px] text-linen">{repo.name}</span>
                             <span className="font-mono text-[10px] text-shade">
                                 {held
@@ -129,6 +168,57 @@ export function CommanderPanel({ active }: { active: boolean }) {
                                     open its pane
                                 </button>
                             ) : null}
+                        </div>
+
+                        {writing === repo.id ? (
+                            <div className="flex flex-wrap items-center gap-2 pl-1">
+                                <input
+                                    className="min-w-0 flex-1 rounded-md border border-reef bg-lagoon px-2 py-1 font-mono text-[11px]"
+                                    autoFocus
+                                    placeholder="what this project is for, in your words"
+                                    value={draft}
+                                    onChange={(event) => set_draft(event.target.value)}
+                                    onKeyDown={(event) => {
+                                        if (event.key === "Enter") {
+                                            void save_goal(repo.id);
+                                        }
+                                        if (event.key === "Escape") {
+                                            set_writing(null);
+                                        }
+                                    }}
+                                />
+                                <button
+                                    className="rounded-md border border-turquoise px-2 py-0.5 font-mono text-[11px] text-turquoise"
+                                    onClick={() => void save_goal(repo.id)}
+                                >
+                                    set
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="flex flex-wrap items-baseline gap-2 pl-1">
+                                <span className="min-w-0 flex-1 font-mono text-[10px] text-shell">
+                                    {goal ? `“${goal.text}”` : "no goal standing — X will read the project and ask"}
+                                </span>
+                                <button
+                                    className="shrink-0 font-mono text-[10px] text-shade hover:text-turquoise"
+                                    onClick={() => {
+                                        set_draft(goal?.text ?? "");
+                                        set_writing(repo.id);
+                                    }}
+                                >
+                                    {goal ? "change it" : "set a goal"}
+                                </button>
+                                {goal ? (
+                                    <button
+                                        className="shrink-0 font-mono text-[10px] text-shade hover:text-coral"
+                                        onClick={() => void drop_goal(repo.id)}
+                                        title="it is done, or it was never the thing"
+                                    >
+                                        it is done
+                                    </button>
+                                ) : null}
+                            </div>
+                        )}
                         </div>
                     );
                 })}
