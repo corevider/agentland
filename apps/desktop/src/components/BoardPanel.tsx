@@ -14,7 +14,7 @@ import {
     list_repos,
     list_tasks,
     merge_worktree,
-    move_task,
+    place_task,
     open_pull_request,
     review_worktree,
     type Agent,
@@ -44,6 +44,15 @@ function patch_line_color(line: string): string {
     return "text-driftwood";
 }
 
+/// Cards in the order they were placed, oldest id first for the ones written
+/// before there was an order to place them in.
+function in_order(tasks: Task[]): Task[] {
+    return [...tasks].sort((one, other) => {
+        const gap = (one.position ?? 0) - (other.position ?? 0);
+        return gap !== 0 ? gap : one.id.localeCompare(other.id);
+    });
+}
+
 export function BoardPanel({ active, repositories }: { active: boolean; repositories: string[] | null }) {
     const columns = use_sideways_wheel<HTMLDivElement>();
     const [all_tasks, set_tasks] = useState<Task[]>([]);
@@ -54,6 +63,10 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
     const [repos, set_repos] = useState<Repository[]>([]);
     const [draft, set_draft] = useState({ title: "", body: "", repository_id: "" });
     const [review, set_review] = useState<{ task: Task; data: Review } | null>(null);
+    /// Where the card being dragged would land: the column, and the card it
+    /// would sit above (null meaning the bottom). Drawn, so a drop is aimed
+    /// rather than guessed.
+    const [aiming, set_aiming] = useState<{ column: Column; before: string | null } | null>(null);
     // The id rather than the card: the board polls, and a card held by value
     // would stop changing the moment it was opened.
     const [opened, set_opened] = useState<string | null>(null);
@@ -161,12 +174,29 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                             // the row scrolls. Fixed at 150px they left the rest
                             // of a wide panel empty and pushed "done" off the
                             // edge of a narrow one with room to spare.
-                            className="flex min-h-0 min-w-[150px] flex-1 flex-col rounded-md border border-reef bg-lagoon"
-                            onDragOver={(event) => event.preventDefault()}
+                            className={`flex min-h-0 min-w-[150px] flex-1 flex-col rounded-md border bg-lagoon ${
+                                aiming?.column === column
+                                    ? "border-turquoise bg-lagoon-deep"
+                                    : "border-reef"
+                            }`}
+                            onDragOver={(event) => {
+                                event.preventDefault();
+                                if (aiming?.column !== column || aiming?.before !== null) {
+                                    set_aiming({ column, before: null });
+                                }
+                            }}
+                            onDragLeave={(event) => {
+                                if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+                                    set_aiming((held) => (held?.column === column ? null : held));
+                                }
+                            }}
                             onDrop={(event) => {
+                                event.preventDefault();
                                 const id = event.dataTransfer.getData("text/plain");
+                                const before = aiming?.column === column ? aiming.before : null;
+                                set_aiming(null);
                                 if (id) {
-                                    void run(() => move_task(id, column));
+                                    void run(() => place_task(id, column, before ?? undefined));
                                 }
                             }}
                         >
@@ -175,11 +205,15 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                             </header>
 
                             <Column
-                                tasks={tasks.filter((task) => task.column === column)}
+                                tasks={in_order(tasks.filter((task) => task.column === column))}
                                 render={(task) => (
                                     <BoardCard
                                         key={task.id}
                                         task={task}
+                                        aimed_above={
+                                            aiming?.column === column && aiming.before === task.id
+                                        }
+                                        on_aim={(before) => set_aiming({ column, before })}
                                         agents={agents}
                                         on_open={() => set_opened(task.id)}
                                         on_assign={(agent_id) => run(() => assign_task(task.id, agent_id))}
@@ -472,6 +506,8 @@ function CardDetail({
 function BoardCard({
     task,
     agents,
+    aimed_above,
+    on_aim,
     on_open,
     on_assign,
     on_review,
@@ -479,6 +515,9 @@ function BoardCard({
 }: {
     task: Task;
     agents: Agent[];
+    /// The dragged card would land immediately above this one.
+    aimed_above?: boolean;
+    on_aim?: (before: string | null) => void;
     on_open: () => void;
     on_assign: (agent_id: string) => void;
     on_review: () => void;
@@ -491,8 +530,20 @@ function BoardCard({
                             onDragStart={(event) =>
                                 event.dataTransfer.setData("text/plain", task.id)
                             }
+                            // Above or below, by which half of the card the
+                            // pointer is over — the same question a person is
+                            // asking while they hold it there.
+                            onDragOver={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                const box = event.currentTarget.getBoundingClientRect();
+                                const above = event.clientY < box.top + box.height / 2;
+                                on_aim?.(above ? task.id : null);
+                            }}
                             onClick={on_open}
-                            className="cursor-grab border border-reef bg-lagoon p-2 rounded-lg"
+                            className={`cursor-grab border bg-lagoon p-2 rounded-lg ${
+                                aimed_above ? "border-reef mt-2 shadow-[0_-3px_0_-1px_var(--tw-shadow-color)] shadow-turquoise" : "border-reef"
+                            }`}
                         >
                             <div className="flex items-baseline justify-between gap-2">
                                 <span className="text-[11px] text-linen">{task.title}</span>

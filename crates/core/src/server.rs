@@ -258,6 +258,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/tasks", get(list_tasks).post(create_task))
         .route("/tasks/{id}", delete(delete_task))
         .route("/tasks/{id}/move", post(move_task))
+        .route("/tasks/{id}/place", post(place_task))
         .route("/tasks/{id}/project", post(take_task_to))
         .route("/tasks/{id}/assign", post(assign_task).delete(release_task))
         .route("/dispatch", get(dispatch_status))
@@ -2000,6 +2001,23 @@ async fn move_task(
     Json(body): Json<MoveTask>,
 ) -> Result<Json<Task>, ApiError> {
     Ok(Json(state.board.move_to(&id, body.column)?))
+}
+
+#[derive(Deserialize)]
+struct PlaceTask {
+    column: crate::board::Column,
+    /// The card it should sit above. Left out, it goes to the bottom.
+    #[serde(default)]
+    before: Option<String>,
+}
+
+/// Drop a card into a column, in a particular place among the cards there.
+async fn place_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<PlaceTask>,
+) -> Result<Json<Task>, ApiError> {
+    Ok(Json(state.board.place(&id, body.column, body.before.as_deref())?))
 }
 
 #[derive(Deserialize)]

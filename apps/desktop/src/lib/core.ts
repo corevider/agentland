@@ -1021,6 +1021,8 @@ export interface Task {
     worktree: string | null;
     branch: string | null;
     evidence: Entry[];
+    /// Where it sits in its column, smallest first.
+    position?: number;
 }
 
 export interface CommitInfo {
@@ -1048,6 +1050,14 @@ export interface PullRequestResult {
 
 export function list_tasks(): Promise<Task[]> {
     return request<Task[]>("/tasks");
+}
+
+/// Drop a card into a column, above `before` — or at the bottom without one.
+export function place_task(id: string, column: Column, before?: string): Promise<Task> {
+    return request<Task>(`/tasks/${encodeURIComponent(id)}/place`, {
+        method: "POST",
+        body: JSON.stringify(before ? { column, before } : { column }),
+    });
 }
 
 export function create_task(title: string, body: string, repository_id: string): Promise<Task> {

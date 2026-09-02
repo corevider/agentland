@@ -135,6 +135,13 @@ pub struct Task {
     /// record it — shown as "no date" rather than as the epoch.
     #[serde(default)]
     pub at: u64,
+    /// Where it sits among the cards in its column, smallest first.
+    ///
+    /// A fraction rather than an index so a card dropped between two others
+    /// takes the midpoint and nothing else has to be renumbered. Cards written
+    /// before anyone could order them share zero and fall back to their id.
+    #[serde(default)]
+    pub position: f64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -211,6 +218,13 @@ impl Board {
             branch: None,
             evidence: Vec::new(),
             at: now_secs(),
+            position: state
+                .tasks
+                .values()
+                .filter(|held| held.column == Column::Backlog)
+                .map(|held| held.position)
+                .fold(0.0_f64, f64::max)
+                + 1.0,
         };
 
         state.tasks.insert(id, task.clone());
@@ -365,6 +379,62 @@ impl Board {
         Ok(updated)
     }
 
+    /// Put a card in a column, in a particular place among the cards there.
+    ///
+    /// `before` names the card it should sit above; nothing means the bottom.
+    /// Dropping between two cards used to be impossible — a card could only
+    /// change column, and arrived wherever the list happened to put it.
+    pub fn place(&self, id: &str, column: Column, before: Option<&str>) -> Result<Task> {
+        let mut state = self.state.lock();
+
+        if !state.tasks.contains_key(id) {
+            bail!("unknown task: {id}");
+        }
+
+        let mut order: Vec<(String, f64)> = state
+            .tasks
+            .values()
+            .filter(|held| held.column == column && held.id != id)
+            .map(|held| (held.id.clone(), held.position))
+            .collect();
+        order.sort_by(|one, other| one.1.total_cmp(&other.1));
+
+        let seat = before
+            .and_then(|wanted| order.iter().position(|(held, _)| held == wanted))
+            .unwrap_or(order.len());
+
+        let above = seat.checked_sub(1).and_then(|n| order.get(n)).map(|held| held.1);
+        let below = order.get(seat).map(|held| held.1);
+
+        // Renumber the column when the gap has been split past what a float can
+        // hold, so the drop lands where it was aimed rather than on top of a
+        // neighbour.
+        if too_close(above, below) {
+            for (n, (held, _)) in order.iter().enumerate() {
+                if let Some(task) = state.tasks.get_mut(held) {
+                    task.position = n as f64;
+                }
+            }
+
+            let above = seat.checked_sub(1).map(|n| n as f64);
+            let below = if seat < order.len() { Some(seat as f64) } else { None };
+            let wanted = placed_between(above, below);
+
+            let task = state.tasks.get_mut(id).expect("checked above");
+            task.column = column;
+            task.position = wanted;
+        } else {
+            let wanted = placed_between(above, below);
+            let task = state.tasks.get_mut(id).expect("checked above");
+            task.column = column;
+            task.position = wanted;
+        }
+
+        let moved = state.tasks.get(id).expect("checked above").clone();
+        self.persist(&state);
+        Ok(moved)
+    }
+
     pub fn delete(&self, id: &str) -> Result<()> {
         let mut state = self.state.lock();
         state
@@ -405,6 +475,29 @@ impl Board {
         state.tasks.remove(id);
         self.persist(&state);
         Ok(discarded)
+    }
+}
+
+/// The position for a card dropped between two others.
+///
+/// Nothing above it means the top of the column, nothing below means the
+/// bottom; between two, the midpoint. Fractions run out eventually — after
+/// about fifty splits in the same gap — and the board renumbers that column
+/// rather than letting two cards claim one place.
+pub fn placed_between(above: Option<f64>, below: Option<f64>) -> f64 {
+    match (above, below) {
+        (None, None) => 0.0,
+        (None, Some(below)) => below - 1.0,
+        (Some(above), None) => above + 1.0,
+        (Some(above), Some(below)) => (above + below) / 2.0,
+    }
+}
+
+/// Whether a gap has been split so often the numbers no longer separate.
+pub fn too_close(above: Option<f64>, below: Option<f64>) -> bool {
+    match (above, below) {
+        (Some(above), Some(below)) => (below - above).abs() < f64::EPSILON * 8.0,
+        _ => false,
     }
 }
 
@@ -665,6 +758,103 @@ mod tests {
         for held in [Column::Review, Column::Ready, Column::Done, Column::Backlog] {
             assert_eq!(where_a_settled_card_goes(held, 5), None, "{held:?} is not the app's to change");
         }
+    }
+
+    #[test]
+    fn a_card_dropped_between_two_others_lands_between_them() {
+        let board = board("place-between");
+        let first = a_card(&board, None);
+        let second = a_card(&board, None);
+        let third = a_card(&board, None);
+
+        let moved = board
+            .place(&third.id, Column::Backlog, Some(&second.id))
+            .expect("it moves");
+
+        let mut held: Vec<(String, f64)> = board
+            .list()
+            .into_iter()
+            .filter(|task| task.column == Column::Backlog)
+            .map(|task| (task.id, task.position))
+            .collect();
+        held.sort_by(|one, other| one.1.total_cmp(&other.1));
+
+        assert_eq!(
+            held.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            vec![first.id.as_str(), moved.id.as_str(), second.id.as_str()],
+            "it sits above the card it was dropped on"
+        );
+    }
+
+    #[test]
+    fn a_card_dropped_on_nothing_goes_to_the_bottom() {
+        let board = board("place-bottom");
+        let first = a_card(&board, None);
+        let second = a_card(&board, None);
+
+        board.place(&first.id, Column::Backlog, None).expect("it moves");
+
+        let mut held: Vec<(String, f64)> = board
+            .list()
+            .into_iter()
+            .map(|task| (task.id, task.position))
+            .collect();
+        held.sort_by(|one, other| one.1.total_cmp(&other.1));
+
+        assert_eq!(held.last().map(|(id, _)| id.as_str()), Some(first.id.as_str()));
+        assert_eq!(held.first().map(|(id, _)| id.as_str()), Some(second.id.as_str()));
+    }
+
+    #[test]
+    fn placing_moves_the_column_too() {
+        let board = board("place-column");
+        let card = a_card(&board, None);
+
+        let moved = board.place(&card.id, Column::Review, None).expect("it moves");
+
+        assert_eq!(moved.column, Column::Review);
+    }
+
+    #[test]
+    fn the_midpoint_is_taken_and_the_ends_step_outward() {
+        assert_eq!(placed_between(Some(1.0), Some(2.0)), 1.5);
+        assert_eq!(placed_between(None, Some(1.0)), 0.0);
+        assert_eq!(placed_between(Some(4.0), None), 5.0);
+        assert_eq!(placed_between(None, None), 0.0);
+    }
+
+    #[test]
+    fn a_gap_split_past_what_a_float_holds_is_renumbered() {
+        let board = board("place-crowded");
+        let first = a_card(&board, None);
+        let second = a_card(&board, None);
+        let mover = a_card(&board, None);
+
+        // Squeeze the two neighbours together until nothing fits between them.
+        {
+            let mut state = board.state.lock();
+            state.tasks.get_mut(&first.id).unwrap().position = 1.0;
+            state.tasks.get_mut(&second.id).unwrap().position = 1.0 + f64::EPSILON;
+        }
+
+        assert!(too_close(Some(1.0), Some(1.0 + f64::EPSILON)));
+
+        board
+            .place(&mover.id, Column::Backlog, Some(&second.id))
+            .expect("it still lands");
+
+        let mut held: Vec<(String, f64)> = board
+            .list()
+            .into_iter()
+            .map(|task| (task.id, task.position))
+            .collect();
+        held.sort_by(|one, other| one.1.total_cmp(&other.1));
+
+        assert_eq!(
+            held.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            vec![first.id.as_str(), mover.id.as_str(), second.id.as_str()],
+            "renumbering keeps the order the drop asked for"
+        );
     }
 
     #[test]
