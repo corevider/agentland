@@ -405,11 +405,11 @@ export function TerminalPane({ session, crowned, focused, on_focus, on_metrics, 
                 <span className={`size-[7px] shrink-0 rounded-full ${tint}`} title={state} />
                 {crowned ? (
                     <span
-                        className="shrink-0 text-[11px] leading-none"
+                        className="flex shrink-0 items-center rounded bg-sun px-1.5 py-[2px] text-[13px] leading-none text-lagoon-deep shadow-[0_0_10px_rgba(240,180,60,0.35)]"
                         title="the commander of this project — it hands the work out"
                         aria-label="commander"
                     >
-                        ♔
+                        ♚
                     </span>
                 ) : null}
                 <span
