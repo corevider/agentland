@@ -10,13 +10,16 @@ import {
     list_engines,
     list_repos,
     list_worktrees,
+    read_holdings,
     session_stats,
     start_agent,
     stop_agent,
     type Agent,
     type Engine,
+    type Holdings,
     type SessionInfo,
 } from "@/lib/core";
+import { what_is_held } from "@/lib/leaving";
 
 const ROLES = ["implementer", "reviewer", "tester", "researcher", "ops", "commander"];
 
@@ -50,6 +53,7 @@ export function CrewPanel({ active, on_open_session }: Props) {
     const [busy, set_busy] = useState(false);
     const [activity, set_activity] = useState<Record<string, SessionInfo>>({});
     const [now, set_now] = useState(() => Math.floor(Date.now() / 1000));
+    const [leaving, set_leaving] = useState<{ agent: Agent; holdings: Holdings } | null>(null);
 
     const refresh = useCallback(async () => {
         const [available, crew, repos] = await Promise.all([
@@ -327,7 +331,12 @@ export function CrewPanel({ active, on_open_session }: Props) {
                             <button
                                 className="border border-coral rounded-md px-1.5 py-0.5 text-[11px] text-coral disabled:opacity-40"
                                 disabled={busy}
-                                onClick={() => run(() => dismiss_agent(agent.id))}
+                                onClick={() =>
+                                    run(async () => {
+                                        const holdings = await read_holdings(agent.id);
+                                        set_leaving({ agent, holdings });
+                                    })
+                                }
                             >
                                 dismiss
                             </button>
@@ -335,6 +344,61 @@ export function CrewPanel({ active, on_open_session }: Props) {
                     </div>
                 ))}
             </section>
+
+            {leaving ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-abyss/70 p-6">
+                    <div className="flex w-full max-w-md flex-col gap-3 rounded-lg border border-reef bg-lagoon-deep p-4">
+                        <h3 className="font-mono text-[12px] text-linen">
+                            Let {leaving.agent.name} go?
+                        </h3>
+
+                        {what_is_held(leaving.holdings).length === 0 ? (
+                            <p className="font-mono text-[11px] text-shade">
+                                Nothing in hand — no cards, no pane, nothing uncommitted. Its
+                                worktree stays where it is.
+                            </p>
+                        ) : (
+                            <div className="flex flex-col gap-1">
+                                <p className="font-mono text-[11px] text-sun">
+                                    It is still holding this:
+                                </p>
+                                <ul className="flex flex-col gap-0.5">
+                                    {what_is_held(leaving.holdings).map((line) => (
+                                        <li key={line} className="font-mono text-[11px] text-shell">
+                                            · {line}
+                                        </li>
+                                    ))}
+                                </ul>
+                                <p className="font-mono text-[10px] text-shade">
+                                    Dismissing cannot be undone. Its worktree
+                                    {leaving.holdings.worktree ? ` (${leaving.holdings.worktree})` : ""} is
+                                    left on disk, so anything committed there is still reachable.
+                                </p>
+                            </div>
+                        )}
+
+                        <div className="flex justify-end gap-2">
+                            <button
+                                className="rounded-lg border border-reef px-2 py-1 font-mono text-[11px] text-shell"
+                                onClick={() => set_leaving(null)}
+                            >
+                                keep them
+                            </button>
+                            <button
+                                className="rounded-lg border border-coral px-2 py-1 font-mono text-[11px] text-coral disabled:opacity-40"
+                                disabled={busy}
+                                onClick={() => {
+                                    const held = leaving;
+                                    set_leaving(null);
+                                    void run(() => dismiss_agent(held.agent.id, true));
+                                }}
+                            >
+                                dismiss {leaving.agent.name}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            ) : null}
         </div>
     );
 }

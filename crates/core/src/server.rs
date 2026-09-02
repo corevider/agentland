@@ -242,6 +242,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/engines", get(list_engines))
         .route("/agents", get(list_agents).post(hire_agent))
         .route("/agents/{id}", delete(dismiss_agent).post(shape_agent))
+        .route("/agents/{id}/holdings", get(read_holdings))
         .route("/agents/{id}/start", post(start_agent))
         .route("/agents/{id}/stop", post(stop_agent))
         .route("/tasks", get(list_tasks).post(create_task))
@@ -3473,10 +3474,152 @@ async fn shape_agent(
     )?))
 }
 
+#[derive(Serialize)]
+struct HeldCard {
+    id: String,
+    title: String,
+    column: crate::board::Column,
+}
+
+/// What an agent still has in hand.
+///
+/// Dismissing is not undoable and the agent is the only thing that knows where
+/// its work got to, so this is read before the question is put to anybody.
+#[derive(Serialize)]
+struct Holdings {
+    cards: Vec<HeldCard>,
+    pane_running: bool,
+    /// Files changed in its worktree that were never committed.
+    uncommitted: usize,
+    /// Commits on its branch that are not on the base branch.
+    unpushed: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worktree: Option<String>,
+    /// True when there is nothing to lose, so the caller can say so plainly.
+    empty_handed: bool,
+}
+
+fn holdings_of(state: &AppState, agent: &crate::crew::Agent) -> Holdings {
+    let cards: Vec<HeldCard> = state
+        .board
+        .list()
+        .into_iter()
+        .filter(|task| task.assignee.as_deref() == Some(agent.id.as_str()))
+        // A finished card is not work in hand. Counting it made every agent
+        // that had ever completed anything look like it was mid-something.
+        .filter(|task| task.column != crate::board::Column::Done)
+        .map(|task| HeldCard {
+            id: task.id,
+            title: task.title,
+            column: task.column,
+        })
+        .collect();
+
+    let held = state
+        .repos
+        .worktrees()
+        .into_iter()
+        .find(|status| {
+            status.worktree.repository_id == agent.repository_id
+                && status.worktree.name == agent.worktree
+        });
+
+    let pane_running = agent
+        .session_id
+        .as_ref()
+        .is_some_and(|id| state.manager.get(id).is_some());
+
+    let uncommitted = held.as_ref().map_or(0, |status| status.dirty_files);
+    let unpushed = held.as_ref().map_or(0, |status| status.ahead);
+
+    Holdings {
+        empty_handed: cards.is_empty() && !pane_running && uncommitted == 0 && unpushed == 0,
+        cards,
+        pane_running,
+        uncommitted,
+        unpushed,
+        worktree: held.map(|status| status.worktree.path.to_string_lossy().into_owned()),
+    }
+}
+
+/// What is in hand, in one line, or nothing at all when the hands are empty.
+fn holding_says(holding: &Holdings) -> Option<String> {
+    let mut says = Vec::new();
+
+    if !holding.cards.is_empty() {
+        says.push(format!("{} unfinished card(s)", holding.cards.len()));
+    }
+    if holding.pane_running {
+        says.push("a pane still open".to_owned());
+    }
+    if holding.uncommitted > 0 {
+        says.push(format!("{} uncommitted file(s)", holding.uncommitted));
+    }
+    if holding.unpushed > 0 {
+        says.push(format!(
+            "{} commit(s) not on the base branch",
+            holding.unpushed
+        ));
+    }
+
+    (!says.is_empty()).then(|| says.join(", "))
+}
+
+async fn read_holdings(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Holdings>, ApiError> {
+    let agent = state
+        .crew
+        .list()
+        .into_iter()
+        .find(|held| held.id == id)
+        .ok_or_else(|| anyhow::anyhow!("unknown agent: {id}"))?;
+
+    Ok(Json(holdings_of(&state, &agent)))
+}
+
+#[derive(Deserialize)]
+struct Dismissal {
+    /// Set once somebody has been shown what the agent is holding and said to
+    /// go ahead anyway.
+    #[serde(default)]
+    anyway: bool,
+}
+
+/// Let an agent go.
+///
+/// Cards it held go back to the board rather than pointing at somebody who is
+/// no longer there — a dismissed agent left a card reading `assignee: ro` with
+/// no ro to ask about it.
 async fn dismiss_agent(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(ask): Query<Dismissal>,
 ) -> Result<StatusCode, ApiError> {
+    let agent = state.crew.list().into_iter().find(|held| held.id == id);
+
+    if let Some(agent) = &agent {
+        let holding = holdings_of(&state, agent);
+
+        // The guard is here rather than only in the panel: the same call is
+        // reachable from the tools the crew itself is handed.
+        if let Some(says) = holding_says(&holding) {
+            if !ask.anyway {
+                return Err(
+                    anyhow::anyhow!("{id} is holding {says} — dismiss it anyway to let it go")
+                        .into(),
+                );
+            }
+        }
+
+        for card in holding.cards {
+            if state.board.release(&card.id).is_ok() {
+                note(&state, "card.released", "a person", &card.id, &format!("{id} was dismissed"));
+            }
+        }
+    }
+
     state.crew.dismiss(&id)?;
     state.skills.forget_agent(&id);
     Ok(StatusCode::NO_CONTENT)
@@ -4914,5 +5057,49 @@ mod news_tests {
         let text = super::news_text(&[settled("p12s2", "t359")]);
 
         assert!(text.contains("p12s2 (t359)"), "{text}");
+    }
+}
+
+#[cfg(test)]
+mod leaving_tests {
+    use super::{holding_says, Holdings};
+
+    fn holding(cards: usize, pane: bool, uncommitted: usize, unpushed: u32) -> Holdings {
+        Holdings {
+            cards: (0..cards)
+                .map(|n| super::HeldCard {
+                    id: format!("t{n}"),
+                    title: "something".to_owned(),
+                    column: crate::board::Column::Working,
+                })
+                .collect(),
+            pane_running: pane,
+            uncommitted,
+            unpushed,
+            worktree: None,
+            empty_handed: cards == 0 && !pane && uncommitted == 0 && unpushed == 0,
+        }
+    }
+
+    #[test]
+    fn empty_hands_say_nothing_so_the_question_is_not_dressed_up_as_a_warning() {
+        assert_eq!(holding_says(&holding(0, false, 0, 0)), None);
+    }
+
+    #[test]
+    fn work_that_exists_nowhere_else_is_named_rather_than_summed() {
+        let says = holding_says(&holding(2, false, 3, 1)).expect("it is holding something");
+
+        assert!(says.contains("2 unfinished card(s)"));
+        assert!(says.contains("3 uncommitted file(s)"));
+        assert!(says.contains("1 commit(s) not on the base branch"));
+    }
+
+    #[test]
+    fn an_open_pane_counts_because_letting_somebody_go_closes_it() {
+        assert_eq!(
+            holding_says(&holding(0, true, 0, 0)).as_deref(),
+            Some("a pane still open")
+        );
     }
 }

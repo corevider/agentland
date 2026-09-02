@@ -939,8 +939,23 @@ export function stop_agent(id: string): Promise<void> {
     return request<void>(`/agents/${id}/stop`, { method: "POST" });
 }
 
-export function dismiss_agent(id: string): Promise<void> {
-    return request<void>(`/agents/${id}`, { method: "DELETE" });
+/// What an agent still has in hand. Read before it is let go, because
+/// dismissing cannot be undone and the agent is what knows where its work got to.
+export interface Holdings {
+    cards: Array<{ id: string; title: string; column: Column }>;
+    pane_running: boolean;
+    uncommitted: number;
+    unpushed: number;
+    worktree?: string;
+    empty_handed: boolean;
+}
+
+export function read_holdings(id: string): Promise<Holdings> {
+    return request<Holdings>(`/agents/${id}/holdings`);
+}
+
+export function dismiss_agent(id: string, anyway = false): Promise<void> {
+    return request<void>(`/agents/${id}?anyway=${anyway}`, { method: "DELETE" });
 }
 
 export type Column = "backlog" | "assigned" | "working" | "review" | "ready" | "done";
