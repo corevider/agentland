@@ -43,6 +43,14 @@ pub struct Watch {
     pub last_wake: u64,
     #[serde(default)]
     pub reaped: bool,
+    /// Whether a turn has been seen running since this watch began.
+    ///
+    /// An agent that has not started cannot have finished. Without this, a card
+    /// handed into a worktree that already had changes was called done three
+    /// seconds later: the pane was quiet because the turn had not begun, and
+    /// the changes were somebody else's, from an hour before.
+    #[serde(default)]
+    pub worked: bool,
 }
 
 /// What the core can see about a watched agent at one moment.
@@ -142,7 +150,11 @@ pub fn judge(watch: &Watch, seen: &Observation, rules: &Rules) -> Verdict {
         return Verdict::Finished(format!("{} attached evidence to {}", watch.agent_id, watch.task_id));
     }
 
-    if seen.changed_files > 0 {
+    // Changed files in a worktree are not this agent's work unless this agent
+    // has worked. A card handed into a worktree somebody else had already
+    // changed settled three seconds later, on a pane that was quiet because its
+    // turn had not started yet.
+    if seen.changed_files > 0 && watch.worked {
         if seen.quiet_turn {
             return Verdict::Finished(format!(
                 "{} is waiting at an empty prompt with {} changed file(s)",
@@ -475,6 +487,7 @@ impl Supervisor {
             wake_attempts: 0,
             last_wake: 0,
             reaped: false,
+            worked: false,
         };
 
         state.watches.insert(watch.id.clone(), watch.clone());
@@ -552,6 +565,17 @@ impl Supervisor {
         }
 
         self.persist(&state);
+    }
+
+    /// Note that this watch's pane has actually run a turn.
+    pub fn mark_worked(&self, id: &str) {
+        let mut state = self.state.lock();
+        if let Some(watch) = state.watches.get_mut(id) {
+            if !watch.worked {
+                watch.worked = true;
+                self.persist(&state);
+            }
+        }
     }
 
     pub fn mark_reaped(&self, id: &str) {
@@ -703,6 +727,7 @@ mod tests {
             wake_attempts: 0,
             last_wake: 0,
             reaped: false,
+            worked: false,
         }
     }
 
@@ -829,6 +854,7 @@ mod tests {
     fn quiet_alone_is_not_finished_but_quiet_with_a_diff_is() {
         let mut held = watch();
         held.delivered = true;
+        held.worked = true;
         let rules = Rules::default();
 
         let thinking = Observation { idle_seconds: 200, ..seen() };
@@ -842,6 +868,7 @@ mod tests {
     fn an_engine_waiting_at_its_prompt_counts_even_though_it_keeps_redrawing() {
         let mut held = watch();
         held.delivered = true;
+        held.worked = true;
 
         // What a live TUI actually looks like: never byte-idle for long.
         let waiting = Observation {
@@ -930,6 +957,23 @@ mod tests {
             ..seen()
         };
         assert!(!should_reap(&held, &mid_turn, &rules, false, 200), "a turn is running");
+    }
+
+    /// Measured: a card handed into a worktree that already carried four
+    /// changed files was called finished three seconds later, on a pane whose
+    /// turn had not started. The changes were an hour old and somebody else's.
+    #[test]
+    fn a_quiet_pane_that_has_not_started_is_not_a_finished_step() {
+        let fresh = Watch { delivered: true, worked: false, ..watch() };
+        let quiet = Observation { quiet_turn: true, changed_files: 4, ..seen() };
+
+        assert!(matches!(judge(&fresh, &quiet, &Rules::default()), Verdict::Working));
+
+        let ran = Watch { worked: true, ..fresh };
+        assert!(
+            matches!(judge(&ran, &quiet, &Rules::default()), Verdict::Finished(_)),
+            "once it has actually run, a quiet pane over changed files is done"
+        );
     }
 
     #[test]

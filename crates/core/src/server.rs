@@ -715,6 +715,12 @@ fn spawn_supervisor(state: AppState) {
                     state.supervisor.mark_delivered(&watch.id);
                 }
 
+                // Seeing the turn run is what separates "finished" from "has
+                // not started": the verdicts that read changed files lean on it.
+                if !watch.worked && crate::supervisor::turn_running(&seen.tail) {
+                    state.supervisor.mark_worked(&watch.id);
+                }
+
                 match judge(&watch, &seen, &state.supervisor.rules) {
                     Verdict::Working => {}
                     Verdict::Resend => {
@@ -5256,6 +5262,7 @@ mod news_tests {
             wake_attempts: 0,
             last_wake: 0,
             reaped: false,
+            worked: true,
         }
     }
 
