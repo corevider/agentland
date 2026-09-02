@@ -469,6 +469,18 @@ impl Crew {
             }
         }
 
+        // A pane opened at a folder that is not there does not fail: it opens in
+        // the home folder instead. That put an agent running with permissions
+        // accepted at the top of somebody's home directory, asking whether it
+        // could be trusted with all of it. Refusing here says what is actually
+        // wrong — the worktree it was hired into is gone.
+        if !worktree_path.is_dir() {
+            bail!(
+                "{id} was hired into {} and that worktree is gone — recreate it or dismiss the agent",
+                worktree_path.display()
+            );
+        }
+
         let engine = engine(&agent.engine_id)
             .ok_or_else(|| anyhow!("unknown engine: {}", agent.engine_id))?;
         if !engine.installed {
@@ -837,6 +849,26 @@ mod pane_tests {
             permissions: None,
             account: None,
         }
+    }
+
+    #[test]
+    fn an_agent_whose_worktree_is_gone_is_not_started_in_the_home_folder() {
+        let dir = scratch("missing-worktree");
+        let manager = Arc::new(crate::pty::PtyManager::with_log_dir(dir.join("sessions")));
+        let crew = Crew::new(manager, dir.clone());
+
+        let Ok(hired) = crew.hire(an_x("svc-demo")) else {
+            return;
+        };
+
+        let refused = crew
+            .start(&hired.id, &dir.join("worktrees/gone"), false, None)
+            .expect_err("a folder that is not there is not a place to work");
+
+        assert!(
+            refused.to_string().contains("worktree is gone"),
+            "it should say what is wrong rather than opening somewhere else: {refused}"
+        );
     }
 
     #[test]

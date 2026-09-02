@@ -254,8 +254,15 @@ pub fn asking_the_human(frame: &str) -> bool {
     let has_a_way_out = tail.contains("esc to cancel")
         || squashed.contains("esctocancel")
         || tail.contains("to navigate");
+    // Both halves are read squashed as well as spaced. A pane redraws its hint
+    // line a character at a time, and what lands in the frame is often
+    // "Entertoconfirm·Esctocancel" — which matched the way out and missed the
+    // choice, so a pane sitting on Claude's own "do you trust this folder?"
+    // counted as nobody asking anything and was left there.
     let offers_a_choice = tail.contains("enter to select")
         || tail.contains("enter to confirm")
+        || squashed.contains("entertoselect")
+        || squashed.contains("entertoconfirm")
         || squashed.contains("doyouwanttoproceed")
         || squashed.contains("1.yes");
 
@@ -930,6 +937,20 @@ mod tests {
 #[cfg(test)]
 mod asking_tests {
     use super::asking_the_human;
+
+    /// Measured off a live pane: Claude asking whether the folder is trusted,
+    /// with the hint line as the frame actually carried it.
+    #[test]
+    fn a_hint_line_the_pane_drew_without_spaces_is_still_a_question() {
+        let frame = "Accessingworkspace:\n/home/ege\n❯No,exit\nYes,Itrustthisfolder\nEntertoconfirm·Esctocancel";
+        assert!(asking_the_human(frame));
+    }
+
+    #[test]
+    fn the_same_line_with_its_spaces_is_read_the_same_way() {
+        let frame = "❯ No, exit\n  Yes, I trust this folder\nEnter to confirm · Esc to cancel";
+        assert!(asking_the_human(frame));
+    }
 
     #[test]
     fn a_picker_on_screen_is_an_agent_waiting_on_a_person() {
