@@ -99,6 +99,8 @@ struct AppState {
     /// transcripts. This app makes none of the requests it is throttling, so
     /// the only honest way to count them is to read what the engines wrote.
     journal: Arc<crate::journal::Journal>,
+    /// What a person has already said one project may run without asking.
+    permits: Arc<crate::permits::Permits>,
     spending: Arc<parking_lot::Mutex<BTreeMap<String, crate::meter::Window>>>,
     /// Per-minute ceilings, per allowance. They are a fact about somebody's
     /// plan, and two plans are two sets of numbers.
@@ -179,6 +181,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         crew_words: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
         notices: Arc::new(crate::notices::Notices::default()),
         journal: Arc::new(crate::journal::Journal::new(data_dir.clone())),
+        permits: Arc::new(crate::permits::Permits::new(data_dir.clone())),
         quota: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
         spending: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
         ceilings: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
@@ -195,6 +198,8 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
     // commander asking for more rope has to go through the human either way.
     let for_the_crew = state.tokens.for_the_crew("the crew");
     state.crew.set_endpoint(port_for_crew, for_the_crew);
+    // What somebody already agreed to, before the first pane opens.
+    state.crew.set_learned(state.permits.everything());
     let _ = token_for_crew;
 
     // What was remembered before the vault held it moves in now, when the
@@ -858,7 +863,11 @@ fn spawn_supervisor(state: AppState) {
                                 text: format!("{} is rate limited{wait}", agent.name),
                                 repository_id: Some(agent.repository_id.clone()),
                                 agent_id: Some(agent.id.clone()),
-                                opens: Some("crew".to_owned()),
+                                // Its own screen, where the limit is written.
+                                // The crew list is for hiring and shaping, and
+                                // says only that the agent exists — which the
+                                // notice has already said.
+                                opens: Some(format!("agent:{}", agent.id)),
                                 ..Default::default()
                             },
                             now,
@@ -874,7 +883,7 @@ fn spawn_supervisor(state: AppState) {
                                 text: format!("{} is off the rate limit", agent.name),
                                 repository_id: Some(agent.repository_id.clone()),
                                 agent_id: Some(agent.id.clone()),
-                                opens: Some("crew".to_owned()),
+                                opens: Some(format!("agent:{}", agent.id)),
                                 ..Default::default()
                             },
                             now,
@@ -942,6 +951,72 @@ fn spawn_supervisor(state: AppState) {
                     }
                 }
 
+                // Tried on every tick the question is held, not only on the
+                // tick it appeared: a prompt is drawn a line at a time, and the
+                // line naming the command is not always there yet when the
+                // question first is. Repeating is safe — `already_asking` and
+                // the project's own list both refuse a second one.
+                if asking {
+                    // A question about one command is a question worth
+                    // asking once, ever. The engine offers its own "don't
+                    // ask again", but that answer dies with the session and
+                    // nobody is at the pane to press it — so it is put in
+                    // front of a person as an approval, and their yes is
+                    // kept for the project.
+                    // Which of the two kinds of question this is decides which
+                    // kind of rule would answer it. A command rule does not
+                    // answer a question about a folder, and the pane asks again
+                    // — measured, after one was granted, stored and handed over.
+                    let wanted = match crate::permits::what_is_asked(&tail) {
+                        Some(crate::permits::Asked::Command(command)) => {
+                            crate::permits::rule_for(&command).map(|rule| (command, rule))
+                        }
+                        Some(crate::permits::Asked::Folder(path)) => {
+                            crate::permits::rule_for_folder(&path)
+                                .map(|rule| (format!("anything under {path}"), rule))
+                        }
+                        None => None,
+                    };
+
+                    if let Some((command, rule)) = wanted {
+                        {
+                            let known = state
+                                .permits
+                                .for_project(&agent.repository_id)
+                                .contains(&rule);
+
+                            if !known
+                                && !state.approvals.already_asking(&agent.repository_id, &rule)
+                            {
+                                let asked = state.approvals.request_allow(
+                                    format!("Let {} run `{command}`?", agent.repository_id),
+                                    format!(
+                                        "{} stopped on it. Saying yes lets every agent in {} run \
+                                         that command from now on without asking; saying no leaves \
+                                         the question with {}.",
+                                        agent.name, agent.repository_id, agent.name
+                                    ),
+                                    crate::approvals::AllowCommand {
+                                        repository_id: agent.repository_id.clone(),
+                                        rule: rule.clone(),
+                                        agent_id: agent.id.clone(),
+                                    },
+                                );
+
+                                if asked.is_ok() {
+                                    state.journal.write(
+                                        "permit.asked",
+                                        &agent.id,
+                                        &agent.repository_id,
+                                        &command,
+                                        now,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // A question the engine holds open is only answerable by a
                 // person, and nothing else on screen says so. It reaches the
                 // bell once, when it appears — not on every tick after.
@@ -960,6 +1035,7 @@ fn spawn_supervisor(state: AppState) {
                             },
                             now,
                         );
+
                     }
                 }
             }
@@ -1974,7 +2050,9 @@ async fn bring_the_crew_back(state: AppState) {
             workspace_id: None,
             repository_id: None,
             agent_id: None,
-            opens: Some("crew".to_owned()),
+            // Several agents, so there is no one pane. Terminals is where they
+            // all are; the crew list is where you would hire another.
+            opens: Some("panes".to_owned()),
         },
         now_secs(),
     );
@@ -2645,6 +2723,19 @@ async fn answer_approval(
     Json(answer): Json<AnswerApproval>,
 ) -> Result<Json<Approval>, ApiError> {
     let answered = state.approvals.answer(&id, answer)?;
+
+    // Saying yes to a command is the act too: it is written down, and the next
+    // agent that starts in that project is handed it.
+    if answered.verdict == crate::approvals::Verdict::Approved {
+        if let Some(allow) = answered.allows.clone() {
+            if state.permits.remember(&allow.repository_id, &allow.rule) {
+                // The next pane in that project starts with it. The one holding
+                // the question is answered separately, below.
+                state.crew.set_learned(state.permits.everything());
+                note(&state, "permit.granted", "a person", &allow.repository_id, &allow.rule);
+            }
+        }
+    }
 
     // Saying yes to a raise is the act, not a note about it.
     if answered.verdict == crate::approvals::Verdict::Approved {

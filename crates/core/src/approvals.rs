@@ -29,11 +29,28 @@ pub struct Approval {
     /// the core will then carry out on its behalf.
     #[serde(default)]
     pub grants: Option<Grant>,
+    /// What saying yes lets a project run from now on. Only the core sets this.
+    #[serde(default)]
+    pub allows: Option<AllowCommand>,
     /// When it was asked, and when it was answered.
     #[serde(default)]
     pub at: u64,
     #[serde(default)]
     pub answered_at: u64,
+}
+
+/// A command a project may run without asking, once somebody says so.
+///
+/// Different from a raise: a raise widens what an agent may do everywhere, and
+/// this widens one project by one command. It is the smaller answer to "must I
+/// sit here saying yes to `npm test`", and the smaller answer is the right one.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AllowCommand {
+    pub repository_id: String,
+    /// The rule as the engine would read it, e.g. `Bash(bash tests/run.sh:*)`.
+    pub rule: String,
+    /// Who was stopped by it, so they can be told the answer.
+    pub agent_id: String,
 }
 
 /// A permission raise waiting on a human.
@@ -118,6 +135,7 @@ impl Approvals {
             verdict: Verdict::Pending,
             answered_note: None,
             grants: None,
+            allows: None,
             at: now_secs(),
             answered_at: 0,
         };
@@ -125,6 +143,40 @@ impl Approvals {
         state.approvals.insert(id, approval.clone());
         self.persist(&state);
         Ok(approval)
+    }
+
+    /// An approval that, said yes to, lets one project run one command.
+    pub fn request_allow(&self, summary: String, detail: String, allow: AllowCommand) -> Result<Approval> {
+        let approval = self.request(RequestApproval {
+            summary,
+            detail,
+            requested_by: allow.agent_id.clone(),
+        })?;
+
+        let mut state = self.state.lock();
+        if let Some(stored) = state.approvals.get_mut(&approval.id) {
+            stored.allows = Some(allow);
+            let carried = stored.clone();
+            self.persist(&state);
+            return Ok(carried);
+        }
+
+        Ok(approval)
+    }
+
+    /// Whether somebody is already being asked this exact thing.
+    ///
+    /// A pane holds its question until it is answered, and the supervisor looks
+    /// every ten seconds — without this it would ask a hundred times about one
+    /// command.
+    pub fn already_asking(&self, repository_id: &str, rule: &str) -> bool {
+        self.state.lock().approvals.values().any(|held| {
+            held.verdict == Verdict::Pending
+                && held
+                    .allows
+                    .as_ref()
+                    .is_some_and(|allow| allow.repository_id == repository_id && allow.rule == rule)
+        })
     }
 
     /// An approval the core raised itself, carrying what saying yes will do.

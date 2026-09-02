@@ -90,6 +90,18 @@ pub fn engines() -> Vec<Engine> {
         .collect()
 }
 
+/// How an engine is handed a settings file.
+///
+/// Only Claude Code's is known first-hand, so the rest are left out rather than
+/// invented — an engine handed a flag it does not have refuses to start, and a
+/// crew that cannot start is worse than one that asks too often.
+pub fn settings_flag(engine_id: &str) -> Option<&'static str> {
+    match engine_id {
+        "claude" => Some("--settings"),
+        _ => None,
+    }
+}
+
 fn engine(id: &str) -> Option<Engine> {
     engines().into_iter().find(|entry| entry.id == id)
 }
@@ -190,6 +202,10 @@ struct State {
 }
 
 pub struct Crew {
+    /// What a person has already said each project may run without asking.
+    /// Handed in rather than read here: the crew starts panes, it does not own
+    /// the record of what somebody agreed to.
+    learned: Mutex<BTreeMap<String, Vec<String>>>,
     manager: Arc<PtyManager>,
     state: Mutex<State>,
     data_dir: PathBuf,
@@ -220,6 +236,7 @@ impl Crew {
         let state = crate::db::load_state(&data_dir, "crew");
 
         let crew = Arc::new(Self {
+            learned: Mutex::new(BTreeMap::new()),
             manager,
             state: Mutex::new(state),
             data_dir,
@@ -277,6 +294,11 @@ impl Crew {
             .into_iter()
             .filter_map(|id| state.agents.get(&id).cloned())
             .collect()
+    }
+
+    /// Tell the crew what has been agreed, so the next pane starts with it.
+    pub fn set_learned(&self, learned: BTreeMap<String, Vec<String>>) {
+        *self.learned.lock() = learned;
     }
 
     pub fn set_endpoint(&self, port: u16, token: String) {
@@ -463,6 +485,32 @@ impl Crew {
                 if *flag == "--mcp-config" {
                     args.push(tools.to_string_lossy().into_owned());
                 }
+            }
+        }
+
+        // What this role may run without stopping to ask. Written into
+        // Agentland's own folder and pointed at, rather than into the worktree:
+        // the worktree is a checkout of somebody's repository, and a settings
+        // file left in it is a file they did not write showing up in their diff.
+        if let Some(flag) = settings_flag(&agent.engine_id) {
+            let folder = self.data_dir.join("permits");
+
+            // Per role and per project: what a role may do, plus what this
+            // project says about how it is tested. `bash tests/run.sh` is a
+            // rule only ccdo gets, because only ccdo keeps that file.
+            let mut declared = crate::permits::declared_in(worktree_path);
+            declared.extend(self.learned.lock().get(&agent.repository_id).cloned().unwrap_or_default());
+            let file = folder.join(format!(
+                "{}-{}.json",
+                slugify(&agent.role),
+                slugify(&agent.repository_id)
+            ));
+
+            if fs::create_dir_all(&folder).is_ok()
+                && fs::write(&file, crate::permits::settings_for(&agent.role, &declared)).is_ok()
+            {
+                args.push((*flag).to_owned());
+                args.push(file.to_string_lossy().into_owned());
             }
         }
 
