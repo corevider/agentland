@@ -67,6 +67,15 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
     /// would sit above (null meaning the bottom). Drawn, so a drop is aimed
     /// rather than guessed.
     const [aiming, set_aiming] = useState<{ column: Column; before: string | null } | null>(null);
+
+    // dragover fires continuously while a card is held. Setting state on every
+    // one of them — with a fresh object each time — redrew the whole board
+    // dozens of times a second, which is what the flicker was.
+    const aim = useCallback((column: Column, before: string | null) => {
+        set_aiming((held) =>
+            held && held.column === column && held.before === before ? held : { column, before },
+        );
+    }, []);
     // The id rather than the card: the board polls, and a card held by value
     // would stop changing the moment it was opened.
     const [opened, set_opened] = useState<string | null>(null);
@@ -88,9 +97,24 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
         }));
     }, []);
 
+    // A drag that ends anywhere — dropped, cancelled, let go over the sidebar —
+    // clears the aim. Without this the line stayed drawn and the board stopped
+    // refreshing, because it still believed something was being held.
+    useEffect(() => {
+        const done = () => set_aiming(null);
+        window.addEventListener("dragend", done);
+        window.addEventListener("drop", done);
+
+        return () => {
+            window.removeEventListener("dragend", done);
+            window.removeEventListener("drop", done);
+        };
+    }, []);
+
+    // A refresh in the middle of a drag replaces every card under the pointer.
     use_poll(() => {
         list_tasks().then(set_tasks).catch(() => undefined);
-    }, 4000, active);
+    }, 4000, active && !aiming);
 
     const run = useCallback(
         async (action: () => Promise<unknown>) => {
@@ -181,9 +205,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                             }`}
                             onDragOver={(event) => {
                                 event.preventDefault();
-                                if (aiming?.column !== column || aiming?.before !== null) {
-                                    set_aiming({ column, before: null });
-                                }
+                                aim(column, null);
                             }}
                             onDragLeave={(event) => {
                                 if (!event.currentTarget.contains(event.relatedTarget as Node)) {
@@ -213,7 +235,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                                         aimed_above={
                                             aiming?.column === column && aiming.before === task.id
                                         }
-                                        on_aim={(before) => set_aiming({ column, before })}
+                                        on_aim={(before) => aim(column, before)}
                                         agents={agents}
                                         on_open={() => set_opened(task.id)}
                                         on_assign={(agent_id) => run(() => assign_task(task.id, agent_id))}
@@ -541,8 +563,12 @@ function BoardCard({
                                 on_aim?.(above ? task.id : null);
                             }}
                             onClick={on_open}
-                            className={`cursor-grab border bg-lagoon p-2 rounded-lg ${
-                                aimed_above ? "border-reef mt-2 shadow-[0_-3px_0_-1px_var(--tw-shadow-color)] shadow-turquoise" : "border-reef"
+                            // An inset line rather than a margin or an outer
+                            // shadow: it marks the place without moving the card
+                            // under the pointer, which made the whole column
+                            // jump every time the aim changed.
+                            className={`cursor-grab rounded-lg border border-reef bg-lagoon p-2 ${
+                                aimed_above ? "shadow-[inset_0_3px_0_0_#3fd0c9]" : ""
                             }`}
                         >
                             <div className="flex items-baseline justify-between gap-2">
