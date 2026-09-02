@@ -580,6 +580,59 @@ mod tests {
         assert!(board.take_to(&card.id, &home, 100).is_err());
     }
 
+    /// The supervisor asks a card whether work has been recorded on it before
+    /// it calls a step finished. Handing the card out writes a note, and for a
+    /// while any evidence counted: three cards were called settled 35 to 42
+    /// seconds before the commit that did the work, and a review card one
+    /// second after it was handed over.
+    #[test]
+    fn handing_a_card_out_records_no_work_on_it() {
+        let board = board("assignment-is-not-work");
+        let card = a_card(&board, None);
+
+        board
+            .record_assignment(&card.id, "ada", "ada-tree", "agent/ada-tree")
+            .expect("handed out");
+        board
+            .attach(
+                &card.id,
+                Evidence::Note {
+                    text: "X: Ada is the free agent with the closest role".into(),
+                },
+                "the dispatcher",
+                50,
+            )
+            .expect("the routing note the dispatcher writes");
+
+        let held = board.get(&card.id).expect("the card");
+        assert!(
+            !held.evidence.is_empty(),
+            "the note is still written, so the history reads"
+        );
+        assert!(
+            !held.evidence.iter().any(|entry| entry.what.is_a_record()),
+            "but nothing has been done on it yet"
+        );
+
+        board
+            .attach(
+                &card.id,
+                Evidence::Commit {
+                    sha: "ecc2e32".into(),
+                    subject: "serve /metrics".into(),
+                },
+                "ada",
+                100,
+            )
+            .expect("work lands");
+
+        let done = board.get(&card.id).expect("the card");
+        assert!(
+            done.evidence.iter().any(|entry| entry.what.is_a_record()),
+            "and once it has, the card says so"
+        );
+    }
+
     #[test]
     fn a_card_that_became_nothing_can_be_thrown_away() {
         let board = board("discard");

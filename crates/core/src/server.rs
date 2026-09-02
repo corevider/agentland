@@ -608,10 +608,18 @@ fn look_at(state: &AppState, watch: &Watch, previous_frame: &str, now: u64) -> O
         idle_seconds: idle,
         tail,
         changed_files,
+        // Records of work, not remarks about it. Any evidence at all counted
+        // here, and handing a card out writes a note onto it — "X: Ada is the
+        // free agent with the closest role" — so a card arrived already
+        // carrying "evidence" and the first tick ten seconds later called the
+        // step finished. Measured: three cards were marked settled 35 to 42
+        // seconds before the commit that did the work, and a review card was
+        // settled one second after it was handed over, so nobody reviewed
+        // anything. The distinction already existed for discarding.
         card_has_evidence: state
             .board
             .get(&watch.task_id)
-            .map(|task| !task.evidence.is_empty())
+            .map(|task| task.evidence.iter().any(|entry| entry.what.is_a_record()))
             .unwrap_or(false),
         transcript_says,
         age_seconds: now.saturating_sub(watch.started_at),
