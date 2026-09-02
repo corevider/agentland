@@ -776,6 +776,19 @@ export default function App() {
                         on_open={(opens) => {
                             const [what, which] = opens.split(":");
                             if (what === "agent" && which) {
+                                // A notice about one agent is about what is on
+                                // its screen — a question it is holding, a limit
+                                // it hit. The crew list says that agent exists,
+                                // which the notice had already said; the pane is
+                                // where the thing itself is.
+                                const held = crew.find((agent) => agent.id === which);
+                                if (held?.session_id) {
+                                    void open_session(held.session_id);
+                                    return;
+                                }
+
+                                // With no pane there is nothing to look at, and
+                                // the list is where somebody would start one.
                                 focus_panel("crew");
                                 return;
                             }
