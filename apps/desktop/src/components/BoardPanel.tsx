@@ -68,13 +68,78 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
     /// rather than guessed.
     const [aiming, set_aiming] = useState<{ column: Column; before: string | null } | null>(null);
 
-    // dragover fires continuously while a card is held. Setting state on every
-    // one of them — with a fresh object each time — redrew the whole board
-    // dozens of times a second, which is what the flicker was.
+    /// The card in hand, drawn under the pointer.
+    ///
+    /// The browser's own drag draws nothing here — WebKitGTK gives no drag
+    /// image — so the card is carried by hand: a copy follows the pointer and a
+    /// gap opens where it would land.
+    const [carry, set_carry] = useState<{
+        id: string;
+        width: number;
+        height: number;
+        grab_x: number;
+        grab_y: number;
+        x: number;
+        y: number;
+    } | null>(null);
+
+    // The aim only changes state when the aim itself changed: pointer moves
+    // arrive continuously, and a fresh object each time redrew the whole board
+    // dozens of times a second.
     const aim = useCallback((column: Column, before: string | null) => {
         set_aiming((held) =>
             held && held.column === column && held.before === before ? held : { column, before },
         );
+    }, []);
+
+    /// What is under the pointer: which column, and which card it would sit
+    /// above. Read off the elements rather than kept in step by hand, so a
+    /// scrolled column or a resized panel needs no bookkeeping.
+    const read_aim = useCallback(
+        (x: number, y: number) => {
+            const under = document.elementFromPoint(x, y);
+            const column = under?.closest("[data-column]")?.getAttribute("data-column");
+
+            if (!column) {
+                return;
+            }
+
+            const over = under?.closest("[data-card]");
+            const card = over?.getAttribute("data-card");
+
+            if (!card) {
+                aim(column as Column, null);
+                return;
+            }
+
+            const box = over!.getBoundingClientRect();
+            const above = y < box.top + box.height / 2;
+
+            if (above) {
+                aim(column as Column, card);
+                return;
+            }
+
+            // Below this card means above the next one, or the bottom.
+            const held = in_order(tasks.filter((task) => task.column === column));
+            const seat = held.findIndex((task) => task.id === card);
+            aim(column as Column, held[seat + 1]?.id ?? null);
+        },
+        [aim, tasks],
+    );
+
+    const take = useCallback((task_id: string, event: React.PointerEvent<HTMLElement>) => {
+        const box = event.currentTarget.getBoundingClientRect();
+
+        set_carry({
+            id: task_id,
+            width: box.width,
+            height: box.height,
+            grab_x: event.clientX - box.left,
+            grab_y: event.clientY - box.top,
+            x: event.clientX,
+            y: event.clientY,
+        });
     }, []);
     // The id rather than the card: the board polls, and a card held by value
     // would stop changing the moment it was opened.
@@ -114,7 +179,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
     // A refresh in the middle of a drag replaces every card under the pointer.
     use_poll(() => {
         list_tasks().then(set_tasks).catch(() => undefined);
-    }, 4000, active && !aiming);
+    }, 4000, active && !carry);
 
     const run = useCallback(
         async (action: () => Promise<unknown>) => {
@@ -131,6 +196,41 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
         },
         [refresh],
     );
+
+    // While a card is in hand the whole window follows the pointer, so it keeps
+    // up when the pointer leaves the board or the button is let go outside it.
+    useEffect(() => {
+        if (!carry) {
+            return;
+        }
+
+        const moved = (event: PointerEvent) => {
+            set_carry((held) => (held ? { ...held, x: event.clientX, y: event.clientY } : held));
+            read_aim(event.clientX, event.clientY);
+        };
+
+        const released = () => {
+            const held = carry;
+            const wanted = aiming;
+            set_carry(null);
+            set_aiming(null);
+
+            if (held && wanted) {
+                void run(() => place_task(held.id, wanted.column, wanted.before ?? undefined));
+            }
+        };
+
+        window.addEventListener("pointermove", moved);
+        window.addEventListener("pointerup", released);
+        window.addEventListener("pointercancel", released);
+
+        return () => {
+            window.removeEventListener("pointermove", moved);
+            window.removeEventListener("pointerup", released);
+            window.removeEventListener("pointercancel", released);
+        };
+    }, [carry, aiming, read_aim, run]);
+
 
     const open_review = useCallback(async (task: Task) => {
         if (!task.worktree) {
@@ -198,29 +298,12 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                             // the row scrolls. Fixed at 150px they left the rest
                             // of a wide panel empty and pushed "done" off the
                             // edge of a narrow one with room to spare.
-                            className={`flex min-h-0 min-w-[150px] flex-1 flex-col rounded-md border bg-lagoon ${
-                                aiming?.column === column
+                            data-column={column}
+                            className={`flex min-h-0 min-w-[150px] flex-1 flex-col rounded-md border bg-lagoon transition-colors ${
+                                aiming?.column === column && carry
                                     ? "border-turquoise bg-lagoon-deep"
                                     : "border-reef"
                             }`}
-                            onDragOver={(event) => {
-                                event.preventDefault();
-                                aim(column, null);
-                            }}
-                            onDragLeave={(event) => {
-                                if (!event.currentTarget.contains(event.relatedTarget as Node)) {
-                                    set_aiming((held) => (held?.column === column ? null : held));
-                                }
-                            }}
-                            onDrop={(event) => {
-                                event.preventDefault();
-                                const id = event.dataTransfer.getData("text/plain");
-                                const before = aiming?.column === column ? aiming.before : null;
-                                set_aiming(null);
-                                if (id) {
-                                    void run(() => place_task(id, column, before ?? undefined));
-                                }
-                            }}
                         >
                             <header className="border-b border-reef px-2 py-1 font-mono text-[11px] uppercase tracking-[0.1em] text-shell">
                                 {column} · {tasks.filter((task) => task.column === column).length}
@@ -228,14 +311,17 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
 
                             <Column
                                 tasks={in_order(tasks.filter((task) => task.column === column))}
+                                gap={
+                                    carry && aiming?.column === column
+                                        ? { before: aiming.before, height: carry.height }
+                                        : null
+                                }
                                 render={(task) => (
                                     <BoardCard
                                         key={task.id}
                                         task={task}
-                                        aimed_above={
-                                            aiming?.column === column && aiming.before === task.id
-                                        }
-                                        on_aim={(before) => aim(column, before)}
+                                        carried={carry?.id === task.id}
+                                        on_take={(event) => take(task.id, event)}
                                         agents={agents}
                                         on_open={() => set_opened(task.id)}
                                         on_assign={(agent_id) => run(() => assign_task(task.id, agent_id))}
@@ -248,6 +334,40 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                     ))}
                 </div>
             </div>
+
+            {carry
+                ? (() => {
+                      const held = tasks.find((task) => task.id === carry.id);
+                      if (!held) {
+                          return null;
+                      }
+
+                      // The card itself, under the pointer, tilted a little so
+                      // it reads as picked up rather than as part of the board.
+                      // It takes no pointer events, or it would be what the
+                      // pointer is over and nothing else could be aimed at.
+                      return (
+                          <div
+                              className="pointer-events-none fixed z-50 rotate-2 rounded-lg border border-turquoise bg-lagoon-deep p-2 opacity-95 shadow-[0_10px_24px_rgba(0,0,0,0.45)]"
+                              style={{
+                                  left: carry.x - carry.grab_x,
+                                  top: carry.y - carry.grab_y,
+                                  width: carry.width,
+                              }}
+                          >
+                              <div className="flex items-baseline justify-between gap-2">
+                                  <span className="text-[11px] text-linen">{held.title}</span>
+                                  <span className="font-mono text-[10px] text-shade">{held.id}</span>
+                              </div>
+                              {held.branch ? (
+                                  <p className="mt-1 font-mono text-[10px] text-driftwood">
+                                      {held.branch}
+                                  </p>
+                              ) : null}
+                          </div>
+                      );
+                  })()
+                : null}
 
             {!review && opened && tasks.some((task) => task.id === opened) ? (
                 <CardDetail
@@ -335,7 +455,18 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
 /// Measured on a board of 325: every card in the DOM cost 12 fps with the panel
 /// on screen. Only what fits is rendered, plus a few rows either side so a
 /// scroll never shows a gap.
-function Column({ tasks, render }: { tasks: Task[]; render: (task: Task) => ReactNode }) {
+function Column({
+    tasks,
+    gap,
+    render,
+}: {
+    tasks: Task[];
+    /// Where the carried card would land, and how tall it is: the cards below
+    /// step down by that much and the space between them is drawn, so the drop
+    /// is aimed at a place rather than at a line.
+    gap: { before: string | null; height: number } | null;
+    render: (task: Task) => ReactNode;
+}) {
     const holder = useRef<HTMLDivElement>(null);
 
     const rows = useVirtualizer({
@@ -345,16 +476,39 @@ function Column({ tasks, render }: { tasks: Task[]; render: (task: Task) => Reac
         overscan: 6,
     });
 
+    const seat = gap
+        ? gap.before
+            ? Math.max(0, tasks.findIndex((task) => task.id === gap.before))
+            : tasks.length
+        : -1;
+    const room = gap ? gap.height + 8 : 0;
+    const shown = rows.getVirtualItems();
+    const gap_top =
+        seat < 0
+            ? 0
+            : seat >= tasks.length
+              ? rows.getTotalSize()
+              : (shown.find((row) => row.index === seat)?.start ?? seat * 96);
+
     return (
         <div ref={holder} className="min-h-0 flex-1 overflow-y-auto p-2">
-            <div className="relative w-full" style={{ height: rows.getTotalSize() }}>
-                {rows.getVirtualItems().map((row) => (
+            <div className="relative w-full" style={{ height: rows.getTotalSize() + room }}>
+                {gap ? (
+                    <div
+                        className="pointer-events-none absolute inset-x-0 rounded-lg border border-dashed border-turquoise/70 bg-turquoise/5"
+                        style={{ transform: `translateY(${gap_top}px)`, height: gap.height }}
+                    />
+                ) : null}
+
+                {shown.map((row) => (
                     <div
                         key={tasks[row.index].id}
                         ref={rows.measureElement}
                         data-index={row.index}
                         className="absolute inset-x-0 pb-2"
-                        style={{ transform: `translateY(${row.start}px)` }}
+                        style={{
+                            transform: `translateY(${row.start + (seat >= 0 && row.index >= seat ? room : 0)}px)`,
+                        }}
                     >
                         {render(tasks[row.index])}
                     </div>
@@ -528,8 +682,8 @@ function CardDetail({
 function BoardCard({
     task,
     agents,
-    aimed_above,
-    on_aim,
+    carried,
+    on_take,
     on_open,
     on_assign,
     on_review,
@@ -537,9 +691,10 @@ function BoardCard({
 }: {
     task: Task;
     agents: Agent[];
-    /// The dragged card would land immediately above this one.
-    aimed_above?: boolean;
-    on_aim?: (before: string | null) => void;
+    /// This is the card in hand: its place is held by the gap, and it is drawn
+    /// under the pointer instead.
+    carried?: boolean;
+    on_take?: (event: React.PointerEvent<HTMLElement>) => void;
     on_open: () => void;
     on_assign: (agent_id: string) => void;
     on_review: () => void;
@@ -548,27 +703,47 @@ function BoardCard({
     return (
         <article
                             key={task.id}
-                            draggable
-                            onDragStart={(event) =>
-                                event.dataTransfer.setData("text/plain", task.id)
-                            }
-                            // Above or below, by which half of the card the
-                            // pointer is over — the same question a person is
-                            // asking while they hold it there.
-                            onDragOver={(event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                const box = event.currentTarget.getBoundingClientRect();
-                                const above = event.clientY < box.top + box.height / 2;
-                                on_aim?.(above ? task.id : null);
+                            data-card={task.id}
+                            // Taken with the pointer rather than by the browser's
+                            // own drag, which draws no image at all here: the
+                            // card would be dragged and nothing would follow.
+                            // A few pixels of movement separate carrying it from
+                            // clicking it open.
+                            onPointerDown={(event) => {
+                                if (event.button !== 0) {
+                                    return;
+                                }
+
+                                const from = { x: event.clientX, y: event.clientY };
+                                const target = event.currentTarget;
+
+                                const watch = (moved: PointerEvent) => {
+                                    if (
+                                        Math.abs(moved.clientX - from.x) +
+                                            Math.abs(moved.clientY - from.y) >
+                                        4
+                                    ) {
+                                        stop();
+                                        on_take?.({
+                                            ...event,
+                                            clientX: moved.clientX,
+                                            clientY: moved.clientY,
+                                            currentTarget: target,
+                                        } as unknown as React.PointerEvent<HTMLElement>);
+                                    }
+                                };
+
+                                const stop = () => {
+                                    window.removeEventListener("pointermove", watch);
+                                    window.removeEventListener("pointerup", stop);
+                                };
+
+                                window.addEventListener("pointermove", watch);
+                                window.addEventListener("pointerup", stop);
                             }}
                             onClick={on_open}
-                            // An inset line rather than a margin or an outer
-                            // shadow: it marks the place without moving the card
-                            // under the pointer, which made the whole column
-                            // jump every time the aim changed.
-                            className={`cursor-grab rounded-lg border border-reef bg-lagoon p-2 ${
-                                aimed_above ? "shadow-[inset_0_3px_0_0_#3fd0c9]" : ""
+                            className={`cursor-grab select-none rounded-lg border border-reef bg-lagoon p-2 ${
+                                carried ? "opacity-30" : ""
                             }`}
                         >
                             <div className="flex items-baseline justify-between gap-2">
