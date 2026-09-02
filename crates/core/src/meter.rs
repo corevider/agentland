@@ -8,13 +8,18 @@ use crate::budget::Room;
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct Spend {
     pub at: u64,
-    /// Everything sent, including what the cache served.
-    ///
-    /// Counting cache reads is the conservative choice and deliberately so. If
-    /// the provider discounts them this throttles a little early; if it does
-    /// not and they were left out, this would throttle too late — and too late
-    /// is the wall, which is the thing being avoided.
+    /// What was actually sent: the prompt, plus anything written into the cache.
     pub input: u64,
+    /// What the cache served back, kept apart from the rest.
+    ///
+    /// It used to be counted as input, on the reasoning that throttling early
+    /// beats hitting the wall. Measured, that was wrong by an order of
+    /// magnitude: a commander at 10% of its week and 3% of its output ceiling
+    /// read 1.1M cached tokens in a minute and was refused every piece of work
+    /// — "the week is spent" while the week had barely been touched. Long-lived
+    /// panes reading a large cached context is what this app does; a ceiling
+    /// that fires on it is measuring the design rather than the spend.
+    pub cached: u64,
     pub output: u64,
 }
 
@@ -23,7 +28,16 @@ pub struct Spend {
 pub struct Ceilings {
     pub requests: u32,
     pub input: u64,
+    /// Cache reads have their own, far higher ceiling: they are cheap, they are
+    /// most of the traffic here, and they still say something when a runaway
+    /// loop starts re-reading the world.
+    #[serde(default = "cached_ceiling")]
+    pub cached: u64,
     pub output: u64,
+}
+
+fn cached_ceiling() -> u64 {
+    20_000_000
 }
 
 impl Default for Ceilings {
@@ -31,6 +45,7 @@ impl Default for Ceilings {
         Self {
             requests: 500,
             input: 1_000_000,
+            cached: cached_ceiling(),
             output: 200_000,
         }
     }
@@ -41,6 +56,8 @@ impl Default for Ceilings {
 pub struct Rate {
     pub requests: u32,
     pub input: u64,
+    #[serde(default)]
+    pub cached: u64,
     pub output: u64,
 }
 
@@ -55,25 +72,32 @@ impl Rate {
         [
             share(self.requests as f64, ceilings.requests as f64),
             share(self.input as f64, ceilings.input as f64),
+            share(self.cached as f64, ceilings.cached as f64),
             share(self.output as f64, ceilings.output as f64),
         ]
         .into_iter()
         .fold(0.0_f64, f64::max) as f32
     }
 
-    /// Which of the three is the one to worry about.
+    /// Which of them is the one to worry about.
     pub fn tightest(&self, ceilings: &Ceilings) -> &'static str {
-        let requests = self.requests as f64 / ceilings.requests.max(1) as f64;
-        let input = self.input as f64 / ceilings.input.max(1) as f64;
-        let output = self.output as f64 / ceilings.output.max(1) as f64;
+        let shares = [
+            (self.requests as f64 / ceilings.requests.max(1) as f64, "requests"),
+            (self.input as f64 / ceilings.input.max(1) as f64, "input tokens"),
+            (self.cached as f64 / ceilings.cached.max(1) as f64, "cached tokens"),
+            (self.output as f64 / ceilings.output.max(1) as f64, "output tokens"),
+        ];
 
-        if requests >= input && requests >= output {
-            "requests"
-        } else if input >= output {
-            "input tokens"
-        } else {
-            "output tokens"
-        }
+        shares
+            .into_iter()
+            .fold(("", 0.0_f64), |held, (share, name)| {
+                if share > held.1 || held.0.is_empty() {
+                    (name, share)
+                } else {
+                    held
+                }
+            })
+            .0
     }
 
     pub fn room(&self, ceilings: &Ceilings) -> Room {
@@ -125,6 +149,7 @@ impl Window {
             .fold(Rate::default(), |mut rate, held| {
                 rate.requests += 1;
                 rate.input += held.input;
+                rate.cached += held.cached;
                 rate.output += held.output;
                 rate
             })
@@ -152,8 +177,44 @@ pub fn tighter(one: Room, other: Room) -> Room {
 mod tests {
     use super::*;
 
+    /// Measured on a live commander: 11 requests, 6,942 output tokens, 1.1M
+    /// read back from the cache — at 10% of its week. Counting the cache read
+    /// as input made that "spent", and every piece of work it tried to hand
+    /// out was refused.
+    #[test]
+    fn a_pane_reading_its_cached_context_is_not_a_pane_spending_its_allowance() {
+        let ceilings = Ceilings::default();
+        let real = Rate {
+            requests: 11,
+            input: 20_000,
+            cached: 1_099_972,
+            output: 6_942,
+        };
+
+        assert_eq!(real.room(&ceilings), Room::Plenty);
+        assert!(
+            real.how_close(&ceilings) < 0.1,
+            "nothing here is close to a ceiling: {}",
+            real.how_close(&ceilings)
+        );
+    }
+
+    #[test]
+    fn a_runaway_reading_the_world_back_is_still_caught() {
+        let ceilings = Ceilings::default();
+        let runaway = Rate {
+            requests: 40,
+            input: 20_000,
+            cached: 19_000_000,
+            output: 5_000,
+        };
+
+        assert_eq!(runaway.room(&ceilings), Room::Spent);
+        assert_eq!(runaway.tightest(&ceilings), "cached tokens");
+    }
+
     fn spend(at: u64, input: u64, output: u64) -> Spend {
-        Spend { at, input, output }
+        Spend { at, input, cached: 0, output }
     }
 
     #[test]
@@ -182,17 +243,17 @@ mod tests {
         let ceilings = Ceilings::default();
 
         // A tenth of the tokens, but the requests are at the top.
-        let busy = Rate { requests: 480, input: 100_000, output: 10_000 };
+        let busy = Rate { requests: 480, input: 100_000, cached: 0, output: 10_000 };
         assert!(busy.how_close(&ceilings) > 0.9);
         assert_eq!(busy.tightest(&ceilings), "requests");
         assert_eq!(busy.room(&ceilings), Room::Spent);
 
         // Few requests, but each enormous.
-        let heavy = Rate { requests: 5, input: 950_000, output: 1_000 };
+        let heavy = Rate { requests: 5, input: 950_000, cached: 0, output: 1_000 };
         assert!(heavy.how_close(&ceilings) > 0.9);
         assert_eq!(heavy.tightest(&ceilings), "input tokens");
 
-        let loud = Rate { requests: 5, input: 1_000, output: 190_000 };
+        let loud = Rate { requests: 5, input: 1_000, cached: 0, output: 190_000 };
         assert_eq!(loud.tightest(&ceilings), "output tokens");
     }
 

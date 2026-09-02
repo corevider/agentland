@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { families_in, family_of, meters_of, moments_ago, rule_reads, short_count } from "@/lib/activity";
 import type { JournalEntry } from "@/lib/core";
 
-const CEILINGS = { requests: 500, input: 1_000_000, output: 200_000 };
+const CEILINGS = { requests: 500, input: 1_000_000, cached: 20_000_000, output: 200_000 };
 
 function entry(kind: string): JournalEntry {
     return { at: 0, kind, actor: "someone", subject: "", detail: "" };
@@ -34,30 +34,41 @@ describe("the families a journal is grouped by", () => {
     });
 });
 
-describe("the three ceilings as bars", () => {
+describe("the ceilings as bars", () => {
     it("marks the one that decides", () => {
         // A tenth of the tokens, but the requests are near the top.
-        const held = meters_of({ requests: 450, input: 100_000, output: 10_000 }, CEILINGS);
+        const held = meters_of({ requests: 450, input: 100_000, cached: 0, output: 10_000 }, CEILINGS);
         const tight = held.filter((meter) => meter.tightest);
 
         expect(tight).toHaveLength(1);
         expect(tight[0].label).toBe("requests");
     });
 
+    it("does not call a pane reading its cached context the tightest thing", () => {
+        // Measured on a live commander at 10% of its week: counting the cache
+        // read as input made every piece of work it handed out refused.
+        const held = meters_of(
+            { requests: 11, input: 20_000, cached: 1_099_972, output: 6_942 },
+            CEILINGS,
+        );
+
+        expect(held.every((meter) => meter.share < 0.1)).toBe(true);
+    });
+
     it("keeps the rows in one order so two glances can be compared", () => {
-        const busy = meters_of({ requests: 450, input: 10, output: 10 }, CEILINGS);
-        const heavy = meters_of({ requests: 1, input: 900_000, output: 10 }, CEILINGS);
+        const busy = meters_of({ requests: 450, input: 10, cached: 0, output: 10 }, CEILINGS);
+        const heavy = meters_of({ requests: 1, input: 900_000, cached: 0, output: 10 }, CEILINGS);
 
         expect(busy.map((m) => m.label)).toEqual(heavy.map((m) => m.label));
     });
 
     it("does not run a bar past its own end", () => {
-        const over = meters_of({ requests: 900, input: 0, output: 0 }, CEILINGS);
+        const over = meters_of({ requests: 900, input: 0, cached: 0, output: 0 }, CEILINGS);
         expect(over[0].share).toBe(1);
     });
 
     it("marks nothing when nothing has been spent", () => {
-        const idle = meters_of({ requests: 0, input: 0, output: 0 }, CEILINGS);
+        const idle = meters_of({ requests: 0, input: 0, cached: 0, output: 0 }, CEILINGS);
         expect(idle.some((meter) => meter.tightest)).toBe(false);
     });
 });

@@ -346,12 +346,16 @@ export type Room = "plenty" | "tight" | "spent";
 export interface Rate {
     requests: number;
     input: number;
+    /// Read back from the cache, kept apart: it is most of the traffic here and
+    /// counting it as input made a pane at 10% of its week read as spent.
+    cached: number;
     output: number;
 }
 
 export interface Ceilings {
     requests: number;
     input: number;
+    cached: number;
     output: number;
 }
 
@@ -386,7 +390,13 @@ export function read_budget(): Promise<Budget> {
     return request<Budget>("/budget");
 }
 
-export function set_ceilings(identity: string, ceilings: Ceilings): Promise<Ceilings> {
+/// The cache-read ceiling is not offered: it is not a number anybody has a feel
+/// for, and left out the core keeps its own. Sending a zero would read as a
+/// ceiling of nothing, which is every allowance spent forever.
+export function set_ceilings(
+    identity: string,
+    ceilings: Omit<Ceilings, "cached">,
+): Promise<Ceilings> {
     return request<Ceilings>("/budget", {
         method: "POST",
         body: JSON.stringify({ identity, ...ceilings }),

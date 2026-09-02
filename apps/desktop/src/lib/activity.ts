@@ -46,6 +46,7 @@ export function meters_of(rate: Rate, ceilings: Ceilings): Meter[] {
     const rows: Array<[string, number, number]> = [
         ["requests", rate.requests, ceilings.requests],
         ["input tokens", rate.input, ceilings.input],
+        ["cached tokens", rate.cached, ceilings.cached],
         ["output tokens", rate.output, ceilings.output],
     ];
 

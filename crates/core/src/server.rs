@@ -4189,6 +4189,10 @@ struct SetCeilings {
     identity: String,
     requests: u32,
     input: u64,
+    /// Left out, cache reads keep the standing ceiling: it is not a number
+    /// anybody has a feel for, and it is not what a plan is sold in.
+    #[serde(default)]
+    cached: Option<u64>,
     output: u64,
 }
 
@@ -4201,6 +4205,7 @@ async fn set_ceilings(
     let wanted = crate::meter::Ceilings {
         requests: body.requests,
         input: body.input,
+        cached: body.cached.unwrap_or(crate::meter::Ceilings::default().cached),
         output: body.output,
     };
 

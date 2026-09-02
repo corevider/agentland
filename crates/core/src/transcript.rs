@@ -100,9 +100,8 @@ pub fn spending_since(worktree: &Path, since: u64) -> Vec<crate::meter::Spend> {
 
         spends.push(crate::meter::Spend {
             at,
-            input: number("input_tokens")
-                + number("cache_creation_input_tokens")
-                + number("cache_read_input_tokens"),
+            input: number("input_tokens") + number("cache_creation_input_tokens"),
+            cached: number("cache_read_input_tokens"),
             output: number("output_tokens"),
         });
     }
