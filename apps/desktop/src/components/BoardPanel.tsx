@@ -92,6 +92,16 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
         );
     }, []);
 
+    // The drag reads these while it runs. They live in refs so the listeners
+    // can be attached once, when the card is picked up: keyed on the carried
+    // position instead, they were torn down and rebuilt on every pointer move,
+    // which dropped events and made the gap stutter.
+    const tasks_now = useRef(tasks);
+    tasks_now.current = tasks;
+    const carried_now = useRef<string | null>(null);
+    const aiming_now = useRef(aiming);
+    aiming_now.current = aiming;
+
     /// What is under the pointer: which column, and which card it would sit
     /// above. Read off the elements rather than kept in step by hand, so a
     /// scrolled column or a resized panel needs no bookkeeping.
@@ -121,11 +131,15 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
             }
 
             // Below this card means above the next one, or the bottom.
-            const held = in_order(tasks.filter((task) => task.column === column));
+            const held = in_order(
+                tasks_now.current.filter(
+                    (task) => task.column === column && task.id !== carried_now.current,
+                ),
+            );
             const seat = held.findIndex((task) => task.id === card);
             aim(column as Column, held[seat + 1]?.id ?? null);
         },
-        [aim, tasks],
+        [aim],
     );
 
     const take = useCallback((task_id: string, event: React.PointerEvent<HTMLElement>) => {
@@ -199,8 +213,11 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
 
     // While a card is in hand the whole window follows the pointer, so it keeps
     // up when the pointer leaves the board or the button is let go outside it.
+    const carried_id = carry?.id ?? null;
+    carried_now.current = carried_id;
+
     useEffect(() => {
-        if (!carry) {
+        if (!carried_id) {
             return;
         }
 
@@ -210,13 +227,12 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
         };
 
         const released = () => {
-            const held = carry;
-            const wanted = aiming;
+            const wanted = aiming_now.current;
             set_carry(null);
             set_aiming(null);
 
-            if (held && wanted) {
-                void run(() => place_task(held.id, wanted.column, wanted.before ?? undefined));
+            if (wanted) {
+                void run(() => place_task(carried_id, wanted.column, wanted.before ?? undefined));
             }
         };
 
@@ -229,7 +245,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
             window.removeEventListener("pointerup", released);
             window.removeEventListener("pointercancel", released);
         };
-    }, [carry, aiming, read_aim, run]);
+    }, [carried_id, read_aim, run]);
 
 
     const open_review = useCallback(async (task: Task) => {
@@ -310,7 +326,14 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                             </header>
 
                             <Column
-                                tasks={in_order(tasks.filter((task) => task.column === column))}
+                                // The carried card leaves the list while it is
+                                // held: the gap stands in for it, so a column
+                                // does not grow by a card and then shrink back.
+                                tasks={in_order(
+                                    tasks.filter(
+                                        (task) => task.column === column && task.id !== carry?.id,
+                                    ),
+                                )}
                                 gap={
                                     carry && aiming?.column === column
                                         ? { before: aiming.before, height: carry.height }
@@ -320,7 +343,6 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                                     <BoardCard
                                         key={task.id}
                                         task={task}
-                                        carried={carry?.id === task.id}
                                         on_take={(event) => take(task.id, event)}
                                         agents={agents}
                                         on_open={() => set_opened(task.id)}
@@ -348,11 +370,12 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                       // pointer is over and nothing else could be aimed at.
                       return (
                           <div
-                              className="pointer-events-none fixed z-50 rotate-2 rounded-lg border border-turquoise bg-lagoon-deep p-2 opacity-95 shadow-[0_10px_24px_rgba(0,0,0,0.45)]"
+                              className="pointer-events-none fixed left-0 top-0 z-50 rounded-lg border border-turquoise bg-lagoon-deep p-2 opacity-95 shadow-[0_10px_24px_rgba(0,0,0,0.45)] will-change-transform"
                               style={{
-                                  left: carry.x - carry.grab_x,
-                                  top: carry.y - carry.grab_y,
+                                  left: 0,
+                                  top: 0,
                                   width: carry.width,
+                                  transform: `translate3d(${carry.x - carry.grab_x}px, ${carry.y - carry.grab_y}px, 0) rotate(2deg)`,
                               }}
                           >
                               <div className="flex items-baseline justify-between gap-2">
@@ -682,7 +705,6 @@ function CardDetail({
 function BoardCard({
     task,
     agents,
-    carried,
     on_take,
     on_open,
     on_assign,
@@ -691,9 +713,6 @@ function BoardCard({
 }: {
     task: Task;
     agents: Agent[];
-    /// This is the card in hand: its place is held by the gap, and it is drawn
-    /// under the pointer instead.
-    carried?: boolean;
     on_take?: (event: React.PointerEvent<HTMLElement>) => void;
     on_open: () => void;
     on_assign: (agent_id: string) => void;
@@ -742,9 +761,7 @@ function BoardCard({
                                 window.addEventListener("pointerup", stop);
                             }}
                             onClick={on_open}
-                            className={`cursor-grab select-none rounded-lg border border-reef bg-lagoon p-2 ${
-                                carried ? "opacity-30" : ""
-                            }`}
+                            className="cursor-grab select-none rounded-lg border border-reef bg-lagoon p-2"
                         >
                             <div className="flex items-baseline justify-between gap-2">
                                 <span className="text-[11px] text-linen">{task.title}</span>
