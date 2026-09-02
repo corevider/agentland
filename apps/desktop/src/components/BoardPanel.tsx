@@ -156,7 +156,12 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                     {COLUMNS.map((column) => (
                         <div
                             key={column}
-                            className="flex min-h-0 w-[150px] shrink-0 flex-col rounded-md border border-reef bg-lagoon"
+                            // The columns share whatever width the panel has and
+                            // stop shrinking at a card's worth, at which point
+                            // the row scrolls. Fixed at 150px they left the rest
+                            // of a wide panel empty and pushed "done" off the
+                            // edge of a narrow one with room to spare.
+                            className="flex min-h-0 min-w-[150px] flex-1 flex-col rounded-md border border-reef bg-lagoon"
                             onDragOver={(event) => event.preventDefault()}
                             onDrop={(event) => {
                                 const id = event.dataTransfer.getData("text/plain");

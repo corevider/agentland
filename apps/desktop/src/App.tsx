@@ -10,6 +10,7 @@ import {
     visible_panels,
     type Layout,
     type PanelId,
+    stacks,
 } from "@/workspace/layout";
 import { PANELS, ServiceProvider, is_known_panel, type WorkspaceServices } from "@/workspace/registry";
 import { PRESETS, preset_of } from "@/workspace/presets";
@@ -248,6 +249,27 @@ export default function App() {
 
                         if (command === "reload") {
                             window.location.reload();
+                            continue;
+                        }
+
+                        // One panel, the whole window. The board's later
+                        // columns sit off the edge in every shared layout, so
+                        // there was no way to be shown them from outside.
+                        if (command.startsWith("only:")) {
+                            const target = command.slice("only:".length);
+                            if (PANELS.some((panel) => panel.id === target)) {
+                                set_layout_state((current) => {
+                                    const shown = focus_panel_in(current, target as PanelId);
+                                    const holding = stacks(shown.root).find((stack) =>
+                                        stack.tabs.some((tab) => tab.panel === target),
+                                    );
+                                    const next = holding
+                                        ? { ...shown, maximised: holding.id }
+                                        : shown;
+                                    save_layout(next);
+                                    return next;
+                                });
+                            }
                             continue;
                         }
 
