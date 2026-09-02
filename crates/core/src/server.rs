@@ -190,6 +190,14 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
     };
 
     spawn_routine_ticker(state.clone());
+    // Before anything is watched, let go of what nothing will ever hear from.
+    // Otherwise these settle all at once on the first tick and the commander is
+    // woken with a day's worth of news about work that is long over.
+    let stranded = state.supervisor.forget_the_stranded(now_secs(), 6 * 60 * 60);
+    if stranded > 0 {
+        tracing::info!(stranded, "let go of watches whose briefs never landed");
+    }
+
     spawn_supervisor(state.clone());
     spawn_pull_watcher(state.clone());
 

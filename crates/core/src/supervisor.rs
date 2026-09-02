@@ -105,6 +105,23 @@ pub fn judge(watch: &Watch, seen: &Observation, rules: &Rules) -> Verdict {
         return Verdict::Finished(marker);
     }
 
+    // Asked before anything about delivery. A pane that is gone cannot be
+    // written to, so an undelivered brief on a dead pane asked to be resent
+    // forever: resending needs a pane, the attempt was never counted, and the
+    // watch never gave up. Measured: 95 watches on disk, 72 of them still
+    // "working", every one undelivered, the oldest two days old — each one read
+    // a pane, a transcript and a worktree on every tick.
+    if !seen.session_alive {
+        return Verdict::Finished(if seen.changed_files > 0 {
+            format!(
+                "{} finished and left {} changed file(s)",
+                watch.agent_id, seen.changed_files
+            )
+        } else {
+            format!("{} stopped without changing anything", watch.agent_id)
+        });
+    }
+
     if !watch.delivered && !delivered_now(seen, &watch.fingerprint) {
         if seen.age_seconds < rules.delivery_grace {
             return Verdict::Working;
@@ -119,17 +136,6 @@ pub fn judge(watch: &Watch, seen: &Observation, rules: &Rules) -> Verdict {
         } else {
             Verdict::Resend
         };
-    }
-
-    if !seen.session_alive {
-        return Verdict::Finished(if seen.changed_files > 0 {
-            format!(
-                "{} finished and left {} changed file(s)",
-                watch.agent_id, seen.changed_files
-            )
-        } else {
-            format!("{} stopped without changing anything", watch.agent_id)
-        });
     }
 
     if seen.card_has_evidence {
@@ -556,6 +562,37 @@ impl Supervisor {
         }
     }
 
+    /// Drop watches nothing will ever hear from again.
+    ///
+    /// A watch is kept so a step can settle and the commander can be told. One
+    /// whose brief never landed, whose pane died with the process it ran in,
+    /// and which has sat there for hours will never do either — it only costs a
+    /// pane read, a transcript read and a worktree read on every tick. Ninety-five
+    /// had gathered, and seventy-two of them were still being watched.
+    ///
+    /// Returns how many were let go.
+    pub fn forget_the_stranded(&self, now: u64, older_than: u64) -> usize {
+        let mut state = self.state.lock();
+        let before = state.watches.len();
+
+        state.watches.retain(|_, watch| {
+            let stranded = !watch.delivered
+                && watch.state == WatchState::Working
+                && now.saturating_sub(watch.started_at) > older_than;
+
+            !stranded
+        });
+
+        let gone = before - state.watches.len();
+        if gone > 0 {
+            let kept: Vec<String> = state.watches.keys().cloned().collect();
+            state.pending_for_leader.retain(|id| kept.contains(id));
+            self.persist(&state);
+        }
+
+        gone
+    }
+
     /// Watches that have finished but whose pane may still be held.
     pub fn settled(&self) -> Vec<Watch> {
         self.state
@@ -893,6 +930,36 @@ mod tests {
             ..seen()
         };
         assert!(!should_reap(&held, &mid_turn, &rules, false, 200), "a turn is running");
+    }
+
+    #[test]
+    fn a_watch_on_a_pane_that_is_gone_settles_instead_of_asking_forever() {
+        let held = Watch { delivered: false, ..watch() };
+        let gone = Observation {
+            session_alive: false,
+            age_seconds: 10_000,
+            ..seen()
+        };
+
+        assert!(
+            matches!(judge(&held, &gone, &Rules::default()), Verdict::Finished(_)),
+            "resending needs a pane; without one the watch used to ask forever"
+        );
+    }
+
+    #[test]
+    fn a_stranded_watch_is_let_go_and_a_live_one_is_not() {
+        let held = store("stranded");
+        let now = 100_000;
+
+        let stale = held.watch("p1", "s1", "t1", "ada", "pane-1", "repo", "tree", "do it", 1_000);
+        let fresh = held.watch("p1", "s2", "t2", "ada", "pane-2", "repo", "tree", "do it", now);
+
+        assert_eq!(held.forget_the_stranded(now, 6 * 60 * 60), 1);
+
+        let left: Vec<String> = held.list().into_iter().map(|watch| watch.id).collect();
+        assert!(!left.contains(&stale.id), "nothing will ever hear from that one");
+        assert!(left.contains(&fresh.id), "and the one just handed out is untouched");
     }
 
     #[test]
