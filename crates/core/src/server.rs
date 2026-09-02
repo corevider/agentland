@@ -2009,6 +2009,58 @@ async fn hand_back_what_it_was_holding(state: &AppState, agent: &Agent) {
     }
 }
 
+/// A commander that comes back with nothing in hand is handed the project.
+///
+/// Everybody else is brought back to the card they were holding; a commander
+/// usually holds none, so it came back to an empty prompt and sat there until
+/// somebody pressed the ignition. Its job is the project itself, which does not
+/// stop being true across a restart.
+async fn take_the_project_back_on(state: &AppState, agent: &Agent, worktree: &std::path::Path) {
+    if agent.role != "commander" {
+        return;
+    }
+
+    // Holding a card means it was already handed something above.
+    let holding = state
+        .board
+        .list()
+        .into_iter()
+        .any(|task| {
+            task.assignee.as_deref() == Some(agent.id.as_str())
+                && task.column != crate::board::Column::Done
+        });
+
+    if holding {
+        return;
+    }
+
+    // Waking a commander is a turn and a turn is money, so the week decides
+    // whether this happens now or waits for somebody to open the pane.
+    if !room_for(state, &identity_of(agent)).may_wake_the_commander() {
+        return;
+    }
+
+    let Some(repository) = state
+        .repos
+        .repositories()
+        .into_iter()
+        .find(|repository| repository.id == agent.repository_id)
+    else {
+        return;
+    };
+
+    let brief = take_the_project_on(&repository);
+    match hand_the_work_over(state, agent, worktree, &brief).await {
+        Ok(HandOver::Busy) => {}
+        Ok(_) => {
+            note(state, "commander.woke", &agent.id, &repository.id, "took the project back on");
+        }
+        Err(error) => {
+            tracing::warn!(error = %error.0, agent = %agent.id, "cannot hand the project back")
+        }
+    }
+}
+
 async fn bring_the_crew_back(state: AppState) {
     let interrupted = state.crew.take_the_interrupted();
     if interrupted.is_empty() {
@@ -2035,6 +2087,7 @@ async fn bring_the_crew_back(state: AppState) {
             Ok(started) => {
                 back.push(agent.name.clone());
                 hand_back_what_it_was_holding(&state, &started).await;
+                take_the_project_back_on(&state, &started, &worktree.path).await;
             }
             Err(error) => tracing::warn!(%error, agent = %agent.id, "cannot bring it back"),
         }
