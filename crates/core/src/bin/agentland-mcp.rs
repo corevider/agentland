@@ -106,6 +106,18 @@ fn tools() -> Value {
             }
         },
         {
+            "name": "task_take_to",
+            "description": "File a card against a different project. Use it when a card is about another repository rather than discarding and writing it again — what the card carries, a review above all, is kept. It arrives in that project's backlog, held by nobody: whoever was on it works in the old project, and so do its branch and worktree.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" },
+                    "repository_id": { "type": "string" }
+                },
+                "required": ["id", "repository_id"]
+            }
+        },
+        {
             "name": "crew_list",
             "description": "List the crew: name, role, engine, worktree and current state.",
             "inputSchema": { "type": "object", "properties": {} }
@@ -464,6 +476,11 @@ fn call_tool(core: &Core, name: &str, arguments: &Value) -> Result<Value, String
             "POST",
             &format!("/tasks/{}/move", text("id")?),
             Some(json!({ "column": text("column")? })),
+        ),
+        "task_take_to" => core.call(
+            "POST",
+            &format!("/tasks/{}/project", text("id")?),
+            Some(json!({ "repository_id": text("repository_id")?, "as_the_crew": true })),
         ),
         "crew_list" => core.call("GET", "/agents", None),
         "note_write" => core.call(

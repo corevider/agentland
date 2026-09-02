@@ -328,6 +328,43 @@ impl Board {
         Ok(updated)
     }
 
+    /// Move a card to the project it is actually about.
+    ///
+    /// The commander asked for this and the app could not do it: a card filed
+    /// against the wrong project could only be discarded and written again,
+    /// which destroys the review it carries. Everything bound to the old
+    /// project goes with it — whoever held it works there, and the branch and
+    /// worktree exist there and nowhere else — so it arrives in the backlog for
+    /// somebody in the new project to pick up.
+    pub fn take_to(&self, id: &str, repository_id: &str, at: u64) -> Result<Task> {
+        let mut state = self.state.lock();
+        let task = state
+            .tasks
+            .get_mut(id)
+            .ok_or_else(|| anyhow!("unknown task: {id}"))?;
+
+        if task.repository_id == repository_id {
+            bail!("{id} is already filed against {repository_id}");
+        }
+
+        let from = std::mem::replace(&mut task.repository_id, repository_id.to_owned());
+        task.assignee = None;
+        task.worktree = None;
+        task.branch = None;
+        task.column = Column::Backlog;
+        task.evidence.push(Entry::new(
+            Evidence::Note {
+                text: format!("moved from {from} to {repository_id}"),
+            },
+            "the board",
+            at,
+        ));
+
+        let updated = task.clone();
+        self.persist(&state);
+        Ok(updated)
+    }
+
     pub fn delete(&self, id: &str) -> Result<()> {
         let mut state = self.state.lock();
         state
@@ -495,6 +532,52 @@ mod tests {
 
         assert_eq!(ada_is_holding.len(), 1, "the one still in flight, not the finished one");
         assert_eq!(ada_is_holding[0].id, mine.id);
+    }
+
+    #[test]
+    fn a_card_filed_against_the_wrong_project_can_be_taken_to_the_right_one() {
+        let board = board("take-to");
+        let card = a_card(&board, None);
+
+        board
+            .record_assignment(&card.id, "ada", "svc-demo-tree", "agent/svc-demo-tree")
+            .expect("somebody picked it up");
+        board
+            .attach(
+                &card.id,
+                Evidence::Reviewed {
+                    verdict: "approve".into(),
+                    summary: "reads right".into(),
+                },
+                "rex",
+                50,
+            )
+            .expect("a review");
+
+        let moved = board.take_to(&card.id, "agentland", 100).expect("it moves");
+
+        assert_eq!(moved.repository_id, "agentland");
+        assert_eq!(moved.assignee, None, "whoever held it works in the old project");
+        assert_eq!(moved.worktree, None, "that worktree is in the old project only");
+        assert_eq!(moved.branch, None);
+        assert_eq!(moved.column, Column::Backlog);
+        assert!(
+            moved.evidence.iter().any(|entry| matches!(entry.what, Evidence::Reviewed { .. })),
+            "moving is the point: discarding and writing it again would lose the review"
+        );
+        assert!(
+            moved.evidence.iter().any(|entry| matches!(&entry.what, Evidence::Note { text } if text.contains("moved from"))),
+            "and the move itself reads on the card"
+        );
+    }
+
+    #[test]
+    fn taking_a_card_where_it_already_is_is_refused_rather_than_recorded() {
+        let board = board("take-to-same");
+        let card = a_card(&board, None);
+        let home = card.repository_id.clone();
+
+        assert!(board.take_to(&card.id, &home, 100).is_err());
     }
 
     #[test]

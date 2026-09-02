@@ -248,6 +248,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/tasks", get(list_tasks).post(create_task))
         .route("/tasks/{id}", delete(delete_task))
         .route("/tasks/{id}/move", post(move_task))
+        .route("/tasks/{id}/project", post(take_task_to))
         .route("/tasks/{id}/assign", post(assign_task).delete(release_task))
         .route("/dispatch", get(dispatch_status))
         .route("/dispatch/pause", post(pause_dispatch))
@@ -1837,6 +1838,40 @@ async fn move_task(
     Json(body): Json<MoveTask>,
 ) -> Result<Json<Task>, ApiError> {
     Ok(Json(state.board.move_to(&id, body.column)?))
+}
+
+#[derive(Deserialize)]
+struct TakeTo {
+    repository_id: String,
+    /// The crew asking rather than the human, so the record says who moved it.
+    /// It read "a person" for three cards the commander moved itself.
+    #[serde(default)]
+    as_the_crew: bool,
+}
+
+/// File a card against the project it is actually about.
+///
+/// Wanted by the commander and impossible until now: a card on the wrong
+/// project could only be discarded and written again, which throws away the
+/// review it carries.
+async fn take_task_to(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<TakeTo>,
+) -> Result<Json<Task>, ApiError> {
+    if !state
+        .repos
+        .repositories()
+        .into_iter()
+        .any(|repository| repository.id == body.repository_id)
+    {
+        return Err(anyhow::anyhow!("there is no project called {}", body.repository_id).into());
+    }
+
+    let moved = state.board.take_to(&id, &body.repository_id, now_secs())?;
+    let by = if body.as_the_crew { "the crew" } else { "a person" };
+    note(&state, "card.moved", by, &id, &body.repository_id);
+    Ok(Json(moved))
 }
 
 #[derive(Default, Deserialize)]
