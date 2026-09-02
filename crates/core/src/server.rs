@@ -775,6 +775,41 @@ fn spawn_supervisor(state: AppState) {
                             now,
                         );
                         state.journal.write("step.settled", &watch.agent_id, &watch.task_id, &reason, now);
+
+                        // A card whose step is over is not being worked on. It
+                        // stayed in "working" until the commander moved it, and
+                        // a commander idle at a prompt does not move anything:
+                        // measured, three cards sat in "working" with the work
+                        // committed, the tests passing and nobody touching them.
+                        //
+                        // It goes to review rather than done. Something was
+                        // written and nobody has looked at it yet, which is
+                        // exactly what that column means — done is still a
+                        // merge, or a person saying so.
+                        let wrote_something = touched
+                            .as_ref()
+                            .map(|held| held.files > 0)
+                            .unwrap_or(false);
+
+                        let wanted = state.board.get(&watch.task_id).and_then(|task| {
+                            crate::board::where_a_settled_card_goes(
+                                task.column,
+                                if wrote_something { 1 } else { 0 },
+                            )
+                        });
+
+                        if let Some(column) = wanted {
+                            if state.board.move_to(&watch.task_id, column).is_ok() {
+                                note(
+                                    &state,
+                                    "card.for_review",
+                                    "the supervisor",
+                                    &watch.task_id,
+                                    &reason,
+                                );
+                            }
+                        }
+
                         state.supervisor.settle(&watch.id, reason, now);
                     }
                     Verdict::LostIt(reason) => {

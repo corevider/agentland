@@ -408,6 +408,19 @@ impl Board {
     }
 }
 
+/// Where a card goes when the step working on it is over.
+///
+/// Only forward, and only from `working`: a card somebody moved by hand, or one
+/// already waiting on a reviewer, is left where they put it. Nothing written
+/// means nothing to look at, so it stays as it is and the commander decides.
+pub fn where_a_settled_card_goes(column: Column, files_written: usize) -> Option<Column> {
+    if column == Column::Working && files_written > 0 {
+        Some(Column::Review)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -631,6 +644,27 @@ mod tests {
             done.evidence.iter().any(|entry| entry.what.is_a_record()),
             "and once it has, the card says so"
         );
+    }
+
+    #[test]
+    fn a_step_that_wrote_something_leaves_its_card_waiting_to_be_read() {
+        assert_eq!(
+            where_a_settled_card_goes(Column::Working, 3),
+            Some(Column::Review),
+            "the work is written and nobody has looked at it"
+        );
+    }
+
+    #[test]
+    fn a_step_that_wrote_nothing_moves_no_card() {
+        assert_eq!(where_a_settled_card_goes(Column::Working, 0), None);
+    }
+
+    #[test]
+    fn a_card_somebody_already_moved_is_left_where_they_put_it() {
+        for held in [Column::Review, Column::Ready, Column::Done, Column::Backlog] {
+            assert_eq!(where_a_settled_card_goes(held, 5), None, "{held:?} is not the app's to change");
+        }
     }
 
     #[test]
