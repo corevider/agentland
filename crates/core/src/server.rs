@@ -1121,12 +1121,8 @@ fn spawn_supervisor(state: AppState) {
                 }
 
                 let text = words.join("\n\n");
-                let delivered = state
-                    .manager
-                    .get(&session_id)
-                    .map(|session| session.write_input(format!("{text}\r").as_bytes()));
 
-                if matches!(delivered, Some(Ok(()))) {
+                if say_it(&state, &session_id, &text).await {
                     state.crew_words.lock().remove(&agent_id);
                     tracing::info!(agent = %agent_id, "told an agent what its question was answered");
                 }
@@ -1193,12 +1189,9 @@ fn spawn_supervisor(state: AppState) {
                 } else {
                     words.join("\n\n")
                 };
-                let delivered = state
-                    .manager
-                    .get(&session_id)
-                    .map(|session| session.write_input(format!("{text}\r").as_bytes()));
+                let delivered = say_it(&state, &session_id, &text).await;
 
-                if matches!(delivered, Some(Ok(()))) {
+                if delivered {
                     let ids: Vec<String> = if carrying_news {
                         news.iter().map(|watch| watch.id.clone()).collect()
                     } else {
@@ -1918,50 +1911,59 @@ async fn hand_the_work_over(
         return Ok(HandOver::Busy);
     }
 
-    // The brief and the Enter go separately. A brief runs to several lines, and
-    // a multi-line write arrives at the engine as a paste — one block, held in
-    // the composer — which swallows a carriage return tacked onto its end.
-    // Measured: a step handed over this way sat unsent as "[Pasted text #1 +20
-    // lines]" while the agent waited at an empty prompt and the plan stalled.
-    let Some(session) = state.manager.get(&session_id) else {
-        return Ok(HandOver::Busy);
+    if say_it(state, &session_id, brief).await {
+        Ok(HandOver::Typed)
+    } else {
+        Ok(HandOver::Busy)
+    }
+}
+
+/// Type something into a pane and see that it was actually said.
+///
+/// The text and the Enter go separately: a message of several lines arrives at
+/// the engine as a paste — one block, held in the composer — which swallows a
+/// carriage return tacked onto its end. Measured twice, once on a plan step
+/// that sat unsent as "[Pasted text #1 +20 lines]", and once on a brief handed
+/// to a commander that had just come back.
+///
+/// One Enter is not proof either. A pane brought back with `--resume` is still
+/// loading when the text lands, and the carriage return falls into an engine
+/// that is not reading yet, so the turn is looked for and the Enter — never the
+/// text — repeated until it starts.
+async fn say_it(state: &AppState, session_id: &str, text: &str) -> bool {
+    let Some(session) = state.manager.get(session_id) else {
+        return false;
     };
 
-    if session.write_input(brief.as_bytes()).is_err() {
-        return Ok(HandOver::Busy);
+    if session.write_input(text.as_bytes()).is_err() {
+        return false;
     }
 
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
 
     if session.write_input(b"\r").is_err() {
-        return Ok(HandOver::Busy);
+        return false;
     }
 
-    // One Enter is not proof the turn began. A pane brought back with
-    // `--resume` is still loading when the brief lands, and the carriage return
-    // falls into an engine that is not reading yet: measured after a restart,
-    // where the whole brief sat at the prompt unsent while the commander
-    // counted as woken. So the turn is looked for, and the Enter — never the
-    // text — is repeated until it starts.
     for _ in 0..ENTER_ATTEMPTS {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
         let frame = state
             .manager
-            .read_log(&session_id, 8 * 1024)
+            .read_log(session_id, 8 * 1024)
             .map(|raw| strip_ansi(&raw))
             .unwrap_or_default();
 
         if crate::supervisor::turn_running(&frame) || crate::supervisor::asking_the_human(&frame) {
-            return Ok(HandOver::Typed);
+            return true;
         }
 
         if session.write_input(b"\r").is_err() {
-            return Ok(HandOver::Busy);
+            return false;
         }
     }
 
-    Ok(HandOver::Typed)
+    true
 }
 
 /// How many times the Enter is repeated while waiting for the turn to start.
@@ -2081,27 +2083,15 @@ async fn take_the_project_back_on(state: &AppState, agent: &Agent, worktree: &st
 
     let brief = take_the_project_on(&repository);
 
-    // A resumed pane carries the conversation it had before, so handing the
-    // same brief again reads as a stutter rather than a fresh start — the
-    // commander said as much: "if the repetition means the brief isn't reaching
-    // you, say so". Once it is in the pane, it has been said.
-    if let Some(session_id) = &agent.session_id {
-        let seen = state
-            .manager
-            .read_log(session_id, 64 * 1024)
-            .map(|raw| strip_ansi(&raw))
-            .unwrap_or_default();
-
-        let squashed: String = seen.chars().filter(|c| !c.is_whitespace()).collect();
-        let opening: String = brief
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .take(60)
-            .collect();
-
-        if squashed.contains(&opening) {
-            return;
-        }
+    // A resumed conversation carries what was already said, so handing the same
+    // brief again reads as a stutter — the commander said as much: "if the
+    // repetition means the brief isn't reaching you, say so". Asked of the
+    // engine's own transcript rather than the pane, because a pane that has
+    // just come back has not finished drawing its history and answered no to a
+    // question it had already been asked five times.
+    let opening: String = brief.chars().take(80).collect();
+    if crate::transcript::was_told(worktree, &opening).unwrap_or(false) {
+        return;
     }
 
     match hand_the_work_over(state, agent, worktree, &brief).await {
