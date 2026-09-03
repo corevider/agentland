@@ -262,6 +262,7 @@
                     <button id="paste" class="approve">paste</button>
                     <button id="let-in" class="approve">let me in</button>
                 </div>
+                <p class="empty" id="what-this-is"></p>
             </section>
 
             <section class="page">
@@ -358,7 +359,13 @@
             // and opens the camera on arrival. Nobody should have to be told
             // any of that.
             const secure_door = `https://${location.hostname}:${Number(location.port || 80) + 1}${location.pathname}#scan`;
-            const can_scan = Boolean(window.BarcodeDetector) && window.isSecureContext;
+
+            // A camera is the only thing that cannot be worked around: browsers
+            // open one on a secure page and nowhere else. Reading the code, on
+            // the other hand, is ours to solve — Safari has no BarcodeDetector,
+            // so a reader is kept beside this page for the browsers that do not.
+            const can_open_a_camera = Boolean(navigator.mediaDevices?.getUserMedia) && window.isSecureContext;
+            const can_scan = can_open_a_camera;
 
             if (!window.isSecureContext && location.protocol === "http:") {
                 gate_why.textContent =
@@ -366,7 +373,7 @@
                     "machine's own certificate the first time.";
             } else if (!can_scan) {
                 gate_why.textContent =
-                    "This browser cannot read a code itself — use its camera app on the code in " +
+                    "This browser will not open a camera here — use its camera app on the code in " +
                     "Settings, then Phone, or paste the address.";
                 scan.hidden = true;
             }
@@ -381,9 +388,45 @@
                 }
             });
 
+            /// Whatever this browser can read a code with: its own, or ours.
+            async function a_reader() {
+                if (window.BarcodeDetector) {
+                    const held = new BarcodeDetector({ formats: ["qr_code"] });
+                    return async (video) => (await held.detect(video)).map((code) => code.rawValue);
+                }
+
+                if (!window.jsQR) {
+                    await new Promise((settled, failed) => {
+                        const script = document.createElement("script");
+                        script.src = "vendor/jsQR.js";
+                        script.onload = settled;
+                        script.onerror = () => failed(new Error("the code reader would not load"));
+                        document.head.append(script);
+                    });
+                }
+
+                const canvas = document.createElement("canvas");
+                const paper = canvas.getContext("2d", { willReadFrequently: true });
+
+                return async (video) => {
+                    if (!video.videoWidth) {
+                        return [];
+                    }
+
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    paper.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                    const pixels = paper.getImageData(0, 0, canvas.width, canvas.height);
+                    const found = window.jsQR(pixels.data, pixels.width, pixels.height);
+
+                    return found ? [found.data] : [];
+                };
+            }
+
             async function look_for_a_code() {
                 try {
-                    const reader = new BarcodeDetector({ formats: ["qr_code"] });
+                    const read = await a_reader();
                     const stream = await navigator.mediaDevices.getUserMedia({
                         video: { facingMode: "environment" },
                     });
@@ -403,8 +446,8 @@
                         }
 
                         try {
-                            const found = await reader.detect(lens);
-                            const wanted = found.map((code) => token_from(code.rawValue)).find(Boolean);
+                            const found = await read(lens);
+                            const wanted = found.map((code) => token_from(code)).find(Boolean);
 
                             if (wanted) {
                                 stop();
@@ -424,6 +467,13 @@
                     gate_why.textContent = String(cause.message ?? cause);
                 }
             }
+
+            // What this browser can actually do, said plainly: guessing at it
+            // from the other end of a phone is how an evening goes.
+            document.getElementById("what-this-is").textContent =
+                `secure page: ${window.isSecureContext ? "yes" : "no"} · ` +
+                `camera allowed here: ${can_open_a_camera ? "yes" : "no"} · ` +
+                `code reader: ${window.BarcodeDetector ? "the browser's" : "ours"}`;
 
             scan.addEventListener("click", () => {
                 if (can_scan) {
