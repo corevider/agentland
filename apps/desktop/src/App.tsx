@@ -39,6 +39,9 @@ import {
     spawn_shell,
     type Agent,
     type SessionInfo,
+    start_listening,
+    stop_listening,
+    write_input,
 } from "@/lib/core";
 import { island_frames } from "@/lib/frames";
 import { probe_gpu, type GpuReport } from "@/lib/gpu";
@@ -138,6 +141,10 @@ export default function App() {
     const [sessions, set_sessions] = useState<SessionInfo[]>([]);
     const [settings, set_settings] = useState<Settings>(() => load_settings());
     const [settings_open, set_settings_open] = useState(false);
+    /// Held down, the microphone is recording; let go, what was said is typed
+    /// into the pane being watched. Not sent — read it before you send it.
+    const [listening, set_listening] = useState(false);
+    const [heard, set_heard] = useState<string | null>(null);
     const [busy, set_busy] = useState(false);
     const [error, set_error] = useState<string | null>(null);
     const metrics_ref = useRef(new Map<string, PaneMetrics>());
@@ -790,12 +797,59 @@ export default function App() {
                         open shells
                     </button>
                     <button
+                        className={`rounded border px-2 py-[3px] font-mono text-[11px] ${
+                            listening
+                                ? "border-coral bg-coral/15 text-coral"
+                                : "border-reef text-shell hover:border-foam"
+                        }`}
+                        title="hold to speak — what you say is typed into the pane you are watching, not sent"
+                        onPointerDown={() => {
+                            set_heard(null);
+                            start_listening()
+                                .then(() => set_listening(true))
+                                .catch((cause) => set_error(String(cause)));
+                        }}
+                        onPointerUp={() => {
+                            if (!listening) {
+                                return;
+                            }
+
+                            set_listening(false);
+                            stop_listening()
+                                .then(({ text }) => {
+                                    if (!text) {
+                                        set_heard("nothing was said");
+                                        return;
+                                    }
+
+                                    const pane = focused_id ?? shown_sessions[0]?.id;
+                                    if (!pane) {
+                                        set_heard(text);
+                                        return;
+                                    }
+
+                                    set_heard(text);
+                                    void write_input(pane, text);
+                                })
+                                .catch((cause) => set_error(String(cause)));
+                        }}
+                    >
+                        {listening ? "listening…" : "hold to speak"}
+                    </button>
+
+                    <button
                         className="rounded border border-reef px-2 py-[3px] font-mono text-[11px] text-shell hover:border-foam"
                         onClick={clear}
                     >
                         clear
                     </button>
                 </div>
+
+                {heard ? (
+                    <span className="max-w-[28rem] truncate font-mono text-[10px] text-turquoise" title={heard}>
+                        “{heard}”
+                    </span>
+                ) : null}
 
                 <span className="font-mono text-[10px] text-shade">
                     {pane_count} × {rate.toLocaleString()} lps

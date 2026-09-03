@@ -449,6 +449,33 @@ export interface Ignited {
 ///
 /// The same call whether there is nobody yet, somebody stopped, or somebody
 /// already working — the core decides which of the three it is.
+/// Speaking to the crew instead of typing to it. The recorder is whatever is
+/// already on the machine; the transcriber is a command somebody set.
+export interface VoiceState {
+    recorder?: string;
+    transcriber?: string;
+    listening: boolean;
+}
+
+export function voice_state(): Promise<VoiceState> {
+    return request<VoiceState>("/voice");
+}
+
+export function set_transcriber(command: string): Promise<VoiceState> {
+    return request<VoiceState>("/voice", {
+        method: "POST",
+        body: JSON.stringify({ command }),
+    });
+}
+
+export function start_listening(): Promise<void> {
+    return request<void>("/voice/start", { method: "POST" });
+}
+
+export function stop_listening(): Promise<{ text: string }> {
+    return request<{ text: string }>("/voice/stop", { method: "POST" });
+}
+
 /// What a project is for, in the words of the person who asked.
 ///
 /// Kept by the core rather than in a pane, because a pane traded for a fresh

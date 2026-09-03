@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { UpdatesSection } from "@/components/UpdatesSection";
+import { VoiceSection } from "@/components/VoiceSection";
 import type { GpuReport } from "@/lib/gpu";
 import type { Settings } from "@/lib/settings";
 
@@ -8,10 +9,11 @@ const PANE_CHOICES = [1, 2, 4, 8, 12];
 const RATE_CHOICES = [1_000, 5_000, 10_000, 20_000, 50_000];
 const DURATION_CHOICES = [10_000, 30_000, 60_000];
 
-type SectionId = "updates" | "benchmark" | "terminal" | "diagnostics";
+type SectionId = "updates" | "voice" | "benchmark" | "terminal" | "diagnostics";
 
 const SECTIONS: Array<{ id: SectionId; label: string; hint: string }> = [
     { id: "updates", label: "Updates", hint: "What version this is, and what is out" },
+    { id: "voice", label: "Voice", hint: "Speaking to the crew instead of typing" },
     { id: "benchmark", label: "Benchmark", hint: "Load used by the throughput gate" },
     { id: "terminal", label: "Terminal", hint: "How panes render under load" },
     { id: "diagnostics", label: "Diagnostics", hint: "What this machine reports" },
@@ -99,6 +101,8 @@ export function SettingsPage({ settings, on_change, on_close, gpu, surface }: Pr
 
                 <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
                     {section === "updates" ? <UpdatesSection /> : null}
+
+                    {section === "voice" ? <VoiceSection /> : null}
 
                     {section === "benchmark" ? (
                         <div className="max-w-2xl">

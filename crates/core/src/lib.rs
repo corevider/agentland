@@ -36,6 +36,7 @@ pub mod skills;
 pub mod supervisor;
 pub mod transcript;
 pub mod vault;
+pub mod voice;
 
 pub use approvals::{AnswerApproval, Approval, Approvals, RequestApproval};
 pub use auth::{Scope as TokenScope, ScopedToken, TokenStore};

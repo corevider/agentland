@@ -100,6 +100,10 @@ struct AppState {
     /// the only honest way to count them is to read what the engines wrote.
     journal: Arc<crate::journal::Journal>,
     goals: Arc<crate::goals::Goals>,
+    voice: Arc<crate::voice::Voice>,
+    /// Small things a person set: the transcriber command, and whatever else
+    /// names a program or a preference rather than a piece of work.
+    settings: Arc<parking_lot::Mutex<std::collections::BTreeMap<String, String>>>,
     /// What a person has already said one project may run without asking.
     permits: Arc<crate::permits::Permits>,
     spending: Arc<parking_lot::Mutex<BTreeMap<String, crate::meter::Window>>>,
@@ -183,6 +187,10 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         notices: Arc::new(crate::notices::Notices::default()),
         journal: Arc::new(crate::journal::Journal::new(data_dir.clone())),
         goals: Arc::new(crate::goals::Goals::new(data_dir.clone())),
+        voice: Arc::new(crate::voice::Voice::new(data_dir.clone())),
+        settings: Arc::new(parking_lot::Mutex::new(crate::db::load_state(
+            &data_dir, "settings",
+        ))),
         permits: Arc::new(crate::permits::Permits::new(data_dir.clone())),
         quota: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
         spending: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
@@ -284,6 +292,9 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/budget", get(read_budget).post(set_ceilings))
         .route("/journal", get(read_journal))
         .route("/goals", get(read_goals))
+        .route("/voice", get(read_voice).post(set_transcriber))
+        .route("/voice/start", post(start_listening))
+        .route("/voice/stop", post(stop_listening))
         .route("/repos/{id}/goal", post(set_goal).delete(clear_goal))
         .route("/permits", get(read_permits).delete(forget_permit))
         .route("/stacks", get(list_starters))
@@ -1117,6 +1128,22 @@ fn spawn_supervisor(state: AppState) {
                 // question for a person: it is the agent asking whether to do
                 // the work it was already given. Answered here, the way the
                 // role was hired to work.
+                // Asked which way to resume, the summary is both what the
+                // engine recommends and what this app should pay for: it is
+                // what started the pane with --resume in the first place.
+                if crate::supervisor::resume_is_waiting(&tail) {
+                    if say_it(&state, &session_id, "1").await {
+                        note(
+                            &state,
+                            "resume.answered",
+                            "the supervisor",
+                            &agent.id,
+                            "resumed from the summary",
+                        );
+                        continue;
+                    }
+                }
+
                 if crate::supervisor::plan_is_waiting(&tail) {
                     tracing::info!(agent = %agent.id, "a plan is waiting to run");
                     let answer =
@@ -4326,6 +4353,80 @@ async fn forget_permit(
     note(&state, "permit.revoked", "a person", &body.repository_id, &body.rule);
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Serialize)]
+struct VoiceState {
+    /// The recorder found on this machine, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recorder: Option<&'static str>,
+    /// The command that reads the words back, as somebody set it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transcriber: Option<String>,
+    listening: bool,
+}
+
+fn transcriber_of(state: &AppState) -> Option<String> {
+    state
+        .settings
+        .lock()
+        .get("transcriber")
+        .cloned()
+        .filter(|held| !held.trim().is_empty())
+        .or_else(|| std::env::var("AGENTLAND_TRANSCRIBER").ok())
+        .filter(|held| !held.trim().is_empty())
+}
+
+async fn read_voice(State(state): State<AppState>) -> Json<VoiceState> {
+    Json(VoiceState {
+        recorder: state.voice.recorder(),
+        transcriber: transcriber_of(&state),
+        listening: state.voice.listening(),
+    })
+}
+
+#[derive(Deserialize)]
+struct SetTranscriber {
+    command: String,
+}
+
+/// The command that reads a recording back. A person's to set: it names a
+/// program on their machine, and nothing is bundled.
+async fn set_transcriber(
+    State(state): State<AppState>,
+    Json(body): Json<SetTranscriber>,
+) -> Json<VoiceState> {
+    state
+        .settings
+        .lock()
+        .insert("transcriber".to_owned(), body.command.trim().to_owned());
+    crate::db::save_state(&state.config.data_dir, "settings", &*state.settings.lock());
+
+    Json(VoiceState {
+        recorder: state.voice.recorder(),
+        transcriber: transcriber_of(&state),
+        listening: state.voice.listening(),
+    })
+}
+
+async fn start_listening(State(state): State<AppState>) -> Result<StatusCode, ApiError> {
+    state.voice.start()?;
+    note(&state, "voice.listening", "a person", "", "");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Serialize)]
+struct Said {
+    text: String,
+}
+
+/// Stop recording and say what was said.
+async fn stop_listening(State(state): State<AppState>) -> Result<Json<Said>, ApiError> {
+    let command = transcriber_of(&state);
+    let text = state.voice.stop(command.as_deref())?;
+
+    note(&state, "voice.heard", "a person", "", &text);
+    Ok(Json(Said { text }))
 }
 
 #[derive(Deserialize)]

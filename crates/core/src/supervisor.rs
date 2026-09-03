@@ -327,6 +327,21 @@ pub fn plan_is_waiting(frame: &str) -> bool {
         && squashed.contains("2.yes")
 }
 
+/// The engine asking whether to resume the whole of a long session.
+///
+/// Ours to answer: this app is what started the pane with `--resume`, and the
+/// summary is both the cheaper answer and the one the engine recommends. A
+/// commander sat on one of these for hours — eight hours of conversation and
+/// 183k tokens, waiting to be told which.
+pub fn resume_is_waiting(frame: &str) -> bool {
+    let squashed: String = the_end_of(frame, 16)
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+
+    squashed.contains("resumefromsummary") && squashed.contains("resumefullsession")
+}
+
 /// Which way to answer it: the way this agent was hired to work.
 ///
 /// "Auto mode" for somebody already trusted to edit without asking, and
@@ -1113,6 +1128,21 @@ mod asking_tests {
 
         assert!(super::plan_is_waiting(frame));
         assert!(asking_the_human(frame));
+    }
+
+    /// Word for word off a commander's pane, blank lines and all.
+    const RESUME_PICKER: &str = "This session is 8h 36m old and 182.9k tokens.\n\nResuming the full session will consume a substantial portion of your usage limits. We recommend resuming from a summary.\n\n❯ 1. Resume from summary (recommended)\n  2. Resume full session as-is\n  3. Don't ask me again\n\nEnter to confirm · Esc to cancel";
+
+    #[test]
+    fn being_asked_which_way_to_resume_is_ours_to_answer() {
+        assert!(asking_the_human(RESUME_PICKER));
+        assert!(super::resume_is_waiting(RESUME_PICKER));
+    }
+
+    #[test]
+    fn a_plan_picker_is_not_a_resume_picker() {
+        assert!(!super::resume_is_waiting(PLAN_PICKER));
+        assert!(!super::plan_is_waiting(RESUME_PICKER));
     }
 
     #[test]
