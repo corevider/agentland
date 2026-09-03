@@ -797,7 +797,9 @@ export default function App() {
                         open shells
                     </button>
                     <button
-                        className={`rounded border px-2 py-[3px] font-mono text-[11px] ${
+                        // Held down, a button is a button and not a paragraph:
+                        // without this, holding it starts selecting the label.
+                        className={`select-none rounded border px-2 py-[3px] font-mono text-[11px] ${
                             listening
                                 ? "border-coral bg-coral/15 text-coral"
                                 : "border-reef text-shell hover:border-foam"

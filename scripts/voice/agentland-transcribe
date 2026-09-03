@@ -15,6 +15,10 @@ import time
 HOME = os.path.expanduser("~/.local/share/agentland-voice")
 SOCKET = os.path.join(HOME, "warm.sock")
 MODEL = os.environ.get("AGENTLAND_WHISPER_MODEL", "small")
+# Left unset the model guesses, and a short sentence gives it little to guess
+# from: three Turkish words came back as English ones. Naming the language
+# takes the guess away.
+LANGUAGE = os.environ.get("AGENTLAND_WHISPER_LANGUAGE") or None
 MODELS = os.path.join(HOME, "models")
 IDLE_SECONDS = 30 * 60
 
@@ -29,7 +33,7 @@ def warm_up(held) -> None:
         file.setframerate(16000)
         file.writeframes(b"\x00\x00" * 16000)
 
-    parts, _ = held.transcribe(quiet, vad_filter=True, beam_size=1)
+    parts, _ = held.transcribe(quiet, vad_filter=True, beam_size=1, language=LANGUAGE)
     for _ in parts:
         pass
 
@@ -77,6 +81,7 @@ def serve() -> int:
                     vad_filter=True,
                     beam_size=1,
                     condition_on_previous_text=False,
+                    language=LANGUAGE,
                 )
                 said = " ".join(part.text.strip() for part in parts).strip()
 

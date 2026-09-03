@@ -64,6 +64,12 @@ export function VoiceSection() {
                     {"{file}"} is where the recording goes; left out, the path is put on the end. It
                     runs on this machine and nothing is sent anywhere.
                 </span>
+                <span className="font-mono text-[10px] text-shade">
+                    Left to guess, a model hears a short sentence as English. Name the language by
+                    putting it in front of the command:{" "}
+                    <span className="text-linen">AGENTLAND_WHISPER_LANGUAGE=tr</span> — or{" "}
+                    <span className="text-linen">en</span>, or nothing at all to let it guess.
+                </span>
             </label>
 
             <div className="flex items-center gap-2">

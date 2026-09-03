@@ -38,6 +38,18 @@ MIT-licensed: no account, no key, and nothing leaves the machine.
 
 Models ending in `.en` hear English and nothing else.
 
+## Which language
+
+Left to guess, a model hears a short sentence as English — three Turkish words
+came back as English ones. Name it in front of the command:
+
+```
+AGENTLAND_WHISPER_LANGUAGE=tr ~/.local/bin/agentland-transcribe {file}
+```
+
+Unset, it guesses, which is right for somebody who moves between languages and
+wrong for short sentences.
+
 ## Why it stays running
 
 Loading the model costs about eight seconds, and dictation that waits eight
