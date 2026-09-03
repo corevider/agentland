@@ -298,6 +298,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/goals", get(read_goals))
         .route("/standards", get(read_standards).post(set_standards))
         .route("/phone", get(phone_way_in))
+        .route("/stop", post(stop_everything))
         .route("/commander", get(commander_says))
         .route("/voice", get(read_voice).post(set_transcriber))
         .route("/voice/start", post(start_listening))
@@ -4599,6 +4600,23 @@ struct PhoneWayIn {
     /// False when the core answers only the machine it runs on, which is a
     /// code that goes nowhere.
     reachable: bool,
+}
+
+/// Asked, from the tray, to stop the crew and go.
+///
+/// The window is one client of a core that outlives it, which is right for a
+/// closed window and wrong for somebody who chose "stop the crew and quit".
+/// The announcement goes first, so nothing finds a core that is on its way
+/// out; then the answer; then the process, and every pane with it.
+async fn stop_everything(State(state): State<AppState>) -> StatusCode {
+    crate::service::forget(&state.config.data_dir);
+
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        std::process::exit(0);
+    });
+
+    StatusCode::NO_CONTENT
 }
 
 /// How to get a phone in without typing a token off a screen.
