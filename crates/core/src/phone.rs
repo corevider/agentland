@@ -8,14 +8,16 @@ use qrcode::QrCode;
 /// The address to hand a phone. The trailing slash matters: the page is served
 /// from a folder, and without it a browser asks for a file.
 pub fn url_for(host: &str, port: u16, token: &str) -> String {
-    format!("http://{host}:{port}/mobile/?token={token}")
+    format!("http://{host}:{port}/mobile/?token={token}&v={}", env!("CARGO_PKG_VERSION"))
 }
 
 /// The same address at the door that a browser will open a camera and a
 /// microphone on. Its certificate is this machine's own, so a phone says once
 /// that it does not recognise it.
+/// The version rides along so a scanned code always opens the page this core
+/// serves, rather than whatever the phone kept from last time.
 pub fn url_for_securely(host: &str, port: u16, token: &str) -> String {
-    format!("https://{host}:{port}/mobile/?token={token}")
+    format!("https://{host}:{port}/mobile/?token={token}&v={}", env!("CARGO_PKG_VERSION"))
 }
 
 /// Whether a phone could reach this at all.
@@ -47,15 +49,14 @@ mod tests {
     fn the_address_carries_the_token_and_ends_in_a_slash() {
         let url = url_for("192.168.1.128", 9470, "abc123");
 
-        assert_eq!(url, "http://192.168.1.128:9470/mobile/?token=abc123");
+        assert!(url.starts_with("http://192.168.1.128:9470/mobile/?token=abc123"));
+        assert!(url.contains("&v="), "the version rides along: {url}");
     }
 
     #[test]
     fn the_secure_door_is_the_same_address_a_door_along() {
-        assert_eq!(
-            url_for_securely("192.168.1.128", 9471, "abc"),
-            "https://192.168.1.128:9471/mobile/?token=abc"
-        );
+        assert!(url_for_securely("192.168.1.128", 9471, "abc")
+            .starts_with("https://192.168.1.128:9471/mobile/?token=abc"));
     }
 
     #[test]

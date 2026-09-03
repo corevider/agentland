@@ -353,7 +353,20 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
             // A phone is given an address, not a path: typing the bare one
             // answered 404 with no content type, which a browser saves as
             // document.txt rather than showing.
-            app.nest_service("/mobile", ServeDir::new(dir)).route(
+            // Never from a cache. The page changes with the core, and a phone
+            // holding yesterday's copy shows yesterday's behaviour while
+            // somebody swears the fix did not work — measured, twice.
+            let fresh = axum::routing::any_service(ServeDir::new(dir)).layer(
+                axum::middleware::map_response(|mut answer: Response| async move {
+                    answer.headers_mut().insert(
+                        header::CACHE_CONTROL,
+                        HeaderValue::from_static("no-store, must-revalidate"),
+                    );
+                    answer
+                }),
+            );
+
+            app.nest_service("/mobile", fresh).route(
                 "/",
                 get(|| async { axum::response::Redirect::temporary("/mobile/") }),
             )
