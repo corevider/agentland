@@ -248,9 +248,13 @@
                     It opens this page already let in. Or paste the address printed under the code.
                 </p>
                 <video id="lens" playsinline hidden></video>
+                <div class="row">
+                    <button id="secure" class="approve" hidden>open the page that can use the camera</button>
+                </div>
                 <textarea id="way-in" rows="2" placeholder="https://192.168.1.5:9471/mobile/?token=…"></textarea>
                 <div class="row">
                     <button id="scan" class="approve" hidden>scan the code</button>
+                    <button id="paste" class="approve">paste</button>
                     <button id="let-in" class="approve">let me in</button>
                 </div>
             </section>
@@ -346,11 +350,31 @@
 
             scan.hidden = !can_scan;
 
-            if (!can_scan && window.isSecureContext === false) {
+            // The camera is refused on a plain http page, and the core keeps a
+            // door that is not: the same address, one port along. Offering it
+            // is better than explaining why the button is missing.
+            const secure = document.getElementById("secure");
+
+            if (!window.isSecureContext && location.protocol === "http:") {
+                const door = `https://${location.hostname}:${Number(location.port || 80) + 1}${location.pathname}`;
+                secure.hidden = false;
+                secure.addEventListener("click", () => location.assign(door));
+
                 gate_why.textContent =
-                    "Scan the code with this phone's camera app: Agentland, Settings, then Phone. " +
-                    "This page cannot open a camera over plain http — the address in the code does.";
+                    "This page cannot open a camera over plain http. Open the secure page below — " +
+                    "your phone will say it does not recognise the certificate, which is this " +
+                    "machine's own — or scan the code with the camera app instead.";
             }
+
+            // Selecting a long address by hand on a phone is nobody's idea of
+            // a way in.
+            document.getElementById("paste").addEventListener("click", async () => {
+                try {
+                    way_in.value = await navigator.clipboard.readText();
+                } catch {
+                    gate_why.textContent = "This browser will not hand over the clipboard — paste it into the box yourself.";
+                }
+            });
 
             scan.addEventListener("click", async () => {
                 try {
