@@ -75,6 +75,172 @@ fn updater_status() -> String {
     }
 }
 
+/// Bring the window back from wherever closing it put it.
+fn show_the_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+/// The crew in one line, for the tray: how many, and what they are up to.
+fn crew_line(presences: &[String]) -> String {
+    if presences.is_empty() {
+        return "Nobody in the crew".to_owned();
+    }
+
+    let mut said = vec![format!("{} in the crew", presences.len())];
+
+    for (word, read) in [("working", "working"), ("waiting", "waiting"), ("attention", "need you")] {
+        let count = presences.iter().filter(|held| held.as_str() == word).count();
+        if count > 0 {
+            said.push(format!("{count} {read}"));
+        }
+    }
+
+    said.join(" · ")
+}
+
+fn panes_line(open: usize) -> String {
+    match open {
+        0 => "No panes open".to_owned(),
+        1 => "1 pane open".to_owned(),
+        many => format!("{many} panes open"),
+    }
+}
+
+/// One question to the core, answered as JSON or not at all.
+fn ask_the_core(client: &reqwest::blocking::Client, endpoint: &CoreEndpoint, path: &str) -> Option<serde_json::Value> {
+    client
+        .get(format!("http://{}:{}{path}", endpoint.host, endpoint.port))
+        .header("x-auth-token", &endpoint.token)
+        .send()
+        .ok()
+        .filter(|answer| answer.status().is_success())
+        .and_then(|answer| answer.json().ok())
+}
+
+/// Tell the core to stop the crew and go. Whether or not it answers, the
+/// window is leaving: a core that is not there is already stopped.
+fn stop_the_crew(endpoint: &CoreEndpoint) {
+    let Ok(client) = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+    else {
+        return;
+    };
+
+    let _ = client
+        .post(format!("http://{}:{}/stop", endpoint.host, endpoint.port))
+        .header("x-auth-token", &endpoint.token)
+        .send();
+}
+
+/// An icon in the tray, so closing the window puts it away rather than ending it.
+///
+/// The crew goes on working in the core whether the window is there or not,
+/// and what a person wants from the close button is the window out of the way
+/// with somewhere to get it back from. The menu says what the crew is doing,
+/// and offers two ways out, named for what they leave behind.
+fn put_an_icon_in_the_tray(app: &tauri::App, endpoint: CoreEndpoint) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+    let crew = MenuItem::with_id(app, "crew", "Asking the core…", false, None::<&str>)?;
+    let panes = MenuItem::with_id(app, "panes", "", false, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Open Agentland", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit — the crew keeps working", true, None::<&str>)?;
+    let stop = MenuItem::with_id(app, "stop", "Stop the crew and quit", true, None::<&str>)?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &crew,
+            &panes,
+            &PredefinedMenuItem::separator(app)?,
+            &open,
+            &PredefinedMenuItem::separator(app)?,
+            &quit,
+            &stop,
+        ],
+    )?;
+
+    let for_stopping = endpoint.clone();
+    let mut tray = TrayIconBuilder::with_id("agentland")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .tooltip("Agentland")
+        .on_menu_event(move |app, event| match event.id().as_ref() {
+            "open" => show_the_window(app),
+            "quit" => app.exit(0),
+            "stop" => {
+                let handle = app.clone();
+                let endpoint = for_stopping.clone();
+                std::thread::spawn(move || {
+                    stop_the_crew(&endpoint);
+                    handle.exit(0);
+                });
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_the_window(tray.app_handle());
+            }
+        });
+
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+
+    let tray = tray.build(app)?;
+
+    // What the crew is doing, read off the core every few seconds and written
+    // on the menu, so the icon is worth hovering over when the window is away.
+    std::thread::spawn(move || {
+        let Ok(client) = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_millis(1500))
+            .build()
+        else {
+            return;
+        };
+
+        loop {
+            let agents = ask_the_core(&client, &endpoint, "/agents");
+            let sessions = ask_the_core(&client, &endpoint, "/sessions");
+
+            let (crew_said, panes_said) = match (agents, sessions) {
+                (Some(agents), sessions) => {
+                    let presences: Vec<String> = agents
+                        .as_array()
+                        .map(|held| {
+                            held.iter()
+                                .filter_map(|agent| agent["presence"].as_str().map(str::to_owned))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let open = sessions.and_then(|held| held.as_array().map(Vec::len)).unwrap_or(0);
+                    (crew_line(&presences), panes_line(open))
+                }
+                (None, _) => ("The core is not answering".to_owned(), String::new()),
+            };
+
+            let _ = crew.set_text(&crew_said);
+            let _ = panes.set_text(&panes_said);
+            let _ = tray.set_tooltip(Some(format!("Agentland — {crew_said}")));
+
+            std::thread::sleep(std::time::Duration::from_secs(4));
+        }
+    });
+
+    Ok(())
+}
+
 fn allowed_hosts(host: &str, port: u16) -> Vec<String> {
     if let Ok(configured) = std::env::var("AGENTLAND_ALLOWED_HOSTS") {
         let listed: Vec<String> = configured
@@ -369,6 +535,7 @@ fn main() {
         port: endpoint.port,
         token: endpoint.token.clone(),
     };
+    let for_the_tray = dialled.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -402,13 +569,23 @@ fn main() {
             let moved_or_resized = Arc::new(AtomicBool::new(false));
             let watching = moved_or_resized.clone();
 
+            put_an_icon_in_the_tray(app, for_the_tray)?;
+
             if let Some(window) = app.get_webview_window("main") {
+                let hidden = window.clone();
                 window.on_window_event(move |event| {
                     if matches!(
                         event,
                         tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_)
                     ) {
                         watching.store(true, Ordering::Relaxed);
+                    }
+
+                    // The close button puts the window away; the tray icon
+                    // brings it back, and Quit there is how it ends.
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = hidden.hide();
                     }
                 });
             }
@@ -427,6 +604,48 @@ fn main() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("failed to start Agentland");
+        .build(tauri::generate_context!())
+        .expect("failed to start Agentland")
+        .run(|app, event| {
+            // A dock icon clicked with every window hidden, on a Mac.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                show_the_window(app);
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
+}
+
+#[cfg(test)]
+mod tray_tests {
+    use super::{crew_line, panes_line};
+
+    fn words(held: &[&str]) -> Vec<String> {
+        held.iter().map(|word| (*word).to_owned()).collect()
+    }
+
+    #[test]
+    fn an_empty_crew_says_so() {
+        assert_eq!(crew_line(&[]), "Nobody in the crew");
+    }
+
+    #[test]
+    fn the_crew_is_counted_and_what_matters_is_named() {
+        let line = crew_line(&words(&["working", "working", "attention", "done"]));
+        assert_eq!(line, "4 in the crew · 2 working · 1 need you");
+    }
+
+    #[test]
+    fn a_state_nobody_is_in_is_not_mentioned() {
+        assert_eq!(crew_line(&words(&["waiting"])), "1 in the crew · 1 waiting");
+    }
+
+    #[test]
+    fn panes_are_counted_in_english() {
+        assert_eq!(panes_line(0), "No panes open");
+        assert_eq!(panes_line(1), "1 pane open");
+        assert_eq!(panes_line(3), "3 panes open");
+    }
 }
