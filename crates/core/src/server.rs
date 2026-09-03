@@ -297,6 +297,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/journal", get(read_journal))
         .route("/goals", get(read_goals))
         .route("/standards", get(read_standards).post(set_standards))
+        .route("/phone", get(phone_way_in))
         .route("/voice", get(read_voice).post(set_transcriber))
         .route("/voice/start", post(start_listening))
         .route("/voice/stop", post(stop_listening))
@@ -347,7 +348,14 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
     let app = match std::env::var("AGENTLAND_MOBILE_DIR").ok().filter(|dir| !dir.is_empty()) {
         Some(dir) => {
             tracing::info!(%dir, "serving the phone companion at /mobile");
-            app.nest_service("/mobile", ServeDir::new(dir))
+
+            // A phone is given an address, not a path: typing the bare one
+            // answered 404 with no content type, which a browser saves as
+            // document.txt rather than showing.
+            app.nest_service("/mobile", ServeDir::new(dir)).route(
+                "/",
+                get(|| async { axum::response::Redirect::temporary("/mobile/") }),
+            )
         }
         None => app,
     };
@@ -4469,6 +4477,43 @@ async fn said_elsewhere(
 
     note(&state, "goal.set", "a person", &goal.repository_id, &goal.text);
     Ok(Json(serde_json::json!({ "goal": goal.repository_id })))
+}
+
+#[derive(Serialize)]
+struct PhoneWayIn {
+    /// The addresses a phone could use, best first.
+    urls: Vec<String>,
+    /// The first of them, drawn as something a camera can read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<String>,
+    /// False when the core answers only the machine it runs on, which is a
+    /// code that goes nowhere.
+    reachable: bool,
+}
+
+/// How to get a phone in without typing a token off a screen.
+async fn phone_way_in(State(state): State<AppState>) -> Json<PhoneWayIn> {
+    let port = state.config.port;
+    let token = &state.config.token;
+    let reachable = crate::phone::reachable(&state.config.host);
+
+    let urls: Vec<String> = if reachable {
+        crate::service::on_this_network(port)
+            .into_iter()
+            .filter_map(|held| held.rsplit_once(':').map(|(host, _)| host.to_owned()))
+            .map(|host| crate::phone::url_for(&host, port, token))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let code = urls.first().and_then(|url| crate::phone::as_a_code(url));
+
+    Json(PhoneWayIn {
+        urls,
+        code,
+        reachable,
+    })
 }
 
 #[derive(Serialize)]

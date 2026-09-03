@@ -20,6 +20,7 @@ pub mod meter;
 pub mod notices;
 pub mod metrics;
 pub mod permits;
+pub mod phone;
 pub mod plans;
 pub mod ports;
 pub mod pulls;

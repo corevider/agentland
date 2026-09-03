@@ -449,6 +449,18 @@ export interface Ignited {
 ///
 /// The same call whether there is nobody yet, somebody stopped, or somebody
 /// already working — the core decides which of the three it is.
+/// How to get a phone in: an address that carries the token, and that address
+/// drawn as something a camera can read.
+export interface PhoneWayIn {
+    urls: string[];
+    code?: string;
+    reachable: boolean;
+}
+
+export function phone_way_in(): Promise<PhoneWayIn> {
+    return request<PhoneWayIn>("/phone");
+}
+
 /// How the house works: handed to every agent, in every project, for every
 /// turn — not repeated in each brief.
 export interface HouseRules {
