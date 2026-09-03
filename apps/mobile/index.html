@@ -415,6 +415,47 @@
                 flex: 1;
             }
 
+            /* The last few things the commander said, as it wrote them. */
+            .said {
+                font: 0.82rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+                color: var(--muted);
+                white-space: pre-wrap;
+                overflow-wrap: anywhere;
+            }
+
+            .said div + div {
+                margin-top: 0.35rem;
+            }
+
+            .said div:last-child {
+                color: var(--ink);
+            }
+
+            /* Nothing in the bar is text to be selected: it is all buttons, and
+               a long press on a button used to start selecting the label under
+               the thumb. */
+            #bar,
+            #bar * {
+                user-select: none;
+                -webkit-user-select: none;
+                -webkit-touch-callout: none;
+            }
+
+            #bar a {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                width: 3rem;
+                height: 3rem;
+                border-radius: 0.8rem;
+                border: 1px solid var(--edge);
+            }
+
+            #bar a svg {
+                width: 1.5rem;
+                height: 1.5rem;
+            }
+
             #what-this-is b {
                 font-weight: 600;
                 color: var(--glow);
@@ -534,6 +575,11 @@
             <section class="page">
                 <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> Waiting for you</h2>
                 <div id="approvals"><p class="empty">Nothing to answer.</p></div>
+            </section>
+
+            <section class="page" id="commander-card" hidden>
+                <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 18h16M5 18l-1-8 4 3 4-6 4 6 4-3-1 8"/></svg> <span id="commander-who">Commander</span></h2>
+                <div id="commander-said" class="said"></div>
             </section>
 
             <section class="page">
@@ -906,6 +952,13 @@
             let last_agents = [];
 
             function render_crew(agents) {
+                // The commander first: it is the one a person looks for, and
+                // the rest are working to what it decided.
+                agents = [...agents].sort((one, other) => {
+                    const rank = (held) => (held.role === "commander" ? 0 : 1);
+                    return rank(one) - rank(other) || one.name.localeCompare(other.name);
+                });
+
                 last_agents = agents;
                 const holder = document.getElementById("crew");
                 if (agents.length === 0) {
@@ -1073,6 +1126,34 @@
 
             /// Who the words can go to: an agent with a pane open, or nobody,
             /// which makes them the project's goal.
+            /// What the commander last said, in its own words.
+            ///
+            /// Read off its pane by the core, which plays the bytes into a
+            /// screen first — a terminal draws by moving the cursor, and the
+            /// letters alone come out as one long word.
+            async function render_commander() {
+                const card = document.getElementById("commander-card");
+
+                try {
+                    const held = await api("/commander");
+                    const speaking = held.find((one) => one.said.length > 0);
+
+                    if (!speaking) {
+                        card.hidden = true;
+                        return;
+                    }
+
+                    document.getElementById("commander-who").textContent =
+                        `${speaking.name} · ${speaking.presence ?? ""}`.trim();
+                    document.getElementById("commander-said").innerHTML = speaking.said
+                        .map((line) => `<div>${escape(line)}</div>`)
+                        .join("");
+                    card.hidden = false;
+                } catch {
+                    card.hidden = true;
+                }
+            }
+
             function render_whom(agents) {
                 const open = agents.filter((agent) => agent.session_id);
                 const chosen = whom.value;
@@ -1105,6 +1186,7 @@
                     render_approvals(approvals);
                     render_crew(agents);
                     render_whom(agents);
+                    void render_commander();
                     render_board(tasks);
                     let_in();
                     document.getElementById("clock").textContent = new Date().toLocaleTimeString();

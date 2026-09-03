@@ -16,6 +16,7 @@ tokio-tungstenite.workspace = true
 futures-util = "0.3"
 crossterm.workspace = true
 qrcode.workspace = true
+vt100.workspace = true
 axum-server.workspace = true
 rcgen.workspace = true
 rusqlite.workspace = true

@@ -298,6 +298,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/goals", get(read_goals))
         .route("/standards", get(read_standards).post(set_standards))
         .route("/phone", get(phone_way_in))
+        .route("/commander", get(commander_says))
         .route("/voice", get(read_voice).post(set_transcriber))
         .route("/voice/start", post(start_listening))
         .route("/voice/stop", post(stop_listening))
@@ -4521,6 +4522,58 @@ async fn said_elsewhere(
 
     note(&state, "goal.set", "a person", &goal.repository_id, &goal.text);
     Ok(Json(serde_json::json!({ "goal": goal.repository_id })))
+}
+
+#[derive(Serialize)]
+struct CommanderSays {
+    id: String,
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    presence: Option<String>,
+    /// The last few things it said, with the interface thrown away.
+    said: Vec<String>,
+}
+
+/// The commander's latest, for somebody holding a phone.
+///
+/// A person away from the machine wants to know what the crew is up to, and
+/// the commander is where that is said. Its pane redraws itself several times
+/// a second, so the words are picked out here rather than on the phone.
+async fn commander_says(State(state): State<AppState>) -> Json<Vec<CommanderSays>> {
+    let mut answers = Vec::new();
+
+    for agent in state.crew.list() {
+        if agent.role != "commander" {
+            continue;
+        }
+
+        // Played into a screen the size of the pane's own, rather than
+        // stripped: a pane draws by moving the cursor, so stripping the moves
+        // gave the phone "RemoteControlnotstartedhere", and a screen of the
+        // wrong width gives the right-hand edges of wrapped lines.
+        let said = agent
+            .session_id
+            .as_ref()
+            .and_then(|id| state.manager.get(id).map(|session| (id.clone(), session.info())))
+            .and_then(|(id, info)| {
+                state
+                    .manager
+                    .read_log(&id, 128 * 1024)
+                    .ok()
+                    .map(|raw| crate::chatter::on_screen(&raw, info.rows.max(24), info.cols.max(60)))
+            })
+            .map(|screen| crate::chatter::last_words(&screen, 8))
+            .unwrap_or_default();
+
+        answers.push(CommanderSays {
+            id: agent.id.clone(),
+            name: agent.name.clone(),
+            presence: Some(format!("{:?}", agent.state).to_lowercase()),
+            said,
+        });
+    }
+
+    Json(answers)
 }
 
 #[derive(Serialize)]

@@ -4,6 +4,7 @@ pub mod bench;
 pub mod board;
 pub mod budget;
 pub mod brief;
+pub mod chatter;
 pub mod cli;
 pub mod context;
 pub mod crew;
