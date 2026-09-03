@@ -17,13 +17,64 @@ pub struct Standards {
 /// become the whole prompt.
 pub const MOST: usize = 16_000;
 
+/// What a machine that has never been told anything starts with.
+///
+/// A blank box on a first run means every agent works to whatever its engine
+/// happens to prefer. This is the least somebody would have written themselves,
+/// short enough to read in a sitting and meant to be edited: it is a starting
+/// point, not a position.
+pub const STARTING_POINT: &str = "\
+# House rules
+
+These hold for every agent, in every project, on every turn.
+
+## Work
+
+- Prefer the simple thing. Complexity has to earn its place.
+- Follow the conventions already in the project when they differ from these.
+- Keep a function, a file and a change about one thing.
+- Optimise when something is measured to be slow, not when it looks slow.
+
+## Names and shape
+
+- Name things for what they are, in words a newcomer would use.
+- snake_case for variables and functions where the language allows it;
+  PascalCase for types.
+- Four spaces, unless the project or the language says otherwise.
+
+## Saying why
+
+- Write code that does not need a comment to be understood.
+- Where a comment is worth having, say why rather than what.
+- English in code, in commits, in errors and in tests.
+
+## Proving it
+
+- Change behaviour, change a test. A behaviour nobody tested is a behaviour
+  nobody promised.
+- Cover what would actually break, including the awkward edges.
+- Do not delete a test to make a change pass.
+
+## Commits
+
+- `<type>(<scope>): <subject>`, in the imperative, no full stop.
+- One change per commit; unrelated changes go in their own.
+- A commit that is not obvious gets a body saying what and why.
+
+## Care
+
+- Never a secret, a token or a key in the code, in a log or in an error.
+- Check what comes from outside before believing it.
+- Fail in a way that says what to do next.
+";
+
 impl Standards {
     pub fn new(data_dir: PathBuf) -> Self {
         let held: Held = crate::db::load_state(&data_dir, "standards");
-        let text = held.text;
+        let text = held.text.unwrap_or_else(|| STARTING_POINT.to_owned());
 
         let standing = Self {
-            text: Mutex::new(text),
+            text: Mutex::new(text.trim().to_owned()),
             data_dir,
         };
         standing.write_out();
@@ -47,7 +98,7 @@ impl Standards {
             &self.data_dir,
             "standards",
             &Held {
-                text: trimmed.to_owned(),
+                text: Some(trimmed.to_owned()),
             },
         );
         self.write_out();
@@ -84,10 +135,12 @@ impl Standards {
     }
 }
 
+/// `None` means nobody has said anything yet, which is not the same as
+/// somebody clearing the rules on purpose — that is `Some("")`, and it sticks.
 #[derive(Default, serde::Deserialize, serde::Serialize)]
 struct Held {
     #[serde(default)]
-    text: String,
+    text: Option<String>,
 }
 
 /// What an engine that cannot be handed a file is told instead.
@@ -113,6 +166,30 @@ mod tests {
     }
 
     #[test]
+    fn a_machine_that_has_never_been_told_anything_starts_with_something() {
+        let dir = scratch("first-run");
+        let held = Standards::new(dir);
+
+        assert_eq!(held.read(), STARTING_POINT.trim());
+        assert!(held.file().is_some(), "an agent starting today is held to them");
+    }
+
+    #[test]
+    fn clearing_them_on_purpose_sticks_across_a_restart() {
+        let dir = scratch("cleared-sticks");
+
+        {
+            let held = Standards::new(dir.clone());
+            held.set("").unwrap();
+        }
+
+        let reopened = Standards::new(dir);
+
+        assert_eq!(reopened.read(), "", "somebody said no rules, and meant it");
+        assert_eq!(reopened.file(), None);
+    }
+
+    #[test]
     fn what_is_set_is_read_back_and_survives_a_restart() {
         let dir = scratch("round-trip");
 
@@ -130,6 +207,7 @@ mod tests {
         let dir = scratch("file");
         let held = Standards::new(dir);
 
+        held.set("").unwrap();
         assert_eq!(held.file(), None, "nothing set is nothing to hand over");
 
         held.set("Four spaces.").unwrap();
@@ -154,9 +232,10 @@ mod tests {
     fn a_book_is_refused_because_it_would_become_the_whole_prompt() {
         let dir = scratch("book");
         let held = Standards::new(dir);
+        held.set("Four spaces.").unwrap();
 
         assert!(held.set(&"x".repeat(MOST + 1)).is_err());
-        assert_eq!(held.read(), "");
+        assert_eq!(held.read(), "Four spaces.", "and what stood before it still stands");
     }
 
     #[test]

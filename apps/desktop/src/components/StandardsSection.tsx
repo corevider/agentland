@@ -53,6 +53,11 @@ export function StandardsSection() {
                 instruction is told at the top of its brief instead.
             </p>
 
+            <p className="font-mono text-[10px] text-shade">
+                A new machine starts with a page somebody would have written anyway — it is meant
+                to be edited, and emptying it means no rules rather than the page coming back.
+            </p>
+
             <textarea
                 className="min-h-0 flex-1 rounded-lg border border-reef bg-lagoon p-2 font-mono text-[11px] leading-relaxed"
                 spellCheck={false}
