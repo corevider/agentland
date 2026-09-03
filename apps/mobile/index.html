@@ -208,6 +208,18 @@
                 color: inherit;
             }
 
+            #gate textarea,
+            #voice textarea {
+                width: 100%;
+                box-sizing: border-box;
+                font: inherit;
+                padding: 0.6rem;
+                border-radius: 0.6rem;
+                border: 1px solid #1f3d3a;
+                background: #04100f;
+                color: inherit;
+            }
+
             #record.listening {
                 border-color: #f4737b;
                 color: #f4737b;
@@ -221,7 +233,19 @@
         </header>
 
         <main>
-            <section>
+            <section id="gate" hidden>
+                <h2>Let this phone in</h2>
+                <p class="empty" id="gate-why">
+                    Scan the code with this phone's camera app: Agentland, Settings, then Phone.
+                    It opens this page already let in. Or paste the address printed under the code.
+                </p>
+                <textarea id="way-in" rows="2" placeholder="http://192.168.1.5:9470/mobile/?token=…"></textarea>
+                <div class="row">
+                    <button id="let-in" class="approve">let me in</button>
+                </div>
+            </section>
+
+            <section class="page">
                 <h2>Say something</h2>
                 <div id="voice">
                     <textarea id="said" rows="3" placeholder="Tap the microphone on your keyboard, or hold the button below."></textarea>
@@ -234,17 +258,17 @@
                 </div>
             </section>
 
-            <section>
+            <section class="page">
                 <h2>Waiting for you</h2>
                 <div id="approvals"><p class="empty">Nothing to answer.</p></div>
             </section>
 
-            <section>
+            <section class="page">
                 <h2>Crew</h2>
                 <div id="crew"><p class="empty">No crew yet.</p></div>
             </section>
 
-            <section>
+            <section class="page">
                 <h2>Board</h2>
                 <div id="board"><p class="empty">No cards.</p></div>
             </section>
@@ -260,15 +284,79 @@
                 history.replaceState({}, "", location.pathname);
             }
 
+            // A token that is missing, or one the core no longer knows, is not an
+            // error to show a person: it is a phone that has not been let in
+            // yet. Both lead to the same place — the code on the machine.
+            const gate = document.getElementById("gate");
+            const gate_why = document.getElementById("gate-why");
+            const way_in = document.getElementById("way-in");
+
+            let held_token = token;
+
+            function ask_to_be_let_in(why) {
+                if (why) {
+                    gate_why.textContent = why;
+                }
+
+                gate.hidden = false;
+                for (const section of document.querySelectorAll("main .page")) {
+                    section.hidden = true;
+                }
+            }
+
+            function let_in() {
+                gate.hidden = true;
+                for (const section of document.querySelectorAll("main .page")) {
+                    section.hidden = false;
+                }
+            }
+
+            /// A pasted address or a bare token, whichever somebody had to hand.
+            function token_from(text) {
+                const said = text.trim();
+                if (!said) {
+                    return "";
+                }
+
+                try {
+                    const url = new URL(said);
+                    return url.searchParams.get("token") ?? "";
+                } catch {
+                    return said.includes("token=") ? said.split("token=").pop().split("&")[0] : said;
+                }
+            }
+
+            document.getElementById("let-in").addEventListener("click", () => {
+                const wanted = token_from(way_in.value);
+
+                if (!wanted) {
+                    gate_why.textContent = "That had no token in it. Scan the code, or paste the whole address.";
+                    return;
+                }
+
+                localStorage.setItem("agentland-mobile-token", wanted);
+                location.replace(location.pathname);
+            });
+
             async function api(path, options = {}) {
                 const response = await fetch(path, {
                     ...options,
                     headers: {
                         "content-type": "application/json",
-                        "x-auth-token": token,
+                        "x-auth-token": held_token,
                         ...(options.headers ?? {}),
                     },
                 });
+
+                if (response.status === 401 || response.status === 403) {
+                    // Whatever was stored is no use: forget it rather than
+                    // failing the same way on every refresh.
+                    localStorage.removeItem("agentland-mobile-token");
+                    ask_to_be_let_in(
+                        "This phone's key is not one the machine knows any more. Scan the code in Settings then Phone.",
+                    );
+                    throw new Error("not let in yet");
+                }
 
                 if (!response.ok) {
                     throw new Error(`${response.status} ${await response.text()}`);
@@ -555,6 +643,11 @@
             }
 
             async function refresh() {
+                if (!held_token) {
+                    ask_to_be_let_in();
+                    return;
+                }
+
                 try {
                     const [approvals, agents, tasks] = await Promise.all([
                         api("/approvals"),
@@ -566,11 +659,21 @@
                     render_crew(agents);
                     render_whom(agents);
                     render_board(tasks);
+                    let_in();
                     document.getElementById("clock").textContent = new Date().toLocaleTimeString();
                 } catch (cause) {
-                    document.querySelector("main").prepend(
-                        element(`<div class="notice">${escape(cause.message)}</div>`),
-                    );
+                    if (cause.message === "not let in yet") {
+                        return;
+                    }
+
+                    const said = document.querySelector("main .notice");
+                    if (said) {
+                        said.textContent = cause.message;
+                    } else {
+                        document.querySelector("main").prepend(
+                            element(`<div class="notice">${escape(cause.message)}</div>`),
+                        );
+                    }
                 }
             }
 
