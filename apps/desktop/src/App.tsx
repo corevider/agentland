@@ -834,7 +834,7 @@ export default function App() {
                                 .catch((cause) => set_error(String(cause)));
                         }}
                     >
-                        {listening ? "listening…" : "hold to speak"}
+                        {listening ? "● listening…" : "◉ hold to speak"}
                     </button>
 
                     <button

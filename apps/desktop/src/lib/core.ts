@@ -449,6 +449,24 @@ export interface Ignited {
 ///
 /// The same call whether there is nobody yet, somebody stopped, or somebody
 /// already working — the core decides which of the three it is.
+/// How the house works: handed to every agent, in every project, for every
+/// turn — not repeated in each brief.
+export interface HouseRules {
+    text: string;
+    held: boolean;
+}
+
+export function read_standards(): Promise<HouseRules> {
+    return request<HouseRules>("/standards");
+}
+
+export function set_standards(text: string): Promise<HouseRules> {
+    return request<HouseRules>("/standards", {
+        method: "POST",
+        body: JSON.stringify({ text }),
+    });
+}
+
 /// Speaking to the crew instead of typing to it. The recorder is whatever is
 /// already on the machine; the transcriber is a command somebody set.
 export interface VoiceState {

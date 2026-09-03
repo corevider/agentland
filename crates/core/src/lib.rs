@@ -27,6 +27,7 @@ pub mod repo;
 pub mod routines;
 pub mod services;
 pub mod stacks;
+pub mod standards;
 pub mod start;
 pub mod pty;
 pub mod server;

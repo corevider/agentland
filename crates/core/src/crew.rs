@@ -102,6 +102,19 @@ pub fn settings_flag(engine_id: &str) -> Option<&'static str> {
     }
 }
 
+/// How an engine is handed a standing instruction — the house rules — for
+/// every turn rather than once in a brief.
+///
+/// A file, not an argument: a page of rules on a command line is a page of
+/// rules in every process listing. Only Claude Code's flag is known first-hand;
+/// the rest are told at the top of their brief instead.
+pub fn standing_flag(engine_id: &str) -> Option<&'static str> {
+    match engine_id {
+        "claude" => Some("--append-system-prompt-file"),
+        _ => None,
+    }
+}
+
 fn engine(id: &str) -> Option<Engine> {
     engines().into_iter().find(|entry| entry.id == id)
 }
@@ -206,6 +219,8 @@ pub struct Crew {
     /// Handed in rather than read here: the crew starts panes, it does not own
     /// the record of what somebody agreed to.
     learned: Mutex<BTreeMap<String, Vec<String>>>,
+    /// The house rules on disk, handed to every engine that can take them.
+    standing: Mutex<Option<std::path::PathBuf>>,
     manager: Arc<PtyManager>,
     state: Mutex<State>,
     data_dir: PathBuf,
@@ -237,6 +252,7 @@ impl Crew {
 
         let crew = Arc::new(Self {
             learned: Mutex::new(BTreeMap::new()),
+            standing: Mutex::new(None),
             manager,
             state: Mutex::new(state),
             data_dir,
@@ -297,6 +313,10 @@ impl Crew {
     }
 
     /// Tell the crew what has been agreed, so the next pane starts with it.
+    pub fn set_standing(&self, file: Option<std::path::PathBuf>) {
+        *self.standing.lock() = file;
+    }
+
     pub fn set_learned(&self, learned: BTreeMap<String, Vec<String>>) {
         *self.learned.lock() = learned;
     }
@@ -523,6 +543,16 @@ impl Crew {
             {
                 args.push((*flag).to_owned());
                 args.push(file.to_string_lossy().into_owned());
+            }
+        }
+
+        // The house rules, for every turn rather than once at the start of one.
+        if let Some(flag) = standing_flag(&agent.engine_id) {
+            if let Some(file) = self.standing.lock().clone() {
+                if file.is_file() {
+                    args.push((*flag).to_owned());
+                    args.push(file.to_string_lossy().into_owned());
+                }
             }
         }
 

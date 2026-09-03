@@ -100,6 +100,7 @@ struct AppState {
     /// the only honest way to count them is to read what the engines wrote.
     journal: Arc<crate::journal::Journal>,
     goals: Arc<crate::goals::Goals>,
+    standards: Arc<crate::standards::Standards>,
     voice: Arc<crate::voice::Voice>,
     /// Small things a person set: the transcriber command, and whatever else
     /// names a program or a preference rather than a piece of work.
@@ -187,6 +188,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         notices: Arc::new(crate::notices::Notices::default()),
         journal: Arc::new(crate::journal::Journal::new(data_dir.clone())),
         goals: Arc::new(crate::goals::Goals::new(data_dir.clone())),
+        standards: Arc::new(crate::standards::Standards::new(data_dir.clone())),
         voice: Arc::new(crate::voice::Voice::new(data_dir.clone())),
         settings: Arc::new(parking_lot::Mutex::new(crate::db::load_state(
             &data_dir, "settings",
@@ -207,6 +209,8 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
     if stranded > 0 {
         tracing::info!(stranded, "let go of watches whose briefs never landed");
     }
+
+    state.crew.set_standing(state.standards.file());
 
     spawn_supervisor(state.clone());
     spawn_pull_watcher(state.clone());
@@ -292,6 +296,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/budget", get(read_budget).post(set_ceilings))
         .route("/journal", get(read_journal))
         .route("/goals", get(read_goals))
+        .route("/standards", get(read_standards).post(set_standards))
         .route("/voice", get(read_voice).post(set_transcriber))
         .route("/voice/start", post(start_listening))
         .route("/voice/stop", post(stop_listening))
@@ -541,13 +546,23 @@ async fn compose_brief(state: &AppState, agent: &Agent, base: &str) -> String {
         .map(|message| (message.from, message.text))
         .collect();
 
-    crate::brief::compose(crate::brief::Ingredients {
+    let written = crate::brief::compose(crate::brief::Ingredients {
         identity: identity_for(state, agent),
         base,
         learned,
         skills: state.skills.brief_section(&agent.id),
         mail,
-    })
+    });
+
+    // An engine that takes a standing instruction has already been handed the
+    // house rules as a file, for every turn. One that does not is told at the
+    // top of its brief instead, which costs the words each time and is still
+    // better than an agent that does not know how the house works.
+    if crate::crew::standing_flag(&agent.engine_id).is_some() {
+        written
+    } else {
+        crate::standards::spoken(&state.standards.read(), &written)
+    }
 }
 
 async fn start_agent_with_brief(state: &AppState, agent: &Agent, base: &str) -> Result<(), ApiError> {
@@ -4353,6 +4368,47 @@ async fn forget_permit(
     note(&state, "permit.revoked", "a person", &body.repository_id, &body.rule);
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Serialize)]
+struct HouseRules {
+    text: String,
+    /// Whether they are on disk for an engine to read.
+    held: bool,
+}
+
+/// How the house works, for every agent, in every project.
+async fn read_standards(State(state): State<AppState>) -> Json<HouseRules> {
+    Json(HouseRules {
+        text: state.standards.read(),
+        held: state.standards.file().is_some(),
+    })
+}
+
+#[derive(Deserialize)]
+struct SetStandards {
+    text: String,
+}
+
+async fn set_standards(
+    State(state): State<AppState>,
+    Json(body): Json<SetStandards>,
+) -> Result<Json<HouseRules>, ApiError> {
+    state.standards.set(&body.text)?;
+    state.crew.set_standing(state.standards.file());
+
+    note(
+        &state,
+        "standards.set",
+        "a person",
+        "",
+        if body.text.trim().is_empty() { "cleared" } else { "written" },
+    );
+
+    Ok(Json(HouseRules {
+        text: state.standards.read(),
+        held: state.standards.file().is_some(),
+    }))
 }
 
 #[derive(Serialize)]
