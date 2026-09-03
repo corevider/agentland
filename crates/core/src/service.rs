@@ -23,6 +23,31 @@ impl Endpoint {
     }
 }
 
+/// The addresses this machine answers on, for a phone on the same network.
+///
+/// Found by asking the routing table which address it would use to reach the
+/// outside world — no packet is sent, and nothing is guessed from a list of
+/// interfaces that may all be down.
+pub fn on_this_network(port: u16) -> Vec<String> {
+    let mut hosts = Vec::new();
+
+    if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+        if socket.connect("8.8.8.8:80").is_ok() {
+            if let Ok(here) = socket.local_addr() {
+                hosts.push(format!("{}:{port}", here.ip()));
+            }
+        }
+    }
+
+    if let Ok(name) = std::env::var("HOSTNAME") {
+        if !name.trim().is_empty() {
+            hosts.push(format!("{}:{port}", name.trim()));
+        }
+    }
+
+    hosts
+}
+
 fn file(data_dir: &Path) -> PathBuf {
     data_dir.join("service.json")
 }
@@ -56,6 +81,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::create_dir_all(&dir);
         dir
+    }
+
+    #[test]
+    fn this_machine_can_say_where_a_phone_should_look() {
+        let hosts = on_this_network(9470);
+
+        // A machine with no network is a machine with nothing to offer here,
+        // and that is not an error — but each answer must carry the port.
+        for host in &hosts {
+            assert!(host.ends_with(":9470"), "{host} must name the port");
+        }
     }
 
     #[test]

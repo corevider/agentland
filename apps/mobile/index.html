@@ -179,6 +179,40 @@
                 white-space: pre-wrap;
             }
         </style>
+        <style>
+            #voice textarea {
+                width: 100%;
+                box-sizing: border-box;
+                font: inherit;
+                padding: 0.6rem;
+                border-radius: 0.6rem;
+                border: 1px solid #1f3d3a;
+                background: #04100f;
+                color: inherit;
+            }
+
+            #voice .row {
+                display: flex;
+                gap: 0.5rem;
+                margin-top: 0.5rem;
+                align-items: center;
+            }
+
+            #voice select {
+                flex: 1;
+                font: inherit;
+                padding: 0.5rem;
+                border-radius: 0.6rem;
+                border: 1px solid #1f3d3a;
+                background: #04100f;
+                color: inherit;
+            }
+
+            #record.listening {
+                border-color: #f4737b;
+                color: #f4737b;
+            }
+        </style>
     </head>
     <body>
         <header>
@@ -187,6 +221,19 @@
         </header>
 
         <main>
+            <section>
+                <h2>Say something</h2>
+                <div id="voice">
+                    <textarea id="said" rows="3" placeholder="Tap the microphone on your keyboard, or hold the button below."></textarea>
+                    <div class="row">
+                        <button id="record" class="approve" hidden>hold to speak</button>
+                        <select id="whom"><option value="">the project&apos;s goal</option></select>
+                        <button id="send" class="approve">send</button>
+                    </div>
+                    <p class="empty" id="voice-note">The machine running the crew has no microphone; this one does.</p>
+                </div>
+            </section>
+
             <section>
                 <h2>Waiting for you</h2>
                 <div id="approvals"><p class="empty">Nothing to answer.</p></div>
@@ -395,6 +442,118 @@
                     .join("");
             }
 
+            // Speaking from the phone, because the machine running the crew has
+            // no microphone: over a remote desktop there is nothing to record,
+            // and this device has a better one anyway.
+            const said = document.getElementById("said");
+            const whom = document.getElementById("whom");
+            const record = document.getElementById("record");
+            const voice_note = document.getElementById("voice-note");
+
+            // getUserMedia needs a secure page. Over plain http on a home
+            // network there is none, so the keyboard's own dictation is the way
+            // in and the button stays hidden rather than failing when pressed.
+            const can_record = Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+            record.hidden = !can_record;
+
+            if (!can_record) {
+                voice_note.textContent =
+                    "Use the microphone on your keyboard — this page cannot open one over plain http.";
+            }
+
+            let recorder = null;
+            let chunks = [];
+
+            async function begin() {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                chunks = [];
+                recorder = new MediaRecorder(stream);
+                recorder.ondataavailable = (event) => chunks.push(event.data);
+                recorder.onstop = async () => {
+                    stream.getTracks().forEach((track) => track.stop());
+                    const audio = new Blob(chunks, { type: recorder.mimeType });
+                    voice_note.textContent = "reading it back…";
+
+                    try {
+                        const answer = await fetch("/voice/heard", {
+                            method: "POST",
+                            headers: { "content-type": recorder.mimeType, "x-auth-token": token },
+                            body: audio,
+                        });
+
+                        const heard = await answer.json();
+                        if (!answer.ok) {
+                            throw new Error(heard.error ?? "the recording could not be read");
+                        }
+
+                        said.value = heard.text ? `${said.value} ${heard.text}`.trim() : said.value;
+                        voice_note.textContent = heard.text ? "read it, then send it." : "nothing was said.";
+                    } catch (cause) {
+                        voice_note.textContent = String(cause.message ?? cause);
+                    }
+                };
+
+                recorder.start();
+                record.classList.add("listening");
+                record.textContent = "listening…";
+            }
+
+            function end() {
+                if (recorder && recorder.state !== "inactive") {
+                    recorder.stop();
+                }
+
+                record.classList.remove("listening");
+                record.textContent = "hold to speak";
+            }
+
+            record.addEventListener("pointerdown", () => {
+                begin().catch((cause) => {
+                    voice_note.textContent = String(cause.message ?? cause);
+                });
+            });
+            record.addEventListener("pointerup", end);
+            record.addEventListener("pointercancel", end);
+
+            document.getElementById("send").addEventListener("click", async () => {
+                const text = said.value.trim();
+                if (!text) {
+                    return;
+                }
+
+                try {
+                    await api("/voice/said", {
+                        method: "POST",
+                        body: JSON.stringify({ text, to: whom.value || undefined }),
+                    });
+
+                    said.value = "";
+                    voice_note.textContent = whom.value
+                        ? `told ${whom.value}.`
+                        : "it is the project's goal now.";
+                } catch (cause) {
+                    voice_note.textContent = String(cause.message ?? cause);
+                }
+            });
+
+            /// Who the words can go to: an agent with a pane open, or nobody,
+            /// which makes them the project's goal.
+            function render_whom(agents) {
+                const open = agents.filter((agent) => agent.session_id);
+                const chosen = whom.value;
+
+                whom.innerHTML = "";
+                whom.append(new Option("the project's goal", ""));
+
+                for (const agent of open) {
+                    whom.append(new Option(`${agent.name} · ${agent.role ?? ""}`.trim(), agent.id));
+                }
+
+                if (chosen && open.some((agent) => agent.id === chosen)) {
+                    whom.value = chosen;
+                }
+            }
+
             async function refresh() {
                 try {
                     const [approvals, agents, tasks] = await Promise.all([
@@ -405,6 +564,7 @@
 
                     render_approvals(approvals);
                     render_crew(agents);
+                    render_whom(agents);
                     render_board(tasks);
                     document.getElementById("clock").textContent = new Date().toLocaleTimeString();
                 } catch (cause) {

@@ -300,6 +300,8 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/voice", get(read_voice).post(set_transcriber))
         .route("/voice/start", post(start_listening))
         .route("/voice/stop", post(stop_listening))
+        .route("/voice/heard", post(heard_elsewhere))
+        .route("/voice/said", post(said_elsewhere))
         .route("/repos/{id}/goal", post(set_goal).delete(clear_goal))
         .route("/permits", get(read_permits).delete(forget_permit))
         .route("/stacks", get(list_starters))
@@ -2215,6 +2217,16 @@ async fn say_it(state: &AppState, session_id: &str, text: &str) -> bool {
 
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
 
+    // What the pane looked like with the words typed but not yet sent. A turn
+    // is watched for, but a short one can start and finish between two looks —
+    // measured on a two-second answer that was reported as never taken — so a
+    // pane that has moved on from this frame counts as having taken it.
+    let composed = state
+        .manager
+        .read_log(session_id, 8 * 1024)
+        .map(|raw| strip_ansi(&raw))
+        .unwrap_or_default();
+
     if session.write_input(b"\r").is_err() {
         return false;
     }
@@ -2229,6 +2241,10 @@ async fn say_it(state: &AppState, session_id: &str, text: &str) -> bool {
             .unwrap_or_default();
 
         if crate::supervisor::turn_running(&frame) || crate::supervisor::asking_the_human(&frame) {
+            return true;
+        }
+
+        if frame != composed && !frame.trim_end().ends_with(text.trim_end()) {
             return true;
         }
 
@@ -4368,6 +4384,91 @@ async fn forget_permit(
     note(&state, "permit.revoked", "a person", &body.repository_id, &body.rule);
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// A recording made somewhere else — a phone, a laptop, a browser — and sent
+/// here to be read back.
+///
+/// The machine running the crew has no microphone of its own in most setups:
+/// over a remote desktop there is nothing to record, and the phone in your hand
+/// has a better one anyway. What arrives is audio; what leaves is words.
+async fn heard_elsewhere(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Json<Said>, ApiError> {
+    if body.is_empty() {
+        return Err(anyhow::anyhow!("no audio arrived").into());
+    }
+
+    let command = transcriber_of(&state)
+        .ok_or_else(|| anyhow::anyhow!("no transcriber set — Settings, then House rules' neighbour, Voice"))?;
+
+    let kind = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("audio/webm");
+
+    let text = crate::voice::read_back(&state.config.data_dir, &body, kind, &command)?;
+    note(&state, "voice.heard", "a person", "elsewhere", &text);
+
+    Ok(Json(Said { text }))
+}
+
+#[derive(Deserialize)]
+struct SaidElsewhere {
+    text: String,
+    /// An agent id or name to say it to. Left out, it becomes the project's goal.
+    #[serde(default)]
+    to: Option<String>,
+    /// The project whose goal it becomes, when it is a goal.
+    #[serde(default)]
+    repository_id: Option<String>,
+}
+
+/// Words from somewhere else, put where they were meant to go.
+async fn said_elsewhere(
+    State(state): State<AppState>,
+    Json(body): Json<SaidElsewhere>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let text = body.text.trim().to_owned();
+    if text.is_empty() {
+        return Err(anyhow::anyhow!("nothing was said").into());
+    }
+
+    if let Some(who) = body.to.as_deref().map(str::trim).filter(|who| !who.is_empty()) {
+        let crew = state.crew.list();
+        let held = crew
+            .iter()
+            .find(|agent| agent.id.eq_ignore_ascii_case(who) || agent.name.eq_ignore_ascii_case(who))
+            .ok_or_else(|| anyhow::anyhow!("no agent called {who}"))?;
+
+        let session_id = held
+            .session_id
+            .clone()
+            .filter(|id| state.manager.get(id).is_some())
+            .ok_or_else(|| anyhow::anyhow!("{} has no pane open", held.name))?;
+
+        if !say_it(&state, &session_id, &text).await {
+            return Err(anyhow::anyhow!("{} did not take it", held.name).into());
+        }
+
+        note(&state, "voice.said", "a person", &held.id, &text);
+        return Ok(Json(serde_json::json!({ "told": held.id })));
+    }
+
+    let repository_id = body
+        .repository_id
+        .or_else(|| state.repos.repositories().first().map(|held| held.id.clone()))
+        .ok_or_else(|| anyhow::anyhow!("there is no project to give a goal to"))?;
+
+    let goal = state
+        .goals
+        .set(&repository_id, &text, "a person", now_secs())
+        .ok_or_else(|| anyhow::anyhow!("a goal is a paragraph, and not an empty one"))?;
+
+    note(&state, "goal.set", "a person", &goal.repository_id, &goal.text);
+    Ok(Json(serde_json::json!({ "goal": goal.repository_id })))
 }
 
 #[derive(Serialize)]

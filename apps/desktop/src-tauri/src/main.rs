@@ -91,6 +91,10 @@ fn allowed_hosts(host: &str, port: u16) -> Vec<String> {
     let mut hosts = vec![format!("127.0.0.1:{port}"), format!("localhost:{port}")];
     if host != "127.0.0.1" && host != "localhost" {
         hosts.push(format!("{host}:{port}"));
+
+        // Serving beyond this machine means a phone will ask for it by the
+        // address it can see, which is never the one it was told to bind.
+        hosts.extend(agentland_core::service::on_this_network(port));
     }
 
     hosts

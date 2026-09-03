@@ -188,6 +188,78 @@ impl Voice {
     }
 }
 
+/// Read back a recording that was made elsewhere.
+///
+/// A browser records webm or mp4, never a wav, so it is converted first — by
+/// ffmpeg if it is here, which is also what every recorder on this machine
+/// depends on. The bytes are written under the data folder and replaced by the
+/// next recording rather than piling up.
+pub fn read_back(
+    data_dir: &Path,
+    audio: &[u8],
+    kind: &str,
+    command: &str,
+) -> anyhow::Result<String> {
+    let folder = data_dir.join("voice");
+    std::fs::create_dir_all(&folder)?;
+
+    let arrived = folder.join(format!("arrived.{}", extension_for(kind)));
+    std::fs::write(&arrived, audio)?;
+
+    // A name of its own: a wav that arrived is already called arrived.wav, and
+    // ffmpeg asked to write its own input destroys the recording it was given.
+    let wav = folder.join("heard.wav");
+    let _ = std::fs::remove_file(&wav);
+
+    let converted = Command::new("ffmpeg")
+        .args([
+            "-loglevel", "error", "-i",
+            &arrived.to_string_lossy(),
+            "-ar", "16000", "-ac", "1", "-y",
+            &wav.to_string_lossy(),
+        ])
+        .output();
+
+    let file = match converted {
+        Ok(done) if done.status.success() && wav.exists() => wav,
+        _ if kind.contains("wav") => arrived,
+        Ok(done) => anyhow::bail!(
+            "cannot turn that recording into audio: {}",
+            String::from_utf8_lossy(&done.stderr).trim()
+        ),
+        Err(error) => anyhow::bail!("ffmpeg is needed to read a recording from a browser: {error}"),
+    };
+
+    let spoken = Command::new("sh")
+        .arg("-c")
+        .arg(fill_in(command, &file))
+        .output()?;
+
+    if !spoken.status.success() {
+        anyhow::bail!(
+            "the transcriber failed: {}",
+            String::from_utf8_lossy(&spoken.stderr).trim()
+        );
+    }
+
+    Ok(heard(&String::from_utf8_lossy(&spoken.stdout)))
+}
+
+/// What to call the file, from what the browser said it is.
+pub fn extension_for(kind: &str) -> &'static str {
+    let kind = kind.to_ascii_lowercase();
+
+    if kind.contains("wav") {
+        "wav"
+    } else if kind.contains("ogg") {
+        "ogg"
+    } else if kind.contains("mp4") || kind.contains("m4a") || kind.contains("aac") {
+        "m4a"
+    } else {
+        "webm"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,6 +306,15 @@ mod tests {
             heard("[00:00.000 --> 00:02.000]\n take the metrics work \n"),
             "take the metrics work"
         );
+    }
+
+    #[test]
+    fn a_browser_recording_is_named_for_what_it_is() {
+        assert_eq!(extension_for("audio/webm;codecs=opus"), "webm");
+        assert_eq!(extension_for("audio/mp4"), "m4a");
+        assert_eq!(extension_for("audio/ogg"), "ogg");
+        assert_eq!(extension_for("audio/wav"), "wav");
+        assert_eq!(extension_for(""), "webm", "a browser that says nothing records webm");
     }
 
     #[test]

@@ -24,10 +24,13 @@ async fn main() -> anyhow::Result<()> {
     let token = std::env::var("AGENTLAND_TOKEN").unwrap_or_else(|_| generate_token());
     let host = std::env::var("AGENTLAND_HOST").unwrap_or_else(|_| "127.0.0.1".to_owned());
 
-    let allowed_hosts = split_env(
-        "AGENTLAND_ALLOWED_HOSTS",
-        vec![format!("127.0.0.1:{port}"), format!("localhost:{port}")],
-    );
+    let mut standing = vec![format!("127.0.0.1:{port}"), format!("localhost:{port}")];
+    if host != "127.0.0.1" && host != "localhost" {
+        standing.push(format!("{host}:{port}"));
+        standing.extend(agentland_core::service::on_this_network(port));
+    }
+
+    let allowed_hosts = split_env("AGENTLAND_ALLOWED_HOSTS", standing);
 
     let allowed_origins = split_env(
         "AGENTLAND_ALLOWED_ORIGINS",
