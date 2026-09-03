@@ -850,30 +850,7 @@ export default function App() {
                     </span>
                 ) : null}
 
-                <div className="ml-auto flex items-center gap-3 font-mono text-[10px] tabular-nums">
-                    <span
-                        className={
-                            verdict === "resting"
-                                ? "text-shade"
-                                : verdict === "pass"
-                                  ? "text-palm"
-                                  : verdict === "marginal"
-                                    ? "text-sun"
-                                    : "text-coral"
-                        }
-                        title={measuring ? "frames the app draws" : "frames the island draws — the app measures itself only while benchmarking"}
-                    >
-                        {frame_stats.fps} fps{measuring ? "" : " · island"}
-                    </span>
-                    <span className="text-shade">worst {frame_stats.worst_frame_ms} ms</span>
-                    <span className="text-shade">{throughput.mb_per_second} MB/s</span>
-                    <span className="text-shade">
-                        drop {throughput.dropped_frames} · collapsed {throughput.collapsed_mb} MB
-                    </span>
-                    <span className="text-shade" title={gpu.renderer}>
-                        {gpu.webgl2 ? "webgl2" : gpu.renderer === "none" ? "none" : "webgl1"} · {gpu.max_contexts} ctx
-                    </span>
-
+                <div className="ml-auto flex items-center gap-3">
                     <NoticeBell
                         on_open={(opens) => {
                             const [what, which] = opens.split(":");
@@ -977,6 +954,30 @@ export default function App() {
             </ServiceProvider>
             </div>
 
+            <footer className="flex shrink-0 items-center justify-end gap-3 border-t border-reef/70 px-3 py-[3px] font-mono text-[10px] tabular-nums">
+                <span
+                    className={
+                        verdict === "resting"
+                            ? "text-shade"
+                            : verdict === "pass"
+                              ? "text-palm"
+                              : verdict === "marginal"
+                                ? "text-sun"
+                                : "text-coral"
+                    }
+                    title={measuring ? "frames the app draws" : "frames the island draws — the app measures itself only while benchmarking"}
+                >
+                    {frame_stats.fps} fps{measuring ? "" : " · island"}
+                </span>
+                <span className="text-shade">worst {frame_stats.worst_frame_ms} ms</span>
+                <span className="text-shade">{throughput.mb_per_second} MB/s</span>
+                <span className="text-shade">
+                    drop {throughput.dropped_frames} · collapsed {throughput.collapsed_mb} MB
+                </span>
+                <span className="text-shade" title={gpu.renderer}>
+                    {gpu.webgl2 ? "webgl2" : gpu.renderer === "none" ? "none" : "webgl1"} · {gpu.max_contexts} ctx
+                </span>
+            </footer>
         </div>
     );
 }
