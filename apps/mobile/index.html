@@ -220,6 +220,12 @@
                 color: inherit;
             }
 
+            #gate .big {
+                flex: 1;
+                font-size: 1.1rem;
+                padding: 0.8rem;
+            }
+
             #lens {
                 width: 100%;
                 max-height: 46vh;
@@ -249,11 +255,10 @@
                 </p>
                 <video id="lens" playsinline hidden></video>
                 <div class="row">
-                    <button id="secure" class="approve" hidden>open the page that can use the camera</button>
+                    <button id="scan" class="approve big">▣ scan</button>
                 </div>
-                <textarea id="way-in" rows="2" placeholder="https://192.168.1.5:9471/mobile/?token=…"></textarea>
+                <textarea id="way-in" rows="2" placeholder="paste the address instead"></textarea>
                 <div class="row">
-                    <button id="scan" class="approve" hidden>scan the code</button>
                     <button id="paste" class="approve">paste</button>
                     <button id="let-in" class="approve">let me in</button>
                 </div>
@@ -346,24 +351,24 @@
             // http the button hides itself rather than failing when pressed.
             const lens = document.getElementById("lens");
             const scan = document.getElementById("scan");
+
+            // One button, doing the obvious thing. A camera is refused on a
+            // plain http page, and the core keeps a door that is not — the same
+            // address, one port along — so pressing scan there goes through it
+            // and opens the camera on arrival. Nobody should have to be told
+            // any of that.
+            const secure_door = `https://${location.hostname}:${Number(location.port || 80) + 1}${location.pathname}#scan`;
             const can_scan = Boolean(window.BarcodeDetector) && window.isSecureContext;
 
-            scan.hidden = !can_scan;
-
-            // The camera is refused on a plain http page, and the core keeps a
-            // door that is not: the same address, one port along. Offering it
-            // is better than explaining why the button is missing.
-            const secure = document.getElementById("secure");
-
             if (!window.isSecureContext && location.protocol === "http:") {
-                const door = `https://${location.hostname}:${Number(location.port || 80) + 1}${location.pathname}`;
-                secure.hidden = false;
-                secure.addEventListener("click", () => location.assign(door));
-
                 gate_why.textContent =
-                    "This page cannot open a camera over plain http. Open the secure page below — " +
-                    "your phone will say it does not recognise the certificate, which is this " +
-                    "machine's own — or scan the code with the camera app instead.";
+                    "Scan the code from Settings, then Phone. Your phone will ask about this " +
+                    "machine's own certificate the first time.";
+            } else if (!can_scan) {
+                gate_why.textContent =
+                    "This browser cannot read a code itself — use its camera app on the code in " +
+                    "Settings, then Phone, or paste the address.";
+                scan.hidden = true;
             }
 
             // Selecting a long address by hand on a phone is nobody's idea of
@@ -376,7 +381,7 @@
                 }
             });
 
-            scan.addEventListener("click", async () => {
+            async function look_for_a_code() {
                 try {
                     const reader = new BarcodeDetector({ formats: ["qr_code"] });
                     const stream = await navigator.mediaDevices.getUserMedia({
@@ -418,7 +423,21 @@
                 } catch (cause) {
                     gate_why.textContent = String(cause.message ?? cause);
                 }
+            }
+
+            scan.addEventListener("click", () => {
+                if (can_scan) {
+                    void look_for_a_code();
+                    return;
+                }
+
+                location.assign(secure_door);
             });
+
+            // Arriving through that door with the camera asked for: open it.
+            if (can_scan && location.hash === "#scan") {
+                void look_for_a_code();
+            }
 
             document.getElementById("let-in").addEventListener("click", () => {
                 const wanted = token_from(way_in.value);
