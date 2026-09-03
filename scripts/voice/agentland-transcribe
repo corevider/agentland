@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""Read a recording back, on this machine and nowhere else.
+
+Takes a wav path, prints what was said. The model stays loaded in a small
+process of its own: loading it costs about eight seconds and dictation that
+waits eight seconds for every sentence is dictation nobody uses. That process
+lets itself go after half an hour of silence.
+"""
+import os
+import socket
+import subprocess
+import sys
+import time
+
+HOME = os.path.expanduser("~/.local/share/agentland-voice")
+SOCKET = os.path.join(HOME, "warm.sock")
+MODEL = os.environ.get("AGENTLAND_WHISPER_MODEL", "small")
+MODELS = os.path.join(HOME, "models")
+IDLE_SECONDS = 30 * 60
+
+
+def warm_up(held) -> None:
+    import wave
+
+    quiet = os.path.join(HOME, "warm-up.wav")
+    with wave.open(quiet, "wb") as file:
+        file.setnchannels(1)
+        file.setsampwidth(2)
+        file.setframerate(16000)
+        file.writeframes(b"\x00\x00" * 16000)
+
+    parts, _ = held.transcribe(quiet, vad_filter=True, beam_size=1)
+    for _ in parts:
+        pass
+
+
+def serve() -> int:
+    from faster_whisper import WhisperModel
+
+    if os.path.exists(SOCKET):
+        os.unlink(SOCKET)
+
+    # Every thread this machine has, and greedy decoding: dictation is a
+    # sentence at a time, and a beam search over five candidates costs five
+    # times the work to pick the same words.
+    held = WhisperModel(
+        MODEL,
+        device="cpu",
+        compute_type="int8",
+        download_root=MODELS,
+        cpu_threads=os.cpu_count() or 4,
+    )
+
+    # Everything lazy is loaded now rather than on somebody's first sentence:
+    # the voice model, the one that finds speech in silence, and the audio
+    # decoder each cost their own second the first time they are asked.
+    warm_up(held)
+
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(SOCKET)
+    listener.listen(4)
+    listener.settimeout(IDLE_SECONDS)
+
+    while True:
+        try:
+            client, _ = listener.accept()
+        except socket.timeout:
+            break
+
+        with client:
+            wanted = client.recv(4096).decode("utf8").strip()
+            said = ""
+
+            if wanted and os.path.exists(wanted):
+                parts, _ = held.transcribe(
+                    wanted,
+                    vad_filter=True,
+                    beam_size=1,
+                    condition_on_previous_text=False,
+                )
+                said = " ".join(part.text.strip() for part in parts).strip()
+
+            client.sendall((said + "\n").encode("utf8"))
+
+    os.unlink(SOCKET)
+    return 0
+
+
+def ask(wav: str) -> str | None:
+    try:
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(120)
+        client.connect(SOCKET)
+    except OSError:
+        return None
+
+    with client:
+        client.sendall(wav.encode("utf8") + b"\n")
+        return client.recv(65536).decode("utf8").strip()
+
+
+def main() -> int:
+    if "--serve" in sys.argv:
+        return serve()
+
+    if len(sys.argv) < 2:
+        print("usage: agentland-transcribe <file.wav>", file=sys.stderr)
+        return 2
+
+    wav = sys.argv[1]
+    said = ask(wav)
+
+    if said is None:
+        os.makedirs(HOME, exist_ok=True)
+
+        # One at a time: two recordings that end together used to start two of
+        # these, and each holds the model in memory.
+        lock = os.path.join(HOME, "starting.lock")
+        try:
+            held = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(held)
+        except FileExistsError:
+            if time.time() - os.path.getmtime(lock) > 120:
+                os.unlink(lock)
+            else:
+                for _ in range(120):
+                    time.sleep(0.5)
+                    said = ask(wav)
+                    if said is not None:
+                        return print_said(said)
+
+        subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), "--serve"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+
+        for _ in range(120):
+            time.sleep(0.5)
+            said = ask(wav)
+            if said is not None:
+                break
+
+        lock = os.path.join(HOME, "starting.lock")
+        if os.path.exists(lock):
+            os.unlink(lock)
+
+    return print_said(said or "")
+
+
+def print_said(said: str) -> int:
+    if said:
+        print(said)
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
