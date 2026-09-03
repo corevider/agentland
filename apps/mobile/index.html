@@ -250,6 +250,178 @@
                 color: #f4737b;
             }
         </style>
+        <style>
+            /* Laid out for a thumb: cards with a heading you can find at a
+               glance, buttons big enough to hit while walking, and the one
+               thing you reach for most — the microphone — under where the
+               thumb already rests. */
+            :root {
+                --card: #0f1f22;
+                --edge: #1e3a3f;
+                --glow: #4ade80;
+            }
+
+            body {
+                padding-bottom: calc(env(safe-area-inset-bottom) + 96px);
+            }
+
+            header h1 {
+                letter-spacing: 0.14em;
+                font-size: 1.25rem;
+                color: var(--glow);
+            }
+
+            main {
+                display: flex;
+                flex-direction: column;
+                gap: 0.9rem;
+                padding: 0 0.9rem;
+            }
+
+            main > section {
+                background: var(--card);
+                border: 1px solid var(--edge);
+                border-radius: 0.9rem;
+                padding: 0.9rem;
+                margin: 0;
+            }
+
+            main > section > h2 {
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+                margin: 0 0 0.7rem;
+                font-size: 0.78rem;
+                letter-spacing: 0.16em;
+                text-transform: uppercase;
+                color: var(--muted);
+            }
+
+            main > section > h2 svg {
+                width: 1.05rem;
+                height: 1.05rem;
+                color: var(--glow);
+                flex: none;
+            }
+
+            button.approve,
+            button.reject {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                gap: 0.45rem;
+                min-height: 3rem;
+                padding: 0.7rem 0.9rem;
+                border-radius: 0.7rem;
+                font: inherit;
+                background: transparent;
+                border: 1px solid var(--edge);
+                color: var(--ink);
+            }
+
+            button.approve {
+                border-color: #2f6f52;
+                color: var(--glow);
+            }
+
+            button svg {
+                width: 1.1rem;
+                height: 1.1rem;
+                flex: none;
+            }
+
+            #voice .row,
+            #gate .row {
+                display: flex;
+                gap: 0.6rem;
+                margin-top: 0.6rem;
+            }
+
+            #voice .row > * {
+                flex: 1;
+            }
+
+            #gate .big {
+                width: 100%;
+                font-size: 1.05rem;
+            }
+
+            /* What this browser can do, said in one line rather than a
+               paragraph nobody reads. */
+            #what-this-is b {
+                font-weight: 600;
+                color: var(--glow);
+            }
+
+            #what-this-is {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.2rem 0.9rem;
+                margin: 0.7rem 0 0;
+                padding-top: 0.7rem;
+                border-top: 1px solid var(--edge);
+                font-size: 0.82rem;
+            }
+
+            /* The bar: the microphone where a thumb already is, and the two
+               places worth jumping to on either side. */
+            #bar {
+                position: fixed;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                display: flex;
+                align-items: center;
+                justify-content: space-around;
+                padding: 0.5rem 1rem calc(env(safe-area-inset-bottom) + 0.5rem);
+                background: #0b1719ee;
+                backdrop-filter: blur(8px);
+                border-top: 1px solid var(--edge);
+            }
+
+            #bar a {
+                color: var(--muted);
+                padding: 0.6rem;
+                line-height: 0;
+            }
+
+            #bar svg {
+                width: 1.4rem;
+                height: 1.4rem;
+            }
+
+            #bar .speak {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 0.25rem;
+                margin-top: -1.8rem;
+                color: var(--glow);
+                font-size: 0.78rem;
+            }
+
+            #bar .speak button {
+                width: 4.4rem;
+                height: 4.4rem;
+                border-radius: 50%;
+                background: #0b1719;
+                border: 2px solid var(--glow);
+                color: var(--glow);
+                box-shadow: 0 0 18px #4ade8055;
+            }
+
+            #bar .speak button svg {
+                width: 1.7rem;
+                height: 1.7rem;
+            }
+
+            #bar .speak button.listening {
+                background: #3a1414;
+                border-color: var(--bad);
+                color: var(--bad);
+                box-shadow: 0 0 22px #e5705f66;
+            }
+        </style>
     </head>
     <body>
         <header>
@@ -259,51 +431,62 @@
 
         <main>
             <section id="gate" hidden>
-                <h2>Let this phone in</h2>
+                <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg> Let this phone in</h2>
                 <p class="empty" id="gate-why">
                     Scan the code with this phone's camera app: Agentland, Settings, then Phone.
                     It opens this page already let in. Or paste the address printed under the code.
                 </p>
                 <video id="lens" playsinline hidden></video>
                 <div class="row">
-                    <button id="scan" class="approve big">▣ scan</button>
+                    <button id="scan" class="approve big"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v3M14 20h6"/></svg> Scan</button>
                 </div>
-                <textarea id="way-in" rows="2" placeholder="paste the address instead"></textarea>
+                <textarea id="way-in" rows="2" placeholder="Paste the address instead"></textarea>
                 <div class="row">
-                    <button id="paste" class="approve">paste</button>
-                    <button id="let-in" class="approve">let me in</button>
+                    <button id="paste" class="approve"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2V7a2 2 0 00-2-2h-2"/></svg> Paste</button>
+                    <button id="let-in" class="approve"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg> Let me in</button>
                 </div>
                 <p class="empty" id="what-this-is"></p>
             </section>
 
             <section class="page">
-                <h2>Say something</h2>
+                <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16v11H8l-4 3z"/></svg> Say something</h2>
                 <div id="voice">
                     <textarea id="said" rows="3" placeholder="Tap the microphone on your keyboard, or hold the button below."></textarea>
                     <div class="row">
-                        <button id="record" class="approve" hidden>hold to speak</button>
+                        <button id="record" class="approve" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/></svg> Hold to speak</button>
                         <select id="whom"><option value="">the project&apos;s goal</option></select>
-                        <button id="send" class="approve">send</button>
+                        <button id="send" class="approve"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 3L3 10l7 3 3 7z"/></svg> Send</button>
                     </div>
                     <p class="empty" id="voice-note">The machine running the crew has no microphone; this one does.</p>
                 </div>
             </section>
 
             <section class="page">
-                <h2>Waiting for you</h2>
+                <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> Waiting for you</h2>
                 <div id="approvals"><p class="empty">Nothing to answer.</p></div>
             </section>
 
             <section class="page">
-                <h2>Crew</h2>
+                <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0112 0M16 11a3 3 0 100-6M18 20a6 6 0 00-3-5"/></svg> Crew</h2>
+                <div id="crew-here"></div>
                 <div id="crew"><p class="empty">No crew yet.</p></div>
             </section>
 
             <section class="page">
-                <h2>Board</h2>
+                <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg> Board</h2>
+                <div id="board-here"></div>
                 <div id="board"><p class="empty">No cards.</p></div>
             </section>
         </main>
+
+        <nav id="bar">
+            <a href="#board-here" aria-label="the board"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></a>
+            <span class="speak">
+                <button id="speak" aria-label="hold to speak"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/></svg></button>
+                Hold to speak
+            </span>
+            <a href="#crew-here" aria-label="the crew"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0112 0M16 11a3 3 0 100-6M18 20a6 6 0 00-3-5"/></svg></a>
+        </nav>
 
         <script type="module">
             const params = new URLSearchParams(location.search);
@@ -481,10 +664,13 @@
 
             // What this browser can actually do, said plainly: guessing at it
             // from the other end of a phone is how an evening goes.
-            document.getElementById("what-this-is").textContent =
-                `secure page: ${window.isSecureContext ? "yes" : "no"} · ` +
-                `camera allowed here: ${can_open_a_camera ? "yes" : "no"} · ` +
-                `code reader: ${window.BarcodeDetector ? "the browser's" : "ours"}`;
+            document.getElementById("what-this-is").innerHTML = [
+                ["secure page", window.isSecureContext ? "yes" : "no"],
+                ["camera", can_open_a_camera ? "yes" : "no"],
+                ["code reader", window.BarcodeDetector ? "the browser's" : "ours"],
+            ]
+                .map(([what, said]) => `<span><b>${what}</b>: ${said}</span>`)
+                .join("");
 
             scan.addEventListener("click", () => {
                 if (can_scan) {
@@ -757,7 +943,7 @@
 
                 recorder.start();
                 record.classList.add("listening");
-                record.textContent = "listening…";
+                speak.classList.add("listening");
             }
 
             function end() {
@@ -766,16 +952,32 @@
                 }
 
                 record.classList.remove("listening");
-                record.textContent = "hold to speak";
+                speak.classList.remove("listening");
             }
 
-            record.addEventListener("pointerdown", () => {
+            // Two buttons, one microphone: the one in the card where the words
+            // are, and the one under the thumb.
+            const speak = document.getElementById("speak");
+
+            function held_down() {
                 begin().catch((cause) => {
                     voice_note.textContent = String(cause.message ?? cause);
                 });
-            });
-            record.addEventListener("pointerup", end);
-            record.addEventListener("pointercancel", end);
+            }
+
+            for (const button of [record, speak]) {
+                button.addEventListener("pointerdown", held_down);
+                button.addEventListener("pointerup", end);
+                button.addEventListener("pointercancel", end);
+            }
+
+            // The bar's microphone is no use where a browser will not open one,
+            // and saying so once is better than nothing happening.
+            if (!can_record) {
+                speak.addEventListener("click", () => {
+                    document.getElementById("said")?.focus();
+                });
+            }
 
             document.getElementById("send").addEventListener("click", async () => {
                 const text = said.value.trim();
