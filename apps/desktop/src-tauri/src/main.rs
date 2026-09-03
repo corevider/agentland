@@ -296,7 +296,8 @@ fn main() {
             tracing::info!(port = held.port, pid = held.pid, "attached to the core already running");
             (
                 CoreEndpoint {
-                    host: held.host,
+                    // What it was told to bind is not what anything dials.
+                    host: agentland_core::service::connectable(&held.host).to_owned(),
                     port: held.port,
                     token: held.token,
                 },

@@ -19,7 +19,21 @@ pub struct Endpoint {
 
 impl Endpoint {
     pub fn url(&self) -> String {
-        format!("http://{}:{}", self.host, self.port)
+        format!("http://{}:{}", connectable(&self.host), self.port)
+    }
+}
+
+/// An address something can actually connect to.
+///
+/// A core told to serve everybody binds 0.0.0.0, which is not an address: it
+/// means "every one of them". Announced as it was written, a window read it
+/// back and tried to fetch http://0.0.0.0:9470, which fails with nothing more
+/// helpful than "Load failed". Anything on this machine reaches it at the
+/// loopback address, whatever it was told to bind.
+pub fn connectable(host: &str) -> &str {
+    match host {
+        "0.0.0.0" | "::" | "[::]" | "" => "127.0.0.1",
+        held => held,
     }
 }
 
@@ -107,6 +121,27 @@ mod tests {
         announce(&dir, &held);
 
         assert_eq!(announced(&dir), Some(held));
+    }
+
+    #[test]
+    fn the_address_everybody_is_served_on_is_not_one_to_dial() {
+        assert_eq!(connectable("0.0.0.0"), "127.0.0.1");
+        assert_eq!(connectable("::"), "127.0.0.1");
+        assert_eq!(connectable(""), "127.0.0.1");
+        assert_eq!(connectable("192.168.1.5"), "192.168.1.5");
+        assert_eq!(connectable("127.0.0.1"), "127.0.0.1");
+    }
+
+    #[test]
+    fn what_is_announced_is_dialled_at_the_loopback_when_it_was_bound_to_all() {
+        let held = Endpoint {
+            host: "0.0.0.0".into(),
+            port: 9470,
+            token: String::new(),
+            pid: 1,
+        };
+
+        assert_eq!(held.url(), "http://127.0.0.1:9470");
     }
 
     #[test]
