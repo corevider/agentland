@@ -210,6 +210,10 @@
 
             #gate textarea,
             #voice textarea {
+                font-size: 1.02rem;
+                padding: 0.9rem;
+                border-radius: 0.9rem;
+                min-height: 4.4rem;
                 width: 100%;
                 box-sizing: border-box;
                 font: inherit;
@@ -264,7 +268,7 @@
             /* Room for the bar and for the circle that stands proud of it, or
                the last card sits underneath them. */
             body {
-                padding-bottom: calc(env(safe-area-inset-bottom) + 132px);
+                padding-bottom: calc(env(safe-area-inset-bottom) + 150px);
             }
 
             header h1 {
@@ -276,32 +280,33 @@
             main {
                 display: flex;
                 flex-direction: column;
-                gap: 0.9rem;
-                padding: 0 0.9rem;
+                gap: 1.1rem;
+                padding: 0 1rem;
             }
 
             main > section {
                 background: var(--card);
                 border: 1px solid var(--edge);
-                border-radius: 0.9rem;
-                padding: 0.9rem;
+                border-radius: 1.1rem;
+                padding: 1.15rem;
                 margin: 0;
             }
 
             main > section > h2 {
                 display: flex;
                 align-items: center;
-                gap: 0.5rem;
-                margin: 0 0 0.7rem;
-                font-size: 0.78rem;
-                letter-spacing: 0.16em;
+                gap: 0.6rem;
+                margin: 0 0 0.9rem;
+                font-size: 0.95rem;
+                font-weight: 600;
+                letter-spacing: 0.14em;
                 text-transform: uppercase;
-                color: var(--muted);
+                color: var(--glow);
             }
 
             main > section > h2 svg {
-                width: 1.05rem;
-                height: 1.05rem;
+                width: 1.25rem;
+                height: 1.25rem;
                 color: var(--glow);
                 flex: none;
             }
@@ -312,10 +317,11 @@
                 align-items: center;
                 justify-content: center;
                 gap: 0.45rem;
-                min-height: 3rem;
-                padding: 0.7rem 0.9rem;
-                border-radius: 0.7rem;
+                min-height: 3.5rem;
+                padding: 0.85rem 1rem;
+                border-radius: 0.9rem;
                 font: inherit;
+                font-size: 1.05rem;
                 background: transparent;
                 border: 1px solid var(--edge);
                 color: var(--ink);
@@ -327,8 +333,8 @@
             }
 
             button svg {
-                width: 1.1rem;
-                height: 1.1rem;
+                width: 1.35rem;
+                height: 1.35rem;
                 flex: none;
             }
 
@@ -445,15 +451,13 @@
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                width: 3rem;
-                height: 3rem;
-                border-radius: 0.8rem;
-                border: 1px solid var(--edge);
+                width: 3.4rem;
+                height: 3.4rem;
             }
 
             #bar a svg {
-                width: 1.5rem;
-                height: 1.5rem;
+                width: 1.7rem;
+                height: 1.7rem;
             }
 
             #what-this-is b {
@@ -464,11 +468,18 @@
             #what-this-is {
                 display: flex;
                 flex-wrap: wrap;
-                gap: 0.2rem 0.9rem;
-                margin: 0.7rem 0 0;
-                padding-top: 0.7rem;
+                align-items: center;
+                gap: 0.3rem 0.85rem;
+                margin: 0.95rem 0 0;
+                padding-top: 0.95rem;
                 border-top: 1px solid var(--edge);
-                font-size: 0.82rem;
+                font-size: 0.85rem;
+                color: var(--muted);
+            }
+
+            #what-this-is span + span {
+                border-left: 1px solid var(--edge);
+                padding-left: 0.85rem;
             }
 
             /* The bar: the microphone where a thumb already is, and the two
@@ -503,24 +514,24 @@
                 flex-direction: column;
                 align-items: center;
                 gap: 0.25rem;
-                margin-top: -3.4rem;
+                margin-top: -4.2rem;
                 color: var(--glow);
-                font-size: 0.78rem;
+                font-size: 0.92rem;
             }
 
             #bar .speak button {
-                width: 4.4rem;
-                height: 4.4rem;
+                width: 5.4rem;
+                height: 5.4rem;
                 border-radius: 50%;
                 background: #0b1719;
-                border: 2px solid var(--glow);
+                border: 3px solid var(--glow);
                 color: var(--glow);
-                box-shadow: 0 0 18px #4ade8055;
+                box-shadow: 0 0 26px #4ade8066, inset 0 0 18px #4ade8022;
             }
 
             #bar .speak button svg {
-                width: 1.7rem;
-                height: 1.7rem;
+                width: 2.1rem;
+                height: 2.1rem;
             }
 
             #bar .speak button.listening {
@@ -1170,6 +1181,16 @@
                 }
             }
 
+            // A clock that stops when a phone is not let in reads as a page
+            // that has stopped.
+            const clock = document.getElementById("clock");
+            const tick = () => {
+                clock.textContent = new Date().toLocaleTimeString();
+            };
+
+            tick();
+            setInterval(tick, 1000);
+
             async function refresh() {
                 if (!held_token) {
                     ask_to_be_let_in();
@@ -1189,7 +1210,7 @@
                     void render_commander();
                     render_board(tasks);
                     let_in();
-                    document.getElementById("clock").textContent = new Date().toLocaleTimeString();
+                    tick();
                 } catch (cause) {
                     if (cause.message === "not let in yet") {
                         return;
