@@ -515,6 +515,7 @@
             }
 
             #bar .speak {
+                position: relative;
                 display: flex;
                 flex-direction: column;
                 align-items: center;
@@ -527,6 +528,36 @@
             #bar .speak button,
             #voice .square {
                 position: relative;
+            }
+
+            /* Held down, the way to keep listening without holding is worth
+               saying once, where the thumb already is. */
+            #lock-hint {
+                position: absolute;
+                bottom: 5.6rem;
+                left: 50%;
+                transform: translateX(-50%);
+                white-space: nowrap;
+                padding: 0.4rem 0.7rem;
+                border-radius: 0.6rem;
+                background: #0b1719ee;
+                border: 1px solid var(--edge);
+                color: var(--muted);
+                font-size: 0.8rem;
+                animation: rise 1.4s ease-in-out infinite;
+            }
+
+            @keyframes rise {
+                0%, 100% { transform: translate(-50%, 0); opacity: 0.75; }
+                50% { transform: translate(-50%, -6px); opacity: 1; }
+            }
+
+            #bar .speak button.locked {
+                border-color: var(--good);
+                color: var(--good);
+                background: #0d2a1c;
+                animation: none;
+                box-shadow: 0 0 26px #6fbf7355;
             }
 
             #bar .speak button {
@@ -668,6 +699,7 @@
         <nav id="bar">
             <a href="#board-here" aria-label="the board"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></a>
             <span class="speak">
+                <span id="lock-hint" hidden>slide up to lock ⌃</span>
                 <button id="speak" aria-label="hold to speak"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/></svg></button>
                 Hold to speak
             </span>
@@ -1103,77 +1135,169 @@
                     "Use the microphone on your keyboard — this page cannot open one over plain http.";
             }
 
+            // Speaking, in two ways. Held, it listens while your thumb is
+            // down. Slid up, it locks and keeps listening — and rather than
+            // waiting until the end to say anything, it stops and starts every
+            // few seconds, so each piece is a complete recording that can be
+            // read back while the next one is being spoken.
+            const A_PIECE = 5000;
+            const TO_LOCK = 70;
+
+            let stream = null;
             let recorder = null;
             let chunks = [];
+            let locked = false;
+            let cadence = 0;
+            let took_from = 0;
 
-            async function begin() {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const lock_hint = document.getElementById("lock-hint");
+
+            function looks(state) {
+                for (const button of [record, speak]) {
+                    button.classList.toggle("listening", state === "listening" && !locked);
+                    button.classList.toggle("locked", locked && state !== "reading");
+                }
+            }
+
+            function reading(yes) {
+                for (const button of [record, speak]) {
+                    button.classList.toggle("reading", yes);
+                }
+            }
+
+            async function read_back(audio) {
+                reading(true);
+
+                try {
+                    const answer = await fetch("/voice/heard", {
+                        method: "POST",
+                        headers: { "content-type": audio.type, "x-auth-token": held_token },
+                        body: audio,
+                    });
+
+                    const heard = await answer.json();
+                    if (!answer.ok) {
+                        throw new Error(heard.error ?? "the recording could not be read");
+                    }
+
+                    if (heard.text) {
+                        said.value = `${said.value} ${heard.text}`.trim();
+                        voice_note.textContent = locked ? "still listening — tap to stop." : "read it, then send it.";
+                    } else if (!locked) {
+                        voice_note.textContent = "nothing was said.";
+                    }
+                } catch (cause) {
+                    voice_note.textContent = String(cause.message ?? cause);
+                } finally {
+                    reading(false);
+                }
+            }
+
+            function take_a_piece() {
                 chunks = [];
                 recorder = new MediaRecorder(stream);
                 recorder.ondataavailable = (event) => chunks.push(event.data);
-                recorder.onstop = async () => {
-                    stream.getTracks().forEach((track) => track.stop());
-                    const audio = new Blob(chunks, { type: recorder.mimeType });
-                    voice_note.textContent = "reading it back…";
 
-                    for (const button of [record, speak]) {
-                        button.classList.remove("listening");
-                        button.classList.add("reading");
+                recorder.onstop = () => {
+                    const audio = new Blob(chunks, { type: recorder.mimeType });
+
+                    // Keep listening first, read back second: a sentence spoken
+                    // while the last one is being read must not be lost.
+                    if (locked) {
+                        take_a_piece();
+                    } else {
+                        stream?.getTracks().forEach((track) => track.stop());
+                        stream = null;
+                        looks("idle");
                     }
 
-                    try {
-                        const answer = await fetch("/voice/heard", {
-                            method: "POST",
-                            headers: { "content-type": recorder.mimeType, "x-auth-token": token },
-                            body: audio,
-                        });
-
-                        const heard = await answer.json();
-                        if (!answer.ok) {
-                            throw new Error(heard.error ?? "the recording could not be read");
-                        }
-
-                        said.value = heard.text ? `${said.value} ${heard.text}`.trim() : said.value;
-                        voice_note.textContent = heard.text ? "read it, then send it." : "nothing was said.";
-                    } catch (cause) {
-                        voice_note.textContent = String(cause.message ?? cause);
-                    } finally {
-                        for (const button of [record, speak]) {
-                            button.classList.remove("reading");
-                        }
+                    if (audio.size > 1000) {
+                        void read_back(audio);
                     }
                 };
 
                 recorder.start();
-                for (const button of [record, speak]) {
-                    button.classList.remove("reading");
-                    button.classList.add("listening");
+            }
+
+            async function begin(from_y) {
+                if (recorder && recorder.state === "recording") {
+                    return;
                 }
+
+                took_from = from_y;
+                stream = stream ?? (await navigator.mediaDevices.getUserMedia({ audio: true }));
+                take_a_piece();
+                looks("listening");
+                lock_hint.hidden = false;
+                voice_note.textContent = "listening — slide up to keep it listening.";
+            }
+
+            function lock_it() {
+                if (locked) {
+                    return;
+                }
+
+                locked = true;
+                lock_hint.hidden = true;
+                looks("listening");
+                voice_note.textContent = "locked — it keeps listening. Tap the microphone to stop.";
+
+                // Every few seconds the piece in hand is closed and a new one
+                // started, so what was said can be read while you carry on.
+                cadence = setInterval(() => {
+                    if (recorder && recorder.state === "recording") {
+                        recorder.stop();
+                    }
+                }, A_PIECE);
             }
 
             function end() {
-                if (recorder && recorder.state !== "inactive") {
+                lock_hint.hidden = true;
+                clearInterval(cadence);
+                cadence = 0;
+                locked = false;
+
+                if (recorder && recorder.state === "recording") {
                     recorder.stop();
                 }
 
-                record.classList.remove("listening");
-                speak.classList.remove("listening");
+                looks("idle");
             }
 
             // Two buttons, one microphone: the one in the card where the words
             // are, and the one under the thumb.
             const speak = document.getElementById("speak");
 
-            function held_down() {
-                begin().catch((cause) => {
-                    voice_note.textContent = String(cause.message ?? cause);
-                });
-            }
-
             for (const button of [record, speak]) {
-                button.addEventListener("pointerdown", held_down);
-                button.addEventListener("pointerup", end);
-                button.addEventListener("pointercancel", end);
+                button.addEventListener("pointerdown", (event) => {
+                    // Locked, the same button is how you stop.
+                    if (locked) {
+                        end();
+                        return;
+                    }
+
+                    begin(event.clientY).catch((cause) => {
+                        voice_note.textContent = String(cause.message ?? cause);
+                    });
+                });
+
+                button.addEventListener("pointermove", (event) => {
+                    if (!locked && recorder?.state === "recording" && took_from - event.clientY > TO_LOCK) {
+                        lock_it();
+                    }
+                });
+
+                button.addEventListener("pointerup", () => {
+                    if (!locked) {
+                        end();
+                    }
+                });
+
+                button.addEventListener("pointercancel", () => {
+                    if (!locked) {
+                        end();
+                    }
+                });
             }
 
             // The bar's microphone is no use where a browser will not open one,
