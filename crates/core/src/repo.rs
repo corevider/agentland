@@ -204,6 +204,7 @@ impl RepoRegistry {
         for worktree in state.worktrees.values() {
             if worktree.path.exists() {
                 write_mcp_config(&worktree.path, &data_dir);
+                trust_the_folder(&worktree.path);
             }
         }
 
@@ -453,6 +454,7 @@ impl RepoRegistry {
 
         let port = self.ports.allocate(&key)?;
         write_mcp_config(&path, &self.data_dir);
+        trust_the_folder(&path);
         let worktree = Worktree {
             name: name.to_owned(),
             repository_id: repository_id.to_owned(),
@@ -657,6 +659,76 @@ fn write_mcp_config(worktree: &Path, data_dir: &Path) {
 
     exclude_from_git(worktree, ".mcp.json");
     trust_our_own_tools(worktree);
+}
+
+/// Say, where the engine keeps its own word on it, that this folder is trusted.
+///
+/// Claude asks "do you trust this folder?" the first time it opens one, and
+/// remembers the answer in its own file, keyed by the folder's path. A worktree
+/// Agentland made is a folder Agentland is answerable for: four panes asking
+/// the same question of a person who created none of them protects nobody, and
+/// every one of them sat there until somebody noticed by eye.
+fn trust_the_folder(worktree: &Path) {
+    let Some(file) = claude_config_file() else {
+        return;
+    };
+
+    let path = fs::canonicalize(worktree).unwrap_or_else(|_| worktree.to_path_buf());
+    trust_the_folder_in(&file, &path);
+}
+
+/// Where Claude keeps what it remembers about folders: its own config
+/// directory when one is named, and the home directory otherwise.
+fn claude_config_file() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|held| !held.is_empty()) {
+        return Some(PathBuf::from(dir).join(".claude.json"));
+    }
+
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude.json"))
+}
+
+/// One flag, on one entry, and everything else in the file as it was. A file
+/// that is there but cannot be read as JSON is left alone: it is somebody
+/// else's, and a guess at it would cost them everything else it holds.
+fn trust_the_folder_in(file: &Path, worktree: &Path) {
+    let mut held: serde_json::Value = match fs::read_to_string(file) {
+        Ok(raw) => match serde_json::from_str(&raw) {
+            Ok(parsed) => parsed,
+            Err(_) => return,
+        },
+        Err(_) => serde_json::json!({}),
+    };
+
+    let Some(root) = held.as_object_mut() else {
+        return;
+    };
+
+    let Some(projects) = root
+        .entry("projects")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+    else {
+        return;
+    };
+
+    let Some(entry) = projects
+        .entry(worktree.to_string_lossy().into_owned())
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+    else {
+        return;
+    };
+
+    entry.insert("hasTrustDialogAccepted".to_owned(), serde_json::Value::Bool(true));
+
+    let Ok(rendered) = serde_json::to_string_pretty(&held) else {
+        return;
+    };
+
+    let staged = file.with_extension("json.agentland");
+    if fs::write(&staged, rendered).is_ok() {
+        let _ = fs::rename(&staged, file);
+    }
 }
 
 /// Say, in the worktree, that the tools Agentland put there are wanted.
@@ -1290,6 +1362,49 @@ mod tests {
 
         assert_eq!(settings["enableAllProjectMcpServers"], serde_json::Value::Bool(true));
         assert!(settings["permissions"]["allow"].is_array(), "somebody else's setting survived");
+    }
+
+    #[test]
+    fn a_worktree_is_trusted_where_the_engine_keeps_its_word() {
+        let dir = a_folder("trust-claude");
+        let file = dir.join(".claude.json");
+        fs::write(
+            &file,
+            r#"{"numStartups": 4, "projects": {"/elsewhere": {"hasTrustDialogAccepted": false, "allowedTools": ["Bash"]}}}"#,
+        )
+        .unwrap();
+
+        trust_the_folder_in(&file, Path::new("/elsewhere"));
+        trust_the_folder_in(&file, Path::new("/made/by/agentland"));
+
+        let held: serde_json::Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+
+        assert_eq!(held["projects"]["/made/by/agentland"]["hasTrustDialogAccepted"], true);
+        assert_eq!(held["projects"]["/elsewhere"]["hasTrustDialogAccepted"], true, "an earlier no is now a yes");
+        assert_eq!(held["projects"]["/elsewhere"]["allowedTools"][0], "Bash", "the rest of the entry survived");
+        assert_eq!(held["numStartups"], 4, "the rest of the file survived");
+    }
+
+    #[test]
+    fn a_file_that_is_not_json_is_not_touched() {
+        let dir = a_folder("trust-broken");
+        let file = dir.join(".claude.json");
+        fs::write(&file, "{not json").unwrap();
+
+        trust_the_folder_in(&file, Path::new("/made/by/agentland"));
+
+        assert_eq!(fs::read_to_string(&file).unwrap(), "{not json");
+    }
+
+    #[test]
+    fn a_file_that_is_not_there_yet_is_made() {
+        let dir = a_folder("trust-fresh");
+        let file = dir.join(".claude.json");
+
+        trust_the_folder_in(&file, Path::new("/made/by/agentland"));
+
+        let held: serde_json::Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(held["projects"]["/made/by/agentland"]["hasTrustDialogAccepted"], true);
     }
 
     #[test]
