@@ -29,6 +29,10 @@ interface Props {
     on_close: () => void;
     gpu: GpuReport;
     surface: string;
+    busy: boolean;
+    on_run_benchmark: () => void;
+    on_open_shells: () => void;
+    on_clear: () => void;
 }
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
@@ -69,7 +73,17 @@ function Select({
     );
 }
 
-export function SettingsPage({ settings, on_change, on_close, gpu, surface }: Props) {
+export function SettingsPage({
+    settings,
+    on_change,
+    on_close,
+    gpu,
+    surface,
+    busy,
+    on_run_benchmark,
+    on_open_shells,
+    on_clear,
+}: Props) {
     const [section, set_section] = useState<SectionId>("updates");
 
     return (
@@ -140,6 +154,36 @@ export function SettingsPage({ settings, on_change, on_close, gpu, surface }: Pr
                                     format={(value) => `${value / 1000}s`}
                                     on_change={(duration_ms) => on_change({ ...settings, duration_ms })}
                                 />
+                            </Row>
+                            <Row
+                                label="Run"
+                                hint={`${settings.panes} × ${settings.lines_per_second.toLocaleString()} lps — closes every pane first, then reads the HUD`}
+                            >
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        className="rounded-lg border border-turquoise/70 px-3 py-1 font-mono text-xs text-turquoise disabled:opacity-40"
+                                        onClick={on_run_benchmark}
+                                        disabled={busy}
+                                    >
+                                        run benchmark
+                                    </button>
+                                    <button
+                                        className="rounded-lg border border-reef px-3 py-1 font-mono text-xs text-shell hover:border-foam disabled:opacity-40"
+                                        onClick={on_open_shells}
+                                        disabled={busy}
+                                    >
+                                        open shells
+                                    </button>
+                                </div>
+                            </Row>
+                            <Row label="Clear" hint="close every pane, generators and shells alike">
+                                <button
+                                    className="rounded-lg border border-reef px-3 py-1 font-mono text-xs text-shell hover:border-coral hover:text-coral disabled:opacity-40"
+                                    onClick={on_clear}
+                                    disabled={busy}
+                                >
+                                    clear the panes
+                                </button>
                             </Row>
                         </div>
                     ) : null}

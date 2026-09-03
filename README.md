@@ -156,8 +156,8 @@ cargo run -p agentland-core --bin agentland-core     # prints a token and a brow
 cd apps/desktop && npm install && npm run dev
 ```
 
-Open the URL the core printed — it carries the port and token. Pick 8 panes and 10,000 lines/sec,
-press **run benchmark**, and read the HUD: fps, worst frame, MB/s, dropped frames.
+Open the URL the core printed — it carries the port and token. In Settings → Benchmark pick 8 panes
+and 10,000 lines/sec, press **run benchmark**, and read the HUD: fps, worst frame, MB/s, dropped frames.
 
 ### Tauri window (the actual gate)
 

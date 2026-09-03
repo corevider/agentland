@@ -715,6 +715,16 @@ export default function App() {
                     on_close={() => set_settings_open(false)}
                     gpu={gpu}
                     surface={detect_surface()}
+                    busy={busy}
+                    on_run_benchmark={() => {
+                        set_settings_open(false);
+                        void run_benchmark();
+                    }}
+                    on_open_shells={() => {
+                        set_settings_open(false);
+                        void open_shells();
+                    }}
+                    on_clear={() => void clear()}
                 />
             ) : null}
 
@@ -787,20 +797,6 @@ export default function App() {
 
                 <div className="flex items-center gap-1">
                     <button
-                        className="rounded border border-turquoise/70 px-2 py-[3px] font-mono text-[11px] text-turquoise disabled:opacity-40"
-                        onClick={run_benchmark}
-                        disabled={busy}
-                    >
-                        run benchmark
-                    </button>
-                    <button
-                        className="rounded border border-reef px-2 py-[3px] font-mono text-[11px] text-shell hover:border-foam disabled:opacity-40"
-                        onClick={open_shells}
-                        disabled={busy}
-                    >
-                        open shells
-                    </button>
-                    <button
                         // Held down, a button is a button and not a paragraph:
                         // without this, holding it starts selecting the label.
                         className={`select-none rounded border px-2 py-[3px] font-mono text-[11px] transition-colors ${
@@ -846,13 +842,6 @@ export default function App() {
                     >
                         {listening ? "● listening…" : reading ? "◐ reading it back…" : "◉ hold to speak"}
                     </button>
-
-                    <button
-                        className="rounded border border-reef px-2 py-[3px] font-mono text-[11px] text-shell hover:border-foam"
-                        onClick={clear}
-                    >
-                        clear
-                    </button>
                 </div>
 
                 {heard ? (
@@ -860,10 +849,6 @@ export default function App() {
                         “{heard}”
                     </span>
                 ) : null}
-
-                <span className="font-mono text-[10px] text-shade">
-                    {pane_count} × {rate.toLocaleString()} lps
-                </span>
 
                 <div className="ml-auto flex items-center gap-3 font-mono text-[10px] tabular-nums">
                     <span
