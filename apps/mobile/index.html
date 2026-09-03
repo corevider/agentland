@@ -539,28 +539,6 @@
                 position: relative;
             }
 
-            /* Held down, the way to keep listening without holding is worth
-               saying once, where the thumb already is. */
-            #lock-hint {
-                position: absolute;
-                bottom: 5.6rem;
-                left: 50%;
-                transform: translateX(-50%);
-                white-space: nowrap;
-                padding: 0.4rem 0.7rem;
-                border-radius: 0.6rem;
-                background: #0b1719ee;
-                border: 1px solid var(--edge);
-                color: var(--muted);
-                font-size: 0.8rem;
-                animation: rise 1.4s ease-in-out infinite;
-            }
-
-            @keyframes rise {
-                0%, 100% { transform: translate(-50%, 0); opacity: 0.75; }
-                50% { transform: translate(-50%, -6px); opacity: 1; }
-            }
-
             #bar .speak button.locked {
                 border-color: var(--good);
                 color: var(--good);
@@ -708,7 +686,6 @@
         <nav id="bar">
             <a href="#board-here" aria-label="the board"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></a>
             <span class="speak">
-                <span id="lock-hint" hidden>slide up to lock ⌃</span>
                 <button id="speak" aria-label="hold to speak"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/></svg></button>
                 Hold to speak
             </span>
@@ -1159,8 +1136,6 @@
             let cadence = 0;
             let took_from = 0;
 
-            const lock_hint = document.getElementById("lock-hint");
-
             function looks(state) {
                 for (const button of [record, speak]) {
                     button.classList.toggle("listening", state === "listening" && !locked);
@@ -1237,7 +1212,6 @@
                 stream = stream ?? (await navigator.mediaDevices.getUserMedia({ audio: true }));
                 take_a_piece();
                 looks("listening");
-                lock_hint.hidden = false;
                 voice_note.textContent = "listening — slide up to keep it listening.";
             }
 
@@ -1247,7 +1221,6 @@
                 }
 
                 locked = true;
-                lock_hint.hidden = true;
                 looks("listening");
                 voice_note.textContent = "locked — it keeps listening. Tap the microphone to stop.";
 
@@ -1261,7 +1234,6 @@
             }
 
             function end() {
-                lock_hint.hidden = true;
                 clearInterval(cadence);
                 cadence = 0;
 
