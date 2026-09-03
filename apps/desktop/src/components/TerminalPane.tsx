@@ -96,6 +96,11 @@ export function TerminalPane({ session, crowned, focused, on_focus, on_metrics, 
     const readable_ref = useRef(readable);
     readable_ref.current = readable;
     const focused_ref = useRef(focused);
+    // The commander is read while something else is being watched: it is the
+    // one pane a person glances at to see whether the crew is still moving, so
+    // it draws every frame whether or not it has the focus.
+    const crowned_ref = useRef(crowned);
+    crowned_ref.current = crowned;
     const [renderer, set_renderer] = useState("canvas");
     const [stats, set_stats] = useState<SessionInfo | null>(null);
     const [now, set_now] = useState(() => Math.floor(Date.now() / 1000));
@@ -213,7 +218,7 @@ export function TerminalPane({ session, crowned, focused, on_focus, on_metrics, 
                 return;
             }
 
-            if (focused_ref.current) {
+            if (focused_ref.current || crowned_ref.current) {
                 frame_handle = requestAnimationFrame(() => {
                     frame_handle = 0;
                     flush();
@@ -524,7 +529,9 @@ export function TerminalPane({ session, crowned, focused, on_focus, on_metrics, 
                 </span>
                 {shown_stats ? <span className="tabular-nums">{format_elapsed(shown_now - shown_stats.last_output_at)}</span> : null}
                 <span className="ml-auto truncate">
-                    {readable ? "readable · text only" : `${focused ? "live" : `${BACKGROUND_FLUSH_MS}ms`} · ${renderer}`}
+                    {readable
+                        ? "readable · text only"
+                        : `${focused || crowned ? "live" : `${BACKGROUND_FLUSH_MS}ms`} · ${renderer}`}
                 </span>
             </div>
         </div>
