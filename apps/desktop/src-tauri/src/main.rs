@@ -296,8 +296,7 @@ fn main() {
             tracing::info!(port = held.port, pid = held.pid, "attached to the core already running");
             (
                 CoreEndpoint {
-                    // What it was told to bind is not what anything dials.
-                    host: agentland_core::service::connectable(&held.host).to_owned(),
+                    host: held.host,
                     port: held.port,
                     token: held.token,
                 },
@@ -361,6 +360,16 @@ fn main() {
         data_dir: data_dir.clone(),
     };
 
+    // What the core was told to bind is not what the window dials: a core
+    // serving everybody sits on 0.0.0.0, and a fetch to that address fails
+    // with nothing more helpful than "Load failed". Whichever way the core
+    // came to be, the window reaches it at the loopback address.
+    let dialled = CoreEndpoint {
+        host: agentland_core::service::connectable(&endpoint.host).to_owned(),
+        port: endpoint.port,
+        token: endpoint.token.clone(),
+    };
+
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -369,7 +378,7 @@ fn main() {
         // panel layout already survived a restart; the window around it did
         // not, so every start began by dragging it back.
         .plugin(tauri_plugin_window_state::Builder::default().build())
-        .manage(endpoint)
+        .manage(dialled)
         .invoke_handler(tauri::generate_handler![core_endpoint, updater_status, save_capture, open_pane_window, close_pane_window])
         .setup(move |app| {
             let manager = Arc::new(PtyManager::new());
