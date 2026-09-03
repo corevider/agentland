@@ -29,6 +29,7 @@ pub mod stacks;
 pub mod start;
 pub mod pty;
 pub mod server;
+pub mod service;
 pub mod workspaces;
 pub mod skills;
 pub mod supervisor;

@@ -348,7 +348,24 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, "core listening");
-    axum::serve(listener, app).await?;
+
+    // Written only once it is actually listening, so anything that finds the
+    // file and knocks gets an answer rather than a refused connection.
+    crate::service::announce(
+        &state.config.data_dir,
+        &crate::service::Endpoint {
+            host: state.config.host.clone(),
+            port: state.config.port,
+            token: state.config.token.clone(),
+            pid: std::process::id(),
+        },
+    );
+
+    let served = axum::serve(listener, app).await;
+
+    // A core that has stopped should not still be advertising itself.
+    crate::service::forget(&state.config.data_dir);
+    served?;
     Ok(())
 }
 

@@ -171,6 +171,99 @@ fn urlencoding(value: &str) -> String {
         .collect()
 }
 
+/// Whether a core is listening there and will talk to us.
+///
+/// A file saying where the core is outlives the process that wrote it, so the
+/// only honest test is to knock.
+fn answers(endpoint: &agentland_core::service::Endpoint) -> bool {
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_millis(1500))
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return false,
+    };
+
+    client
+        .get(format!("{}/repos", endpoint.url()))
+        .header("x-auth-token", &endpoint.token)
+        .send()
+        .map(|answer| answer.status().is_success())
+        .unwrap_or(false)
+}
+
+/// The core binary that runs on its own, looked for beside this one first.
+///
+/// Beside it in a bundle, beside it in a dev build, and on PATH for anybody who
+/// has installed it — in that order, because the one shipped with this window
+/// is the one that matches it.
+fn core_binary() -> Option<std::path::PathBuf> {
+    let named = if cfg!(windows) { "agentland-core.exe" } else { "agentland-core" };
+
+    if let Ok(here) = std::env::current_exe() {
+        if let Some(beside) = here.parent().map(|dir| dir.join(named)) {
+            if beside.is_file() {
+                return Some(beside);
+            }
+        }
+    }
+
+    which_on_path(named)
+}
+
+fn which_on_path(named: &str) -> Option<std::path::PathBuf> {
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|dir| dir.join(named))
+            .find(|held| held.is_file())
+    })
+}
+
+/// Start the core as its own process, outliving this window.
+///
+/// Put in its own process group on purpose: closing the window, or the window
+/// crashing, must not take the agents with it. That is the whole point.
+fn start_the_core(
+    binary: &std::path::Path,
+    host: &str,
+    port: u16,
+    token: &str,
+    data_dir: &std::path::Path,
+) -> std::io::Result<u32> {
+    let mut command = std::process::Command::new(binary);
+    command
+        .env("AGENTLAND_HOST", host)
+        .env("AGENTLAND_PORT", port.to_string())
+        .env("AGENTLAND_TOKEN", token)
+        .env("AGENTLAND_DATA_DIR", data_dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+
+    command.spawn().map(|child| child.id())
+}
+
+/// Wait for a core that has just been started to answer.
+fn waits_for(endpoint: &agentland_core::service::Endpoint, patience: std::time::Duration) -> bool {
+    let until = std::time::Instant::now() + patience;
+
+    while std::time::Instant::now() < until {
+        if answers(endpoint) {
+            return true;
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+
+    false
+}
+
 fn main() {
     tracing_subscriber::fmt().with_target(false).init();
 
@@ -181,10 +274,66 @@ fn main() {
 
     let host = std::env::var("AGENTLAND_HOST").unwrap_or_else(|_| "127.0.0.1".to_owned());
 
-    let endpoint = CoreEndpoint {
-        host: host.clone(),
-        port,
-        token: std::env::var("AGENTLAND_TOKEN").unwrap_or_else(|_| generate_token()),
+    let data_dir = desktop_data_dir();
+
+    // The core is a service, and this window is one of the things that talks to
+    // it. Attach to one that is already running; failing that, start one that
+    // will outlive this window; failing that — no binary to start — serve it
+    // here, as it used to be, so a window without its service still works.
+    let running = agentland_core::service::announced(&data_dir).filter(answers);
+
+    let (endpoint, serve_here) = match running {
+        Some(held) => {
+            tracing::info!(port = held.port, pid = held.pid, "attached to the core already running");
+            (
+                CoreEndpoint {
+                    host: held.host,
+                    port: held.port,
+                    token: held.token,
+                },
+                false,
+            )
+        }
+        None => {
+            let token = std::env::var("AGENTLAND_TOKEN").unwrap_or_else(|_| generate_token());
+            let wanted = agentland_core::service::Endpoint {
+                host: host.clone(),
+                port,
+                token: token.clone(),
+                pid: 0,
+            };
+
+            let started = core_binary().and_then(|binary| {
+                start_the_core(&binary, &host, port, &token, &data_dir)
+                    .map_err(|error| tracing::warn!(%error, "cannot start the core on its own"))
+                    .ok()
+            });
+
+            match started {
+                Some(pid) if waits_for(&wanted, std::time::Duration::from_secs(20)) => {
+                    tracing::info!(pid, port, "started the core as its own process");
+                    (
+                        CoreEndpoint {
+                            host: host.clone(),
+                            port,
+                            token,
+                        },
+                        false,
+                    )
+                }
+                _ => {
+                    tracing::warn!("serving the core in this window: the agents stop when it does");
+                    (
+                        CoreEndpoint {
+                            host: host.clone(),
+                            port,
+                            token,
+                        },
+                        true,
+                    )
+                }
+            }
+        }
     };
 
     let config = ServerConfig {
@@ -199,7 +348,7 @@ fn main() {
             "http://tauri.localhost".into(),
             "https://tauri.localhost".into(),
         ],
-        data_dir: desktop_data_dir(),
+        data_dir: data_dir.clone(),
     };
 
     tauri::Builder::default()
@@ -216,11 +365,13 @@ fn main() {
             let manager = Arc::new(PtyManager::new());
             app.manage(manager.clone());
 
-            tauri::async_runtime::spawn(async move {
-                if let Err(error) = serve(manager, config).await {
-                    tracing::error!(%error, "core server stopped");
-                }
-            });
+            if serve_here {
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = serve(manager, config).await {
+                        tracing::error!(%error, "core server stopped");
+                    }
+                });
+            }
 
             // The plugin writes the window's size and place when the app exits
             // cleanly, which is not how it always ends: a rebuild, a crash or a
