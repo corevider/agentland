@@ -524,6 +524,11 @@
                 font-size: 0.92rem;
             }
 
+            #bar .speak button,
+            #voice .square {
+                position: relative;
+            }
+
             #bar .speak button {
                 /* The base sheet gives every button flex: 1, which stretched
                    this one sideways into an oval. A circle is a circle, and
@@ -562,11 +567,30 @@
                 animation: heard 1.1s ease-in-out infinite;
             }
 
+            /* A ring that turns around the button, rather than the button
+               turning: a square that spins is a mistake, and the microphone
+               inside a spinning circle has no business moving either. */
             #bar .speak button.reading,
             #voice .square.reading {
-                border-color: var(--warn);
+                border-color: var(--edge);
                 color: var(--warn);
-                animation: reading 1.1s linear infinite;
+                position: relative;
+            }
+
+            #bar .speak button.reading::after,
+            #voice .square.reading::after {
+                content: "";
+                position: absolute;
+                inset: -5px;
+                border-radius: inherit;
+                border: 3px solid transparent;
+                border-top-color: var(--warn);
+                border-right-color: var(--warn);
+                animation: turning 0.9s linear infinite;
+            }
+
+            @keyframes turning {
+                to { transform: rotate(360deg); }
             }
 
             @keyframes heard {
@@ -574,21 +598,7 @@
                 50% { box-shadow: 0 0 34px #e5705faa, inset 0 0 22px #e5705f44; }
             }
 
-            @keyframes reading {
-                0% { box-shadow: 0 0 16px #f0a95c55; border-top-color: transparent; transform: rotate(0deg); }
-                100% { box-shadow: 0 0 16px #f0a95c55; border-top-color: transparent; transform: rotate(360deg); }
-            }
 
-            /* The mark turns with the ring; the microphone inside it should not. */
-            #bar .speak button.reading svg,
-            #voice .square.reading svg {
-                animation: steady 1.1s linear infinite;
-            }
-
-            @keyframes steady {
-                0% { transform: rotate(0deg); }
-                100% { transform: rotate(-360deg); }
-            }
         </style>
     </head>
     <body>
