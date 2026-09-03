@@ -36,6 +36,7 @@ pub mod service;
 pub mod workspaces;
 pub mod skills;
 pub mod supervisor;
+pub mod tls;
 pub mod transcript;
 pub mod vault;
 pub mod voice;

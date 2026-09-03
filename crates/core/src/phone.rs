@@ -11,6 +11,13 @@ pub fn url_for(host: &str, port: u16, token: &str) -> String {
     format!("http://{host}:{port}/mobile/?token={token}")
 }
 
+/// The same address at the door that a browser will open a camera and a
+/// microphone on. Its certificate is this machine's own, so a phone says once
+/// that it does not recognise it.
+pub fn url_for_securely(host: &str, port: u16, token: &str) -> String {
+    format!("https://{host}:{port}/mobile/?token={token}")
+}
+
 /// Whether a phone could reach this at all.
 ///
 /// A core bound to the loopback address answers only the machine it runs on, so
@@ -41,6 +48,14 @@ mod tests {
         let url = url_for("192.168.1.128", 9470, "abc123");
 
         assert_eq!(url, "http://192.168.1.128:9470/mobile/?token=abc123");
+    }
+
+    #[test]
+    fn the_secure_door_is_the_same_address_a_door_along() {
+        assert_eq!(
+            url_for_securely("192.168.1.128", 9471, "abc"),
+            "https://192.168.1.128:9471/mobile/?token=abc"
+        );
     }
 
     #[test]

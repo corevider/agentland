@@ -95,6 +95,11 @@ fn allowed_hosts(host: &str, port: u16) -> Vec<String> {
         // Serving beyond this machine means a phone will ask for it by the
         // address it can see, which is never the one it was told to bind.
         hosts.extend(agentland_core::service::on_this_network(port));
+
+        // The phone's door is one port along, and a browser sends the port it
+        // asked for in the Host header.
+        hosts.extend(agentland_core::service::on_this_network(port + 1));
+        hosts.push(format!("{host}:{}", port + 1));
     }
 
     hosts

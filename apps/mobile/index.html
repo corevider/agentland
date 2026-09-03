@@ -220,6 +220,14 @@
                 color: inherit;
             }
 
+            #lens {
+                width: 100%;
+                max-height: 46vh;
+                border-radius: 0.6rem;
+                background: #04100f;
+                margin-bottom: 0.5rem;
+            }
+
             #record.listening {
                 border-color: #f4737b;
                 color: #f4737b;
@@ -239,8 +247,10 @@
                     Scan the code with this phone's camera app: Agentland, Settings, then Phone.
                     It opens this page already let in. Or paste the address printed under the code.
                 </p>
-                <textarea id="way-in" rows="2" placeholder="http://192.168.1.5:9470/mobile/?token=…"></textarea>
+                <video id="lens" playsinline hidden></video>
+                <textarea id="way-in" rows="2" placeholder="https://192.168.1.5:9471/mobile/?token=…"></textarea>
                 <div class="row">
+                    <button id="scan" class="approve" hidden>scan the code</button>
                     <button id="let-in" class="approve">let me in</button>
                 </div>
             </section>
@@ -325,6 +335,66 @@
                     return said.includes("token=") ? said.split("token=").pop().split("&")[0] : said;
                 }
             }
+
+            // Reading the code here rather than in the camera app, which only
+            // helps when this page is already open and not let in. It needs a
+            // camera, and a browser opens one only on a secure page: over plain
+            // http the button hides itself rather than failing when pressed.
+            const lens = document.getElementById("lens");
+            const scan = document.getElementById("scan");
+            const can_scan = Boolean(window.BarcodeDetector) && window.isSecureContext;
+
+            scan.hidden = !can_scan;
+
+            if (!can_scan && window.isSecureContext === false) {
+                gate_why.textContent =
+                    "Scan the code with this phone's camera app: Agentland, Settings, then Phone. " +
+                    "This page cannot open a camera over plain http — the address in the code does.";
+            }
+
+            scan.addEventListener("click", async () => {
+                try {
+                    const reader = new BarcodeDetector({ formats: ["qr_code"] });
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        video: { facingMode: "environment" },
+                    });
+
+                    lens.hidden = false;
+                    lens.srcObject = stream;
+                    await lens.play();
+
+                    const stop = () => {
+                        stream.getTracks().forEach((track) => track.stop());
+                        lens.hidden = true;
+                    };
+
+                    const look = async () => {
+                        if (lens.hidden) {
+                            return;
+                        }
+
+                        try {
+                            const found = await reader.detect(lens);
+                            const wanted = found.map((code) => token_from(code.rawValue)).find(Boolean);
+
+                            if (wanted) {
+                                stop();
+                                localStorage.setItem("agentland-mobile-token", wanted);
+                                location.replace(location.pathname);
+                                return;
+                            }
+                        } catch {
+                            // A frame that could not be read is just a frame.
+                        }
+
+                        requestAnimationFrame(look);
+                    };
+
+                    look();
+                } catch (cause) {
+                    gate_why.textContent = String(cause.message ?? cause);
+                }
+            });
 
             document.getElementById("let-in").addEventListener("click", () => {
                 const wanted = token_from(way_in.value);

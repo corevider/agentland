@@ -28,6 +28,8 @@ async fn main() -> anyhow::Result<()> {
     if host != "127.0.0.1" && host != "localhost" {
         standing.push(format!("{host}:{port}"));
         standing.extend(agentland_core::service::on_this_network(port));
+        standing.extend(agentland_core::service::on_this_network(port + 1));
+        standing.push(format!("{host}:{}", port + 1));
     }
 
     let allowed_hosts = split_env("AGENTLAND_ALLOWED_HOSTS", standing);

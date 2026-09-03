@@ -372,6 +372,44 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .layer(cors);
 
+    // A second door, for the phone. Browsers refuse a camera and a microphone
+    // on a plain http page, so the companion could show the crew but never
+    // speak to it. The certificate is this machine's own — a phone will say it
+    // does not recognise it, which is true, and what it buys is that the token
+    // is not readable by everybody else on the network.
+    if crate::phone::reachable(&state.config.host) {
+        let hosts = state.config.allowed_hosts.clone();
+        let secure_port = state.config.port + 1;
+        let secure_addr: SocketAddr = format!("{}:{secure_port}", state.config.host).parse()?;
+        let app_for_tls = app.clone();
+        let data_dir = state.config.data_dir.clone();
+
+        tokio::spawn(async move {
+            match crate::tls::papers_for(&data_dir, &hosts) {
+                Ok(papers) => {
+                    match axum_server::tls_rustls::RustlsConfig::from_pem_file(
+                        papers.certificate,
+                        papers.key,
+                    )
+                    .await
+                    {
+                        Ok(held) => {
+                            tracing::info!(%secure_addr, "the phone's door is open");
+                            if let Err(error) = axum_server::bind_rustls(secure_addr, held)
+                                .serve(app_for_tls.into_make_service())
+                                .await
+                            {
+                                tracing::warn!(%error, "the phone's door closed");
+                            }
+                        }
+                        Err(error) => tracing::warn!(%error, "cannot read this machine's papers"),
+                    }
+                }
+                Err(error) => tracing::warn!(%error, "cannot make papers for this machine"),
+            }
+        });
+    }
+
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, "core listening");
 
@@ -402,9 +440,15 @@ async fn guard(
     request: axum::extract::Request,
     next: Next,
 ) -> Response {
+    // HTTP/2 has no Host header: the address is in the request's own authority.
+    // A browser reaching the phone's door negotiates h2 over TLS, so reading
+    // only the header saw an empty string and refused every request — measured,
+    // where the same call answered over http/1.1 and was forbidden over h2.
     let host = headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+        .or_else(|| request.uri().authority().map(|held| held.to_string()))
         .unwrap_or_default()
         .to_ascii_lowercase();
 
@@ -4497,11 +4541,19 @@ async fn phone_way_in(State(state): State<AppState>) -> Json<PhoneWayIn> {
     let token = &state.config.token;
     let reachable = crate::phone::reachable(&state.config.host);
 
+    // The secure door, because a phone that arrives there can use its camera
+    // and its microphone; the plain one is offered after it for anything that
+    // will not accept a certificate nobody signed.
     let urls: Vec<String> = if reachable {
-        crate::service::on_this_network(port)
+        let hosts: Vec<String> = crate::service::on_this_network(port)
             .into_iter()
             .filter_map(|held| held.rsplit_once(':').map(|(host, _)| host.to_owned()))
-            .map(|host| crate::phone::url_for(&host, port, token))
+            .collect();
+
+        hosts
+            .iter()
+            .map(|host| crate::phone::url_for_securely(host, port + 1, token))
+            .chain(hosts.iter().map(|host| crate::phone::url_for(host, port, token)))
             .collect()
     } else {
         Vec::new()
