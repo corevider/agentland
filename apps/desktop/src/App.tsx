@@ -144,6 +144,10 @@ export default function App() {
     /// Held down, the microphone is recording; let go, what was said is typed
     /// into the pane being watched. Not sent — read it before you send it.
     const [listening, set_listening] = useState(false);
+    /// Reading back what was said takes a second or two on this machine, and a
+    /// button that looks idle while it works reads as a button that did
+    /// nothing.
+    const [reading, set_reading] = useState(false);
     const [heard, set_heard] = useState<string | null>(null);
     const [busy, set_busy] = useState(false);
     const [error, set_error] = useState<string | null>(null);
@@ -799,10 +803,12 @@ export default function App() {
                     <button
                         // Held down, a button is a button and not a paragraph:
                         // without this, holding it starts selecting the label.
-                        className={`select-none rounded border px-2 py-[3px] font-mono text-[11px] ${
+                        className={`select-none rounded border px-2 py-[3px] font-mono text-[11px] transition-colors ${
                             listening
-                                ? "border-coral bg-coral/15 text-coral"
-                                : "border-reef text-shell hover:border-foam"
+                                ? "animate-pulse border-coral bg-coral/15 text-coral"
+                                : reading
+                                  ? "animate-pulse border-sun bg-sun/10 text-sun"
+                                  : "border-reef text-shell hover:border-foam"
                         }`}
                         title="hold to speak — what you say is typed into the pane you are watching, not sent"
                         onPointerDown={() => {
@@ -817,6 +823,7 @@ export default function App() {
                             }
 
                             set_listening(false);
+                            set_reading(true);
                             stop_listening()
                                 .then(({ text }) => {
                                     if (!text) {
@@ -833,10 +840,11 @@ export default function App() {
                                     set_heard(text);
                                     void write_input(pane, text);
                                 })
-                                .catch((cause) => set_error(String(cause)));
+                                .catch((cause) => set_error(String(cause)))
+                                .finally(() => set_reading(false));
                         }}
                     >
-                        {listening ? "● listening…" : "◉ hold to speak"}
+                        {listening ? "● listening…" : reading ? "◐ reading it back…" : "◉ hold to speak"}
                     </button>
 
                     <button

@@ -552,11 +552,42 @@
                 height: 2.1rem;
             }
 
-            #bar .speak button.listening {
+            /* Three things it can be doing, and each looks like itself:
+               waiting, hearing you, and working out what you said. */
+            #bar .speak button.listening,
+            #voice .square.listening {
                 background: #3a1414;
                 border-color: var(--bad);
                 color: var(--bad);
-                box-shadow: 0 0 22px #e5705f66;
+                animation: heard 1.1s ease-in-out infinite;
+            }
+
+            #bar .speak button.reading,
+            #voice .square.reading {
+                border-color: var(--warn);
+                color: var(--warn);
+                animation: reading 1.1s linear infinite;
+            }
+
+            @keyframes heard {
+                0%, 100% { box-shadow: 0 0 14px #e5705f55, inset 0 0 0 #e5705f00; }
+                50% { box-shadow: 0 0 34px #e5705faa, inset 0 0 22px #e5705f44; }
+            }
+
+            @keyframes reading {
+                0% { box-shadow: 0 0 16px #f0a95c55; border-top-color: transparent; transform: rotate(0deg); }
+                100% { box-shadow: 0 0 16px #f0a95c55; border-top-color: transparent; transform: rotate(360deg); }
+            }
+
+            /* The mark turns with the ring; the microphone inside it should not. */
+            #bar .speak button.reading svg,
+            #voice .square.reading svg {
+                animation: steady 1.1s linear infinite;
+            }
+
+            @keyframes steady {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(-360deg); }
             }
         </style>
     </head>
@@ -1075,6 +1106,11 @@
                     const audio = new Blob(chunks, { type: recorder.mimeType });
                     voice_note.textContent = "reading it back…";
 
+                    for (const button of [record, speak]) {
+                        button.classList.remove("listening");
+                        button.classList.add("reading");
+                    }
+
                     try {
                         const answer = await fetch("/voice/heard", {
                             method: "POST",
@@ -1091,12 +1127,18 @@
                         voice_note.textContent = heard.text ? "read it, then send it." : "nothing was said.";
                     } catch (cause) {
                         voice_note.textContent = String(cause.message ?? cause);
+                    } finally {
+                        for (const button of [record, speak]) {
+                            button.classList.remove("reading");
+                        }
                     }
                 };
 
                 recorder.start();
-                record.classList.add("listening");
-                speak.classList.add("listening");
+                for (const button of [record, speak]) {
+                    button.classList.remove("reading");
+                    button.classList.add("listening");
+                }
             }
 
             function end() {
