@@ -75,13 +75,112 @@ fn updater_status() -> String {
     }
 }
 
-/// Bring the window back from wherever closing it put it.
+/// Whether the window moved or grew since its place was last written down.
+struct MovedOrResized(Arc<AtomicBool>);
+
+/// A move or a resize marks the window, and the mark is written out a few
+/// seconds later by the loop in setup — a small file, written only after
+/// something changed.
+fn watch_the_window(window: &tauri::WebviewWindow, watching: Arc<AtomicBool>) {
+    window.on_window_event(move |event| {
+        if matches!(
+            event,
+            tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_)
+        ) {
+            watching.store(true, Ordering::Relaxed);
+        }
+    });
+}
+
+/// Bring the window back, or make it again.
+///
+/// Closing the window closes it: hiding and showing the same GTK window on
+/// Wayland left one that would not close again until it was moved. A window
+/// made afresh from the config is the window the app starts with, restored to
+/// where it was, and it closes the way it did the first time.
 fn show_the_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
+        return;
     }
+
+    let Some(config) = app.config().app.windows.first().cloned() else {
+        return;
+    };
+
+    match tauri::WebviewWindowBuilder::from_config(app, &config).and_then(|builder| builder.build()) {
+        Ok(window) => {
+            if let Some(marker) = app.try_state::<MovedOrResized>() {
+                watch_the_window(&window, marker.0.clone());
+            }
+        }
+        Err(error) => tracing::warn!(%error, "cannot open the window again"),
+    }
+}
+
+/// Somebody in the crew who is waiting on a person, as the tray names them.
+#[derive(Clone, PartialEq, Eq)]
+struct NeedsYou {
+    agent_id: String,
+    name: String,
+    reason: String,
+}
+
+fn who_needs_you(agents: &serde_json::Value) -> Vec<NeedsYou> {
+    agents
+        .as_array()
+        .map(|held| {
+            held.iter()
+                .filter(|agent| agent["presence"].as_str() == Some("attention"))
+                .filter_map(|agent| {
+                    Some(NeedsYou {
+                        agent_id: agent["id"].as_str()?.to_owned(),
+                        name: agent["name"].as_str()?.to_owned(),
+                        reason: agent["reason"].as_str().unwrap_or("needs you").to_owned(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn needs_you_line(who: &NeedsYou) -> String {
+    format!("{} needs you — {}", who.name, who.reason)
+}
+
+/// The icon with a mark on it: somebody is waiting on a person, and the icon
+/// is the one thing on screen while the window is away.
+fn marked_icon(icon: &tauri::image::Image<'_>) -> tauri::image::Image<'static> {
+    let (width, height) = (icon.width(), icon.height());
+    let mut rgba = icon.rgba().to_vec();
+    let radius = (width.min(height) as f32) * 0.22;
+    let (centre_x, centre_y) = (width as f32 - radius - 1.0, height as f32 - radius - 1.0);
+
+    for y in 0..height {
+        for x in 0..width {
+            let distance = ((x as f32 - centre_x).powi(2) + (y as f32 - centre_y).powi(2)).sqrt();
+            if distance <= radius {
+                let at = ((y * width + x) * 4) as usize;
+                let (r, g, b) = if distance > radius - 1.5 { (0x0d, 0x1c, 0x1f) } else { (0xe5, 0x70, 0x5f) };
+                rgba[at..at + 4].copy_from_slice(&[r, g, b, 0xff]);
+            }
+        }
+    }
+
+    tauri::image::Image::new_owned(rgba, width, height)
+}
+
+/// Ask the window, through the core, to go and look at something. The queue
+/// waits for a window to read it, so this works for a window that is only
+/// now being made.
+fn send_the_window_to(client: &reqwest::blocking::Client, endpoint: &CoreEndpoint, opens: &str) {
+    let _ = client
+        .post(format!("http://{}:{}/ui/commands", endpoint.host, endpoint.port))
+        .header("x-auth-token", &endpoint.token)
+        .json(&serde_json::json!({ "name": format!("open:{opens}") }))
+        .send();
 }
 
 /// The crew in one line, for the tray: how many, and what they are up to.
@@ -137,51 +236,92 @@ fn stop_the_crew(endpoint: &CoreEndpoint) {
         .send();
 }
 
-/// An icon in the tray, so closing the window puts it away rather than ending it.
+/// What the tray says, all of it, so the whole icon can be made from it.
+#[derive(Clone, PartialEq, Eq)]
+struct TraySaid {
+    crew: String,
+    panes: String,
+    needing: Vec<NeedsYou>,
+}
+
+/// The tray icon, menu and all, made in one piece.
 ///
-/// The crew goes on working in the core whether the window is there or not,
-/// and what a person wants from the close button is the window out of the way
-/// with somewhere to get it back from. The menu says what the crew is doing,
-/// and offers two ways out, named for what they leave behind.
-fn put_an_icon_in_the_tray(app: &tauri::App, endpoint: CoreEndpoint) -> tauri::Result<()> {
-    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+/// Made again, not changed: the menu is exported over the bus one item at a
+/// time, and GNOME's indicator extension drops the labels of a menu that is
+/// edited in place. A new icon with a new menu is drawn fresh every time, and
+/// the crew changes state rarely enough that nobody sees the swap. Each one
+/// has a name of its own, because an icon made under the last one's name
+/// inherits its place on the bus and an empty menu with it.
+fn build_the_tray(
+    app: &tauri::AppHandle,
+    id: &str,
+    endpoint: &CoreEndpoint,
+    said: &TraySaid,
+    plain_icon: Option<&tauri::image::Image<'static>>,
+    marked: Option<&tauri::image::Image<'static>>,
+) -> tauri::Result<tauri::tray::TrayIcon> {
+    use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
-    let crew = MenuItem::with_id(app, "crew", "Asking the core…", false, None::<&str>)?;
-    let panes = MenuItem::with_id(app, "panes", "", false, None::<&str>)?;
+    let crew = MenuItem::with_id(app, "crew", &said.crew, false, None::<&str>)?;
+    let panes = MenuItem::with_id(app, "panes", &said.panes, false, None::<&str>)?;
+    let lines = said
+        .needing
+        .iter()
+        .map(|who| MenuItem::with_id(app, format!("open:agent:{}", who.agent_id), needs_you_line(who), true, None::<&str>))
+        .collect::<Result<Vec<_>, _>>()?;
     let open = MenuItem::with_id(app, "open", "Open Agentland", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit — the crew keeps working", true, None::<&str>)?;
     let stop = MenuItem::with_id(app, "stop", "Stop the crew and quit", true, None::<&str>)?;
-    let menu = Menu::with_items(
-        app,
-        &[
-            &crew,
-            &panes,
-            &PredefinedMenuItem::separator(app)?,
-            &open,
-            &PredefinedMenuItem::separator(app)?,
-            &quit,
-            &stop,
-        ],
-    )?;
+    let first_break = PredefinedMenuItem::separator(app)?;
+    let second_break = PredefinedMenuItem::separator(app)?;
 
-    let for_stopping = endpoint.clone();
-    let mut tray = TrayIconBuilder::with_id("agentland")
+    let mut items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![&crew, &panes];
+    for line in &lines {
+        items.push(line);
+    }
+    items.extend([&first_break as &dyn IsMenuItem<tauri::Wry>, &open, &second_break, &quit, &stop]);
+    let menu = Menu::with_items(app, &items)?;
+
+    let tooltip = match said.needing.first() {
+        Some(who) => format!("Agentland — {}", needs_you_line(who)),
+        None => format!("Agentland — {}", said.crew),
+    };
+
+    let for_events = endpoint.clone();
+    let mut tray = TrayIconBuilder::with_id(id)
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .tooltip("Agentland")
-        .on_menu_event(move |app, event| match event.id().as_ref() {
-            "open" => show_the_window(app),
-            "quit" => app.exit(0),
-            "stop" => {
-                let handle = app.clone();
-                let endpoint = for_stopping.clone();
-                std::thread::spawn(move || {
-                    stop_the_crew(&endpoint);
-                    handle.exit(0);
-                });
+        .tooltip(tooltip)
+        .on_menu_event(move |app, event| {
+            let id = event.id().as_ref().to_owned();
+            match id.as_str() {
+                "open" => show_the_window(app),
+                "quit" => app.exit(0),
+                "stop" => {
+                    let handle = app.clone();
+                    let endpoint = for_events.clone();
+                    std::thread::spawn(move || {
+                        stop_the_crew(&endpoint);
+                        handle.exit(0);
+                    });
+                }
+                _ => {
+                    if let Some(opens) = id.strip_prefix("open:") {
+                        show_the_window(app);
+                        let endpoint = for_events.clone();
+                        let opens = opens.to_owned();
+                        std::thread::spawn(move || {
+                            if let Ok(client) = reqwest::blocking::Client::builder()
+                                .timeout(std::time::Duration::from_millis(1500))
+                                .build()
+                            {
+                                send_the_window_to(&client, &endpoint, &opens);
+                            }
+                        });
+                    }
+                }
             }
-            _ => {}
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
@@ -194,14 +334,41 @@ fn put_an_icon_in_the_tray(app: &tauri::App, endpoint: CoreEndpoint) -> tauri::R
             }
         });
 
-    if let Some(icon) = app.default_window_icon() {
+    let icon = if said.needing.is_empty() { plain_icon } else { marked };
+    if let Some(icon) = icon {
         tray = tray.icon(icon.clone());
     }
 
-    let tray = tray.build(app)?;
+    tray.build(app)
+}
 
-    // What the crew is doing, read off the core every few seconds and written
-    // on the menu, so the icon is worth hovering over when the window is away.
+fn tray_id(made: u64) -> String {
+    format!("agentland-{made}")
+}
+
+/// An icon in the tray, so closing the window puts it away rather than ending it.
+///
+/// The crew goes on working in the core whether the window is there or not,
+/// and what a person wants from the close button is the window out of the way
+/// with somewhere to get it back from. The menu says what the crew is doing
+/// and who is waiting on a person, and offers two ways out, named for what
+/// they leave behind.
+fn put_an_icon_in_the_tray(app: &tauri::App, endpoint: CoreEndpoint) -> tauri::Result<()> {
+    let plain_icon = app.default_window_icon().map(|icon| icon.clone().to_owned());
+    let marked = plain_icon.as_ref().map(marked_icon);
+
+    let mut said = TraySaid {
+        crew: "Asking the core…".to_owned(),
+        panes: "…".to_owned(),
+        needing: Vec::new(),
+    };
+    let mut made = 0u64;
+    build_the_tray(app.handle(), &tray_id(made), &endpoint, &said, plain_icon.as_ref(), marked.as_ref())?;
+
+    // What the crew is doing, read off the core every few seconds. The asking
+    // happens on its own thread; the making has to happen on the main one,
+    // because the menu is a GTK object on Linux.
+    let handle = app.handle().clone();
     std::thread::spawn(move || {
         let Ok(client) = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_millis(1500))
@@ -214,7 +381,7 @@ fn put_an_icon_in_the_tray(app: &tauri::App, endpoint: CoreEndpoint) -> tauri::R
             let agents = ask_the_core(&client, &endpoint, "/agents");
             let sessions = ask_the_core(&client, &endpoint, "/sessions");
 
-            let (crew_said, panes_said) = match (agents, sessions) {
+            let now = match (agents, sessions) {
                 (Some(agents), sessions) => {
                     let presences: Vec<String> = agents
                         .as_array()
@@ -225,14 +392,36 @@ fn put_an_icon_in_the_tray(app: &tauri::App, endpoint: CoreEndpoint) -> tauri::R
                         })
                         .unwrap_or_default();
                     let open = sessions.and_then(|held| held.as_array().map(Vec::len)).unwrap_or(0);
-                    (crew_line(&presences), panes_line(open))
+                    TraySaid {
+                        crew: crew_line(&presences),
+                        panes: panes_line(open),
+                        needing: who_needs_you(&agents),
+                    }
                 }
-                (None, _) => ("The core is not answering".to_owned(), String::new()),
+                (None, _) => TraySaid {
+                    crew: "The core is not answering".to_owned(),
+                    panes: String::new(),
+                    needing: Vec::new(),
+                },
             };
 
-            let _ = crew.set_text(&crew_said);
-            let _ = panes.set_text(&panes_said);
-            let _ = tray.set_tooltip(Some(format!("Agentland — {crew_said}")));
+            if said != now {
+                said = now.clone();
+                let before = tray_id(made);
+                made += 1;
+                let after = tray_id(made);
+
+                let app = handle.clone();
+                let endpoint = endpoint.clone();
+                let plain_icon = plain_icon.clone();
+                let marked = marked.clone();
+                let _ = handle.run_on_main_thread(move || {
+                    drop(app.remove_tray_by_id(&before));
+                    if let Err(error) = build_the_tray(&app, &after, &endpoint, &now, plain_icon.as_ref(), marked.as_ref()) {
+                        tracing::warn!(%error, "cannot put the icon back in the tray");
+                    }
+                });
+            }
 
             std::thread::sleep(std::time::Duration::from_secs(4));
         }
@@ -567,27 +756,12 @@ fn main() {
             // something changed.
             let handle = app.handle().clone();
             let moved_or_resized = Arc::new(AtomicBool::new(false));
-            let watching = moved_or_resized.clone();
+            app.manage(MovedOrResized(moved_or_resized.clone()));
 
             put_an_icon_in_the_tray(app, for_the_tray)?;
 
             if let Some(window) = app.get_webview_window("main") {
-                let hidden = window.clone();
-                window.on_window_event(move |event| {
-                    if matches!(
-                        event,
-                        tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_)
-                    ) {
-                        watching.store(true, Ordering::Relaxed);
-                    }
-
-                    // The close button puts the window away; the tray icon
-                    // brings it back, and Quit there is how it ends.
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        let _ = hidden.hide();
-                    }
-                });
+                watch_the_window(&window, moved_or_resized.clone());
             }
 
             tauri::async_runtime::spawn(async move {
@@ -607,14 +781,21 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("failed to start Agentland")
         .run(|app, event| {
-            // A dock icon clicked with every window hidden, on a Mac.
+            // The last window closing is not the app ending: the icon in the
+            // tray is still there, and Quit on it is what ends things. An exit
+            // with a code was asked for by Quit itself, and goes ahead.
+            if let tauri::RunEvent::ExitRequested { code: None, api, .. } = &event {
+                api.prevent_exit();
+            }
+
+            // A dock icon clicked with every window closed, on a Mac.
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = event {
                 show_the_window(app);
             }
 
             #[cfg(not(target_os = "macos"))]
-            let _ = (app, event);
+            let _ = app;
         });
 }
 
@@ -640,6 +821,33 @@ mod tray_tests {
     #[test]
     fn a_state_nobody_is_in_is_not_mentioned() {
         assert_eq!(crew_line(&words(&["waiting"])), "1 in the crew · 1 waiting");
+    }
+
+    #[test]
+    fn whoever_is_waiting_on_a_person_is_named_with_the_reason() {
+        let agents = serde_json::json!([
+            {"id": "ada", "name": "Ada", "presence": "attention", "reason": "asked for approval"},
+            {"id": "rex", "name": "Rex", "presence": "working", "reason": "a turn is running"},
+            {"id": "iris", "name": "Iris", "presence": "attention"},
+        ]);
+
+        let who = super::who_needs_you(&agents);
+
+        assert_eq!(who.len(), 2);
+        assert_eq!(super::needs_you_line(&who[0]), "Ada needs you — asked for approval");
+        assert_eq!(super::needs_you_line(&who[1]), "Iris needs you — needs you");
+    }
+
+    #[test]
+    fn the_mark_sits_in_the_corner_and_leaves_the_rest_alone() {
+        let plain = tauri::image::Image::new_owned(vec![0x10; 16 * 16 * 4], 16, 16);
+
+        let marked = super::marked_icon(&plain);
+
+        let pixel = |x: u32, y: u32| &marked.rgba()[((y * 16 + x) * 4) as usize..((y * 16 + x) * 4 + 4) as usize];
+        assert_eq!(pixel(0, 0), &[0x10; 4], "the top left is as it was");
+        assert_eq!(pixel(11, 11), &[0xe5, 0x70, 0x5f, 0xff], "the bottom right carries the mark");
+        assert_eq!(pixel(13, 13), &[0x0d, 0x1c, 0x1f, 0xff], "with a dark ring around it");
     }
 
     #[test]

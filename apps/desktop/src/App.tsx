@@ -239,6 +239,8 @@ export default function App() {
             .catch(() => undefined);
     }, [focus_panel]);
 
+    const go_and_see_ref = useRef<(opens: string) => void>(() => undefined);
+
     useEffect(() => {
         const handle = window.setInterval(() => {
             take_ui_commands()
@@ -289,6 +291,13 @@ export default function App() {
                             if (PANELS.some((panel) => panel.id === target)) {
                                 focus_panel(target as PanelId);
                             }
+                            continue;
+                        }
+
+                        // From the tray: somebody needs a person, and this
+                        // is the line they clicked to come and see.
+                        if (command.startsWith("open:")) {
+                            go_and_see_ref.current(command.slice("open:".length));
                             continue;
                         }
 
@@ -548,6 +557,34 @@ export default function App() {
         }
     });
     const [crew, set_crew] = useState<Agent[]>([]);
+
+    // Where a notice, or a line on the tray, sends a person.
+    const go_and_see = useCallback(
+        (opens: string) => {
+            const [what, which] = opens.split(":");
+            if (what === "agent" && which) {
+                // A notice about one agent is about what is on its screen — a
+                // question it is holding, a limit it hit. The crew list says
+                // that agent exists, which the notice had already said; the
+                // pane is where the thing itself is.
+                const held = crew.find((agent) => agent.id === which);
+                if (held?.session_id) {
+                    void open_session(held.session_id);
+                    return;
+                }
+
+                // With no pane there is nothing to look at, and the list is
+                // where somebody would start one.
+                focus_panel("crew");
+                return;
+            }
+            if (is_known_panel(what)) {
+                focus_panel(what as PanelId);
+            }
+        },
+        [crew, open_session, focus_panel],
+    );
+    go_and_see_ref.current = go_and_see;
     const [crew_count, set_crew_count] = useState(0);
     const [card_count, set_card_count] = useState(0);
 
@@ -851,31 +888,7 @@ export default function App() {
                 ) : null}
 
                 <div className="ml-auto flex items-center gap-3">
-                    <NoticeBell
-                        on_open={(opens) => {
-                            const [what, which] = opens.split(":");
-                            if (what === "agent" && which) {
-                                // A notice about one agent is about what is on
-                                // its screen — a question it is holding, a limit
-                                // it hit. The crew list says that agent exists,
-                                // which the notice had already said; the pane is
-                                // where the thing itself is.
-                                const held = crew.find((agent) => agent.id === which);
-                                if (held?.session_id) {
-                                    void open_session(held.session_id);
-                                    return;
-                                }
-
-                                // With no pane there is nothing to look at, and
-                                // the list is where somebody would start one.
-                                focus_panel("crew");
-                                return;
-                            }
-                            if (is_known_panel(what)) {
-                                focus_panel(what as PanelId);
-                            }
-                        }}
-                    />
+                    <NoticeBell on_open={go_and_see} />
 
                     <button
                         className="rounded border border-reef px-1.5 py-[3px] text-driftwood hover:border-turquoise hover:text-turquoise"
