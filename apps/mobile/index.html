@@ -412,6 +412,10 @@
             }
 
             #voice .square {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                line-height: 0;
                 flex: none;
                 width: 3.5rem;
                 min-width: 3.5rem;
@@ -522,7 +526,13 @@
 
             #bar .speak button {
                 /* The base sheet gives every button flex: 1, which stretched
-                   this one sideways into an oval. A circle is a circle. */
+                   this one sideways into an oval. A circle is a circle, and
+                   what is in it sits in the middle: an icon left to the text
+                   baseline rides high. */
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                line-height: 0;
                 flex: none;
                 aspect-ratio: 1;
                 padding: 0;
