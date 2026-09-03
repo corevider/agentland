@@ -261,8 +261,10 @@
                 --glow: #4ade80;
             }
 
+            /* Room for the bar and for the circle that stands proud of it, or
+               the last card sits underneath them. */
             body {
-                padding-bottom: calc(env(safe-area-inset-bottom) + 96px);
+                padding-bottom: calc(env(safe-area-inset-bottom) + 132px);
             }
 
             header h1 {
@@ -377,24 +379,40 @@
                 align-items: stretch;
             }
 
-            /* The destination needs the room: a project's name is longer than
-               "Send", and a squeezed one reads as "the project…". */
-            #voice .row > #record {
-                flex: 1 1 0;
-                min-width: 0;
-                white-space: normal;
-                line-height: 1.15;
+            /* Where it goes on its own line, because a project's name is
+               longer than any button beside it; then the two things you do. */
+            #voice .row.to {
+                align-items: center;
+                gap: 0.6rem;
             }
 
-            #voice .row > select {
-                flex: 1.5 1 0;
-                min-width: 0;
+            #voice .row.to .label {
+                flex: none;
+                color: var(--muted);
+                font-size: 0.85rem;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
             }
 
-            #voice .row > #send {
-                flex: 0.9 1 0;
+            #voice .row.to select {
+                flex: 1;
                 min-width: 0;
-                white-space: nowrap;
+                min-height: 3rem;
+                border-radius: 0.7rem;
+            }
+
+            #voice .row.do {
+                gap: 0.6rem;
+            }
+
+            #voice .square {
+                flex: none;
+                width: 3.2rem;
+                padding: 0;
+            }
+
+            #voice .wide {
+                flex: 1;
             }
 
             #what-this-is b {
@@ -422,7 +440,7 @@
                 display: flex;
                 align-items: center;
                 justify-content: space-around;
-                padding: 0.5rem 1rem calc(env(safe-area-inset-bottom) + 0.5rem);
+                padding: 1.9rem 1rem calc(env(safe-area-inset-bottom) + 0.6rem);
                 background: #0b1719ee;
                 backdrop-filter: blur(8px);
                 border-top: 1px solid var(--edge);
@@ -444,7 +462,7 @@
                 flex-direction: column;
                 align-items: center;
                 gap: 0.25rem;
-                margin-top: -1.8rem;
+                margin-top: -3.4rem;
                 color: var(--glow);
                 font-size: 0.78rem;
             }
@@ -501,10 +519,13 @@
                 <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16v11H8l-4 3z"/></svg> Say something</h2>
                 <div id="voice">
                     <textarea id="said" rows="3" placeholder="Tap the microphone on your keyboard, or hold the button below."></textarea>
-                    <div class="row">
-                        <button id="record" class="approve" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/></svg> Hold to speak</button>
+                    <div class="row to">
+                        <span class="label">to</span>
                         <select id="whom"><option value="">the project&apos;s goal</option></select>
-                        <button id="send" class="approve"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 3L3 10l7 3 3 7z"/></svg> Send</button>
+                    </div>
+                    <div class="row do">
+                        <button id="record" class="approve square" hidden aria-label="hold to speak"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/></svg></button>
+                        <button id="send" class="approve wide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 3L3 10l7 3 3 7z"/></svg> Send</button>
                     </div>
                     <p class="empty" id="voice-note">The machine running the crew has no microphone; this one does.</p>
                 </div>
