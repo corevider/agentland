@@ -348,6 +348,55 @@
 
             /* What this browser can do, said in one line rather than a
                paragraph nobody reads. */
+            /* A ring rather than a word: which agent needs looking at is the
+               thing a person scans a list for, and a colour is read faster
+               than a state. */
+            .dot {
+                width: 0.7rem;
+                height: 0.7rem;
+                border-radius: 50%;
+                border: 2px solid currentColor;
+                flex: none;
+                color: var(--muted);
+            }
+
+            .dot.working { color: var(--warn); }
+            .dot.waiting { color: var(--warn); }
+            .dot.done { color: var(--good); }
+            .dot.attention { color: var(--bad); background: currentColor; }
+            .dot.idle { color: var(--muted); }
+
+            .state.working,
+            .state.waiting { color: var(--warn); }
+            .state.done { color: var(--good); }
+            .state.attention { color: var(--bad); }
+
+            /* Speak, choose, send: one row, because they are one act. */
+            #voice .row {
+                flex-wrap: nowrap;
+                align-items: stretch;
+            }
+
+            /* The destination needs the room: a project's name is longer than
+               "Send", and a squeezed one reads as "the project…". */
+            #voice .row > #record {
+                flex: 1 1 0;
+                min-width: 0;
+                white-space: normal;
+                line-height: 1.15;
+            }
+
+            #voice .row > select {
+                flex: 1.5 1 0;
+                min-width: 0;
+            }
+
+            #voice .row > #send {
+                flex: 0.9 1 0;
+                min-width: 0;
+                white-space: nowrap;
+            }
+
             #what-this-is b {
                 font-weight: 600;
                 color: var(--glow);
@@ -848,6 +897,7 @@
                         (agent) => `
                         <div class="card opens" data-agent="${escape(agent.id)}">
                             <div class="row">
+                                <span class="dot ${agent.presence}"></span>
                                 <strong>${escape(agent.name)}</strong>
                                 <span class="state ${agent.presence}">${escape(agent.presence === "attention" ? "needs you" : agent.presence)}</span>
                                 <span class="chev">${opened.has(agent.id) ? "hide skills" : "skills"}</span>
