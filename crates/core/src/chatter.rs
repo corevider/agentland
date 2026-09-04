@@ -108,6 +108,7 @@ fn is_furniture(line: &str) -> bool {
         "claude.ai/code",
         "?from=cli",
         "/rcconnecting",
+        "/rcfailed",
         "checkingforupdates",
         "cwd:",
         // Claude Code's notice that another terminal holds Remote Control,
@@ -210,6 +211,7 @@ effort
 rc
 c
 onnecting…
+● /rc failed
 ❯ what next?
 ";
         let said = last_words(frame, 10);
