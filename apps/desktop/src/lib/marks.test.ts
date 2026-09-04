@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import type { Attachment, Mark } from "@/lib/core";
-import { badge_point, derived_name, is_worth_keeping, marked_copy_of, normalized_box, originals } from "@/lib/marks";
+import {
+    badge_circle,
+    badge_point,
+    badge_under,
+    derived_name,
+    is_worth_keeping,
+    marked_copy_of,
+    normalized_box,
+    originals,
+} from "@/lib/marks";
 
 const picture: Attachment = { name: "shot.png", path: "/a/shot.png", kind: "image/png", bytes: 1, at: 0 };
 const copy: Attachment = { ...picture, name: "shot.marked.png", derived_from: "shot.png" };
@@ -29,6 +38,19 @@ describe("marks on a picture", () => {
         expect(badge_point(arrow)).toEqual([50, 60]);
         expect(badge_point(pin)).toEqual([7, 8]);
         expect(badge_point({ kind: "pen", points: [], text: "" })).toBe(null);
+    });
+
+    it("finds the mark whose number is under the pointer", () => {
+        const box: Mark = { kind: "box", points: [[100, 100], [300, 200]], text: "" };
+        const pin: Mark = { kind: "pin", points: [[500, 500]], text: "" };
+        const circle = badge_circle(pin, 1)!;
+        expect(circle.x).toBeGreaterThan(500);
+        expect(circle.y).toBeLessThan(500);
+
+        expect(badge_under([box, pin], 1, 102, 98)).toBe(0);
+        expect(badge_under([box, pin], 1, circle.x + 3, circle.y - 3)).toBe(1);
+        expect(badge_under([box, pin], 1, 250, 150)).toBe(null);
+        expect(badge_under([box, pin], 0.5, 51, 49)).toBe(0);
     });
 
     it("keeps a drawn mark and drops a twitch", () => {

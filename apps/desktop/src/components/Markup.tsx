@@ -10,7 +10,7 @@ import {
     type Marks,
     type Task,
 } from "@/lib/core";
-import { derived_name, is_worth_keeping, MARK_TOOLS, paint } from "@/lib/marks";
+import { badge_under, derived_name, is_worth_keeping, MARK_TOOLS, paint } from "@/lib/marks";
 
 /// The picture with the marks burned in, numbered, as a file for the card.
 export async function flattened(
@@ -143,8 +143,8 @@ export function MarkupView({
         }
         ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
         ctx.clearRect(0, 0, shown.width, shown.height);
-        paint(ctx, { width: natural.width, height: natural.height, marks }, scale, { draft });
-    }, [marks, draft, scale, natural, shown]);
+        paint(ctx, { width: natural.width, height: natural.height, marks }, scale, { draft, selected });
+    }, [marks, draft, scale, natural, shown, selected]);
 
     const point_of = useCallback(
         (event: React.PointerEvent<HTMLCanvasElement>): [number, number] => {
@@ -286,6 +286,78 @@ export function MarkupView({
                 </button>
             </header>
 
+            <div className="flex min-h-0 flex-1">
+            <aside className="flex w-[260px] shrink-0 flex-col border-r border-reef bg-lagoon-deep">
+                <h3 className="border-b border-reef px-2.5 py-1.5 font-mono text-[9px] uppercase tracking-[0.14em] text-shade">
+                    Marks · {marks.length}
+                </h3>
+                {marks.length === 0 ? (
+                    <p className="px-2.5 py-2 font-mono text-[10px] text-shade">
+                        Nothing drawn yet. Each mark you draw is listed here with its number, and whoever takes the card is told about every one of them.
+                    </p>
+                ) : null}
+                <ol className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+                    {marks.map((mark, index) => (
+                        <li
+                            key={index}
+                            className={`cursor-pointer border-b border-reef/60 px-2.5 py-1.5 ${
+                                selected === index ? "bg-lagoon" : "hover:bg-lagoon/60"
+                            }`}
+                            onClick={() => {
+                                set_selected(index);
+                                window.setTimeout(() => words.current?.focus(), 0);
+                            }}
+                        >
+                            <div className="flex items-center gap-2">
+                                <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-coral font-mono text-[10px] font-bold text-white">
+                                    {index + 1}
+                                </span>
+                                <span className="font-mono text-[10px] text-shell">{mark.kind}</span>
+                                {selected === index ? (
+                                    <button
+                                        className="ml-auto font-mono text-[10px] text-shade hover:text-coral"
+                                        title="remove this mark"
+                                        onClick={(event) => {
+                                            event.stopPropagation();
+                                            set_marks_here((held) => held.filter((_, at) => at !== index));
+                                            set_selected(null);
+                                        }}
+                                    >
+                                        remove
+                                    </button>
+                                ) : null}
+                            </div>
+                            {selected === index ? (
+                                <input
+                                    ref={words}
+                                    className="mt-1 w-full rounded-md border border-reef bg-lagoon-deep px-2 py-1 font-mono text-[11px] text-linen"
+                                    placeholder="what is this? the crew reads these words"
+                                    value={mark.text}
+                                    onChange={(event) =>
+                                        set_marks_here((held) =>
+                                            held.map((entry, at) => (at === index ? { ...entry, text: event.target.value } : entry)),
+                                        )
+                                    }
+                                    onKeyDown={(event) => {
+                                        if (event.key === "Enter" && !event.ctrlKey && !event.metaKey) {
+                                            event.currentTarget.blur();
+                                            set_selected(null);
+                                        }
+                                    }}
+                                />
+                            ) : (
+                                <div className={`mt-0.5 truncate text-[11px] ${mark.text.trim() ? "text-linen" : "italic text-shade"}`}>
+                                    {mark.text.trim() || "no words yet — click to add some"}
+                                </div>
+                            )}
+                        </li>
+                    ))}
+                </ol>
+                <p className="border-t border-reef px-2.5 py-1.5 font-mono text-[9px] text-shade">
+                    click a number on the picture, or a line here, to change its words
+                </p>
+            </aside>
+
             <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
                 {src ? (
                     <div className="relative" style={{ lineHeight: 0 }}>
@@ -314,6 +386,13 @@ export function MarkupView({
                                     event.currentTarget.setPointerCapture(event.pointerId);
                                 } catch {
                                     // A pointer the browser does not know — a synthetic one — cannot be captured, and need not be.
+                                }
+                                const box = event.currentTarget.getBoundingClientRect();
+                                const under = badge_under(marks, scale, event.clientX - box.left, event.clientY - box.top);
+                                if (under !== null) {
+                                    set_selected(under);
+                                    window.setTimeout(() => words.current?.focus(), 0);
+                                    return;
                                 }
                                 const point = point_of(event);
                                 if (tool === "pin" || tool === "label") {
@@ -348,61 +427,16 @@ export function MarkupView({
                     <div className="font-mono text-[11px] text-shade">{error ?? "fetching the picture…"}</div>
                 )}
             </div>
+            </div>
 
             <footer className="flex flex-wrap items-center gap-2 border-t border-reef px-3 py-1.5">
-                {current ? (
-                    <>
-                        <span className="font-mono text-[10px] text-coral">
-                            mark {selected! + 1} · {current.kind}
-                        </span>
-                        <input
-                            ref={words}
-                            className="min-w-[240px] flex-1 rounded-md border border-reef bg-lagoon px-2 py-1 font-mono text-[11px] text-linen"
-                            placeholder="what is this? the crew reads these words"
-                            value={current.text}
-                            onChange={(event) =>
-                                set_marks_here((held) =>
-                                    held.map((mark, index) => (index === selected ? { ...mark, text: event.target.value } : mark)),
-                                )
-                            }
-                            onKeyDown={(event) => {
-                                if (event.key === "Enter" && !event.ctrlKey && !event.metaKey) {
-                                    event.currentTarget.blur();
-                                }
-                            }}
-                        />
-                        <button
-                            className="rounded-lg border border-reef px-2 py-0.5 font-mono text-[11px] text-shell"
-                            onClick={() => {
-                                set_marks_here((held) => held.filter((_, index) => index !== selected));
-                                set_selected(null);
-                            }}
-                        >
-                            remove this mark
-                        </button>
-                    </>
-                ) : (
-                    <span className="font-mono text-[10px] text-shade">
-                        {marks.length === 0
-                            ? "nothing drawn yet — pick a tool and draw on the picture"
-                            : `${marks.length} mark${marks.length === 1 ? "" : "s"} · click a number's tool again to add more · ctrl+enter saves`}
-                    </span>
-                )}
-                {marks.length > 0 && !current ? (
-                    <select
-                        className="rounded-lg border border-reef bg-lagoon px-2 py-0.5 font-mono text-[11px] text-linen"
-                        value=""
-                        onChange={(event) => set_selected(event.target.value === "" ? null : Number(event.target.value))}
-                    >
-                        <option value="">edit a mark…</option>
-                        {marks.map((mark, index) => (
-                            <option key={index} value={index}>
-                                {index + 1} · {mark.kind}
-                                {mark.text.trim() ? ` · ${mark.text.trim().slice(0, 30)}` : ""}
-                            </option>
-                        ))}
-                    </select>
-                ) : null}
+                <span className="font-mono text-[10px] text-shade">
+                    {current
+                        ? `mark ${selected! + 1} · ${current.kind} · enter keeps its words · delete removes it`
+                        : marks.length === 0
+                          ? "pick a tool and draw on the picture · ctrl+enter saves"
+                          : `${marks.length} mark${marks.length === 1 ? "" : "s"} · ctrl+enter saves · esc closes`}
+                </span>
                 {error ? <span className="font-mono text-[11px] text-coral">{error}</span> : null}
             </footer>
         </div>

@@ -44,6 +44,31 @@ export function badge_point(mark: Mark): [number, number] | null {
     return mark.points[0];
 }
 
+/// Where a mark's number badge is drawn, in canvas pixels, and how big: a
+/// pin's badge sits up and to the right of the pin so the spot stays visible.
+export function badge_circle(mark: Mark, scale: number): { x: number; y: number; radius: number } | null {
+    const spot = badge_point(mark);
+    if (!spot) {
+        return null;
+    }
+    const radius = Math.max(9, 11 * scale);
+    const x = spot[0] * scale;
+    const y = spot[1] * scale;
+    return mark.kind === "pin" ? { x: x + radius * 1.4, y: y - radius * 1.4, radius } : { x, y, radius };
+}
+
+/// The mark whose number badge is under a point, if any — the last drawn
+/// wins where two overlap, since it is the one on top.
+export function badge_under(marks: Mark[], scale: number, x: number, y: number): number | null {
+    for (let index = marks.length - 1; index >= 0; index -= 1) {
+        const circle = badge_circle(marks[index], scale);
+        if (circle && Math.hypot(circle.x - x, circle.y - y) <= circle.radius + 2) {
+            return index;
+        }
+    }
+    return null;
+}
+
 /// Whether a mark is drawn enough to keep: a box or an arrow of some size, a
 /// stroke of more than a dot, a pin or a label anywhere.
 export function is_worth_keeping(mark: Mark): boolean {
@@ -78,7 +103,7 @@ export function paint(
     ctx: CanvasRenderingContext2D,
     marks: Marks,
     scale: number,
-    options: { draft?: Mark | null; numbered?: boolean } = {},
+    options: { draft?: Mark | null; numbered?: boolean; selected?: number | null } = {},
 ): void {
     const stroke = Math.max(2, 3 * scale);
     const font_size = Math.max(11, 14 * scale);
@@ -136,12 +161,15 @@ export function paint(
         }
 
         if (options.numbered !== false && !is_draft) {
-            const spot = badge_point(mark);
-            if (spot) {
-                const [x, y] = at(spot);
-                const radius = Math.max(9, 11 * scale);
-                const bx = mark.kind === "pin" ? x + radius * 1.4 : x;
-                const by = mark.kind === "pin" ? y - radius * 1.4 : y;
+            const circle = badge_circle(mark, scale);
+            if (circle) {
+                const { x: bx, y: by, radius } = circle;
+                if (options.selected === index) {
+                    ctx.beginPath();
+                    ctx.arc(bx, by, radius + Math.max(3, 3 * scale), 0, Math.PI * 2);
+                    ctx.fillStyle = "#ffffff";
+                    ctx.fill();
+                }
                 ctx.beginPath();
                 ctx.arc(bx, by, radius, 0, Math.PI * 2);
                 ctx.fillStyle = MARK_COLOR;

@@ -299,6 +299,9 @@ impl Task {
                     for line in marks.legend() {
                         brief.push_str(&format!("\n    {line}"));
                     }
+                    brief.push_str(
+                        "\n  Every numbered mark is something the person is pointing at and is part of what this card asks for. Address each one, and say in your report what you did about each, by number.",
+                    );
                 }
             }
         }
@@ -1137,6 +1140,7 @@ mod tests {
         let brief = with.brief();
         assert!(brief.contains("1440×900"), "{brief}");
         assert!(brief.contains("1. box from (120, 40)"), "{brief}");
+        assert!(brief.contains("Address each one"), "{brief}");
         assert!(!brief.contains("marked copy"), "there is no copy yet");
 
         let copied = board
