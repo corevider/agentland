@@ -5991,6 +5991,7 @@ async fn kill_session(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     state.manager.remove(&id)?;
+    state.crew.pane_gone(&id);
     Ok(StatusCode::NO_CONTENT)
 }
 

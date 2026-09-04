@@ -178,7 +178,9 @@ export default function App() {
                         const live = new Map(current.map((entry) => [entry.id, entry]));
                         const kept = held.filter((entry) => live.has(entry.id)).map((entry) => live.get(entry.id)!);
                         const known = new Set(kept.map((entry) => entry.id));
-                        const arrived = current.filter((entry) => !known.has(entry.id));
+                        const arrived = current.filter(
+                            (entry) => !known.has(entry.id) && !put_away.current.has(entry.id),
+                        );
 
                         return arrived.length === 0 && kept.length === held.length ? kept : [...kept, ...arrived];
                     });
@@ -412,7 +414,14 @@ export default function App() {
         return () => window.clearInterval(handle);
     }, [gpu]);
 
+    // Panes a person put away: the agent keeps running, the grid stops showing
+    // it, and the sync below does not bring it back until somebody opens it.
+    const put_away = useRef<Set<string>>(new Set());
+    // The crew as last listed, readable from callbacks declared before it.
+    const crew_ref = useRef<Agent[]>([]);
+
     const open_session = useCallback(async (session_id: string) => {
+        put_away.current.delete(session_id);
         const current = await list_sessions();
         const session = current.find((entry) => entry.id === session_id);
         if (!session) {
@@ -427,11 +436,24 @@ export default function App() {
         focus_panel("panes");
     }, [focus_panel]);
 
-    const close_session = useCallback((id: string) => {
-        set_sessions((held) => held.filter((entry) => entry.id !== id));
-        metrics_ref.current.delete(id);
-        kill_session(id).catch((cause) => set_error(String(cause)));
-    }, []);
+    // Closing an agent's pane used to kill the agent: the commander's context
+    // went with it, and its record still said "at its desk". A pane that
+    // belongs to an agent is put away instead; stopping the agent is its own
+    // action, on the crew panel and the pane's menu, where it says so.
+    const close_session = useCallback(
+        (id: string) => {
+            set_sessions((held) => held.filter((entry) => entry.id !== id));
+            metrics_ref.current.delete(id);
+
+            if (crew_ref.current.some((agent) => agent.session_id === id)) {
+                put_away.current.add(id);
+                return;
+            }
+
+            kill_session(id).catch((cause) => set_error(String(cause)));
+        },
+        [],
+    );
 
     const clear = useCallback(async () => {
         const current = await list_sessions();
@@ -571,6 +593,9 @@ export default function App() {
         }
     });
     const [crew, set_crew] = useState<Agent[]>([]);
+    useEffect(() => {
+        crew_ref.current = crew;
+    }, [crew]);
 
     // Where a notice, or a line on the tray, sends a person.
     const go_and_see = useCallback(

@@ -49,6 +49,8 @@ interface Props {
     /// The project's commander. Marked because it is the one to talk to: it
     /// hands the work out and everybody else is working to what it decided.
     crowned?: boolean;
+    /// Somebody's pane: closing it puts it away and the agent keeps running.
+    kept?: boolean;
     on_close?: (id: string) => void;
     on_zoom?: (id: string) => void;
     zoomed?: boolean;
@@ -89,7 +91,7 @@ function collapse_to_tail(data: Uint8Array): Uint8Array {
     return result;
 }
 
-export function TerminalPane({ session, crowned, focused, on_focus, on_metrics, label, on_close, on_zoom, zoomed, on_branch, on_tear_out, readable = false, on_readable, on_menu, stats_from, now_from, on_pick_up, on_drop_on, wanted = false }: Props) {
+export function TerminalPane({ session, crowned, kept = false, focused, on_focus, on_metrics, label, on_close, on_zoom, zoomed, on_branch, on_tear_out, readable = false, on_readable, on_menu, stats_from, now_from, on_pick_up, on_drop_on, wanted = false }: Props) {
     const host_ref = useRef<HTMLDivElement>(null);
     const screen_ref = useRef<Terminal | null>(null);
     const gpu_ref = useRef<WebglAddon | null>(null);
@@ -498,7 +500,7 @@ export function TerminalPane({ session, crowned, focused, on_focus, on_metrics, 
                 {on_close ? (
                     <button
                         className="shrink-0 rounded px-1 font-mono text-[11px] text-shade hover:text-coral"
-                        title="close this terminal"
+                        title={kept ? "put this pane away — it keeps running" : "close this terminal"}
                         onClick={(event) => {
                             event.stopPropagation();
                             on_close(session.id);

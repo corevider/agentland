@@ -667,6 +667,28 @@ impl Crew {
         Ok(())
     }
 
+    /// A pane that is gone is not somebody's pane any more.
+    ///
+    /// Closing a terminal killed the process and left the agent's record
+    /// pointing at it, so the commander read as "at its desk" with a pane
+    /// nobody could open. The record follows the pane the moment it goes.
+    pub fn pane_gone(&self, session_id: &str) {
+        let mut state = self.state.lock();
+        let mut changed = false;
+
+        for agent in state.agents.values_mut() {
+            if agent.session_id.as_deref() == Some(session_id) {
+                agent.session_id = None;
+                agent.state = AgentState::Idle;
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.persist(&state);
+        }
+    }
+
     pub fn dismiss(&self, id: &str) -> Result<()> {
         let _ = self.stop(id);
         let mut state = self.state.lock();
@@ -976,6 +998,24 @@ mod pane_tests {
         assert_eq!(waiting.len(), 1, "an agent resting at its prompt still counts");
         assert_eq!(waiting[0].id, "ada");
         assert!(crew.take_the_interrupted().is_empty(), "taken once, not twice");
+    }
+
+    #[test]
+    fn a_closed_pane_leaves_its_agent_stopped_rather_than_pointing_at_nothing() {
+        let dir = scratch("pane-closed");
+        let manager = Arc::new(crate::pty::PtyManager::with_log_dir(dir.join("sessions")));
+        let crew = Crew::new(manager, dir);
+        {
+            let mut state = crew.state.lock();
+            state.agents.insert("ada".into(), an_agent(Some("pane-1"), AgentState::Working));
+        }
+
+        crew.pane_gone("pane-1");
+
+        let held = crew.list().into_iter().find(|agent| agent.id == "ada").unwrap();
+        assert_eq!(held.session_id, None, "the record follows the pane");
+        assert_eq!(held.state, AgentState::Idle);
+        assert!(crew.take_the_interrupted().is_empty(), "closed on purpose is not interrupted");
     }
 
     #[test]

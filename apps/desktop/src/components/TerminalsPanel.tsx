@@ -9,6 +9,7 @@ import {
     list_sessions,
     list_windows,
     set_window,
+    stop_agent,
     type PaneView,
     type SessionInfo,
 } from "@/lib/core";
@@ -399,6 +400,7 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                         services.crew.find((agent) => agent.session_id === session.id)?.role ===
                         "commander"
                     }
+                    kept={services.crew.some((agent) => agent.session_id === session.id)}
                     focused={
                         active &&
                         (services.focused_id
@@ -470,11 +472,30 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                                       },
                                   ]
                                 : []),
-                            {
-                                label: "Close this terminal",
-                                danger: true,
-                                run: () => services.close_session(session.id),
-                            },
+                            ...(() => {
+                                const held = services.crew.find((agent) => agent.session_id === session.id);
+                                return held
+                                    ? [
+                                          {
+                                              label: "Put this pane away",
+                                              hint: "it keeps running",
+                                              run: () => services.close_session(session.id),
+                                          },
+                                          {
+                                              label: `Stop ${held.name}`,
+                                              hint: held.role === "commander" ? "its context is lost" : undefined,
+                                              danger: true,
+                                              run: () => stop_agent(held.id).then(() => services.close_session(session.id)),
+                                          },
+                                      ]
+                                    : [
+                                          {
+                                              label: "Close this terminal",
+                                              danger: true,
+                                              run: () => services.close_session(session.id),
+                                          },
+                                      ];
+                            })(),
                         ]);
                     }}
                     on_tear_out={(entry) =>
