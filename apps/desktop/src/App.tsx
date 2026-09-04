@@ -836,7 +836,17 @@ export default function App() {
                     active={workspace_id}
                     on_active={(id, repositories) => {
                         set_workspace_id(id);
-                        set_workspace_repos(repositories);
+                        // The same list again is not a change; a fresh array
+                        // for the same ids would render everything under it.
+                        set_workspace_repos((held) =>
+                            held === repositories ||
+                            (held !== null &&
+                                repositories !== null &&
+                                held.length === repositories.length &&
+                                held.every((entry, index) => entry === repositories[index]))
+                                ? held
+                                : repositories,
+                        );
                     }}
                     on_switched={() => set_workspace_turn((turn) => turn + 1)}
                     counts={workspace_counts}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
     activate_workspace,
@@ -30,14 +30,24 @@ export function WorkspaceTabs({ turn, active, on_active, on_switched, counts }: 
     const [name, set_name] = useState("");
     const [error, set_error] = useState<string | null>(null);
 
+    // The App hands over a fresh on_active on every render, and answering it
+    // makes the App render. Depending on it here made refresh a new function
+    // each time, which re-ran the effect below, which answered again: measured
+    // at 120 reads of /workspaces and /repos a second, and a webview main
+    // thread at 70% with nothing on screen changing. The latest callback is
+    // read through a ref instead, so refresh is one function for the life of
+    // the tabs and the effect runs only when a turn says to.
+    const answer = useRef(on_active);
+    answer.current = on_active;
+
     const refresh = useCallback(async () => {
         const [listed, all] = await Promise.all([list_workspaces(), list_repos()]);
         set_workspaces(listed.workspaces);
         set_repos(all);
 
         const chosen = listed.workspaces.find((entry) => entry.id === listed.active) ?? null;
-        on_active(chosen?.id ?? null, chosen ? chosen.repository_ids : null);
-    }, [on_active]);
+        answer.current(chosen?.id ?? null, chosen ? chosen.repository_ids : null);
+    }, []);
 
     useEffect(() => {
         refresh().catch((cause) => set_error(cause instanceof Error ? cause.message : String(cause)));
