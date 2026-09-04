@@ -476,6 +476,70 @@
             .state.done { color: var(--good); }
             .state.attention { color: var(--bad); }
 
+            /* A photo taken here goes on a card there: the camera sits with
+               the microphone, and what it took shows before it is sent. */
+            #voice .row.do #snap {
+                flex: 0 0 3.5rem;
+            }
+
+            #snap svg {
+                width: 1.35rem;
+                height: 1.35rem;
+            }
+
+            #snap {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                min-height: 3.5rem;
+                border: 1px solid var(--foam);
+                border-radius: 0.9rem;
+                color: var(--glow);
+                cursor: pointer;
+            }
+
+            .photos {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.5rem;
+                margin-top: 0.6rem;
+            }
+
+            .photos .shot {
+                position: relative;
+                width: 4.5rem;
+                height: 4.5rem;
+            }
+
+            .photos img {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+                border: 1px solid var(--line);
+                border-radius: 0.6rem;
+            }
+
+            .photos .drop {
+                position: absolute;
+                top: -0.4rem;
+                right: -0.4rem;
+                width: 1.5rem;
+                height: 1.5rem;
+                min-height: 0;
+                padding: 0;
+                border-radius: 50%;
+                font-size: 0.8rem;
+                line-height: 1;
+            }
+
+            #where-row select {
+                flex: 1;
+                min-height: 3rem;
+                padding: 0 0.8rem;
+                border-radius: 0.9rem;
+                font-size: 0.95rem;
+            }
+
             /* Speak, choose, send: one row, because they are one act. */
             #voice .row {
                 flex-wrap: nowrap;
@@ -870,10 +934,15 @@
                 <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16v11H8l-4 3z"/></svg> Say something</h2>
                 <div id="voice">
                     <textarea id="said" rows="3" placeholder="Tap the microphone on your keyboard, or hold the button below."></textarea>
+                    <div id="photos" class="photos" hidden></div>
                     <div class="row do">
                         <button id="record" class="approve hold" hidden aria-label="hold to speak"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/></svg> <span>Hold to speak</span></button>
-                        <select id="whom" aria-label="to whom"><option value="">the project&apos;s goal</option></select>
+                        <label id="snap" class="approve" aria-label="take a photo for a card" title="take a photo for a card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><input id="photo-in" type="file" accept="image/*" capture="environment" multiple hidden /></label>
+                        <select id="whom" aria-label="to whom"><option value="">the project&apos;s goal</option><option value="card">a new card on the board</option></select>
                         <button id="send" class="approve wide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 3L3 10l7 3 3 7z"/></svg> Send</button>
+                    </div>
+                    <div class="row" id="where-row" hidden>
+                        <select id="where" aria-label="which project"></select>
                     </div>
                     <p class="empty" id="voice-note">The machine running the crew has no microphone; this one does.</p>
                 </div>
@@ -1320,6 +1389,10 @@
                             </div>
                             <div class="detail">${escape(task.assignee ?? "unassigned")}${
                                 task.branch ? ` · ${escape(task.branch)}` : ""
+                            }${
+                                (task.attachments ?? []).filter((held) => !held.derived_from).length > 0
+                                    ? ` · ${(task.attachments ?? []).filter((held) => !held.derived_from).length} attached`
+                                    : ""
                             }</div>
                         </div>`,
                     )
@@ -1550,13 +1623,175 @@
                 });
             }
 
+            // Photos for a card, taken here. A phone is the camera the machine
+            // does not have: the bug on the screen across the room, the sketch
+            // on the whiteboard. What is taken is shrunk before it goes — a
+            // phone's picture is twelve megabytes and an agent reads it just
+            // as well at two thousand pixels across.
+            const photos = [];
+            const photo_strip = document.getElementById("photos");
+            const photo_in = document.getElementById("photo-in");
+            const where_row = document.getElementById("where-row");
+            const where = document.getElementById("where");
+            let projects = [];
+
+            function render_photos() {
+                photo_strip.innerHTML = "";
+                photo_strip.hidden = photos.length === 0;
+
+                photos.forEach((held, index) => {
+                    const shot = document.createElement("div");
+                    shot.className = "shot";
+                    const image = document.createElement("img");
+                    image.src = held.url;
+                    image.alt = held.file.name;
+                    const drop = document.createElement("button");
+                    drop.className = "reject drop";
+                    drop.textContent = "×";
+                    drop.setAttribute("aria-label", "drop this photo");
+                    drop.addEventListener("click", () => {
+                        URL.revokeObjectURL(held.url);
+                        photos.splice(index, 1);
+                        render_photos();
+                    });
+                    shot.append(image, drop);
+                    photo_strip.append(shot);
+                });
+            }
+
+            function show_where() {
+                const wants_a_card = whom.value === "card" || photos.length > 0;
+                where_row.hidden = !(wants_a_card && projects.length > 1);
+            }
+
+            function render_where(repos) {
+                projects = repos;
+                const chosen = where.value;
+                where.innerHTML = "";
+                for (const repo of repos) {
+                    where.append(new Option(repo.name ?? repo.id, repo.id));
+                }
+                if (chosen && repos.some((repo) => repo.id === chosen)) {
+                    where.value = chosen;
+                }
+                show_where();
+            }
+
+            photo_in.addEventListener("change", () => {
+                for (const file of photo_in.files ?? []) {
+                    photos.push({ file, url: URL.createObjectURL(file) });
+                }
+                photo_in.value = "";
+                if (photos.length > 0) {
+                    whom.value = "card";
+                    voice_note.textContent = "A photo goes on a card. Say what it shows, then send.";
+                }
+                render_photos();
+                show_where();
+                said.focus();
+            });
+
+            whom.addEventListener("change", show_where);
+
+            /// A photo at most two thousand pixels across, as a JPEG. What
+            /// cannot be redrawn — a format this browser will not decode —
+            /// goes as it is.
+            async function shrunk(file, index) {
+                const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "-");
+                const name = `photo-${stamp}-${index + 1}.jpg`;
+                try {
+                    const bitmap = await createImageBitmap(file);
+                    const longest = Math.max(bitmap.width, bitmap.height);
+                    const scale = Math.min(1, 2048 / longest);
+                    const canvas = document.createElement("canvas");
+                    canvas.width = Math.round(bitmap.width * scale);
+                    canvas.height = Math.round(bitmap.height * scale);
+                    canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+                    bitmap.close?.();
+                    const blob = await new Promise((ok) => canvas.toBlob(ok, "image/jpeg", 0.85));
+                    if (blob) {
+                        return new File([blob], name, { type: "image/jpeg" });
+                    }
+                } catch {
+                    // Not a picture this browser can redraw; the original will do.
+                }
+                return file;
+            }
+
+            async function attach(task_id, file) {
+                const response = await fetch(
+                    `/tasks/${encodeURIComponent(task_id)}/attachments?name=${encodeURIComponent(file.name)}`,
+                    {
+                        method: "POST",
+                        headers: { "content-type": file.type || "application/octet-stream", "x-auth-token": held_token },
+                        body: file,
+                    },
+                );
+                if (!response.ok) {
+                    throw new Error(`${file.name}: ${await response.text()}`);
+                }
+                return response.json();
+            }
+
+            /// The first line is the title, the rest the brief: a card written
+            /// on a phone is spoken, and the first thing said is what it is.
+            function split_for_a_card(text) {
+                const [first, ...rest] = text.split("\n");
+                const title = first.trim().slice(0, 120);
+                const body = rest.join("\n").trim();
+                return { title, body };
+            }
+
+            async function send_a_card(text) {
+                const { title, body } = split_for_a_card(text);
+                if (!title) {
+                    voice_note.textContent = "Say what the card is about first — the first line is its title.";
+                    return;
+                }
+
+                const repository_id = where.value || projects[0]?.id;
+                if (!repository_id) {
+                    voice_note.textContent = "There is no project to put a card on yet.";
+                    return;
+                }
+
+                voice_note.textContent = photos.length > 0 ? "Sending the photos…" : "Writing the card…";
+                const card = await api("/tasks", {
+                    method: "POST",
+                    body: JSON.stringify({ title, body, repository_id }),
+                });
+
+                let sent = 0;
+                for (const [index, held] of photos.entries()) {
+                    await attach(card.id, await shrunk(held.file, index));
+                    sent += 1;
+                }
+
+                for (const held of photos) {
+                    URL.revokeObjectURL(held.url);
+                }
+                photos.length = 0;
+                render_photos();
+                show_where();
+                said.value = "";
+                voice_note.textContent =
+                    sent > 0
+                        ? `card ${card.id} is on the board, with ${sent} photo${sent === 1 ? "" : "s"}.`
+                        : `card ${card.id} is on the board.`;
+            }
+
             document.getElementById("send").addEventListener("click", async () => {
                 const text = said.value.trim();
-                if (!text) {
+                if (!text && photos.length === 0) {
                     return;
                 }
 
                 try {
+                    if (whom.value === "card" || photos.length > 0) {
+                        await send_a_card(text);
+                        return;
+                    }
+
                     await api("/voice/said", {
                         method: "POST",
                         body: JSON.stringify({ text, to: whom.value || undefined }),
@@ -1607,12 +1842,13 @@
 
                 whom.innerHTML = "";
                 whom.append(new Option("the project's goal", ""));
+                whom.append(new Option("a new card on the board", "card"));
 
                 for (const agent of open) {
                     whom.append(new Option(`${agent.name} · ${agent.role ?? ""}`.trim(), agent.id));
                 }
 
-                if (chosen && open.some((agent) => agent.id === chosen)) {
+                if (chosen === "card" || (chosen && open.some((agent) => agent.id === chosen))) {
                     whom.value = chosen;
                 }
             }
@@ -1634,15 +1870,17 @@
                 }
 
                 try {
-                    const [approvals, agents, tasks] = await Promise.all([
+                    const [approvals, agents, tasks, repos] = await Promise.all([
                         api("/approvals"),
                         api("/agents"),
                         api("/tasks"),
+                        api("/repos").catch(() => []),
                     ]);
 
                     render_approvals(approvals);
                     render_crew(agents);
                     render_whom(agents);
+                    render_where(repos);
                     void render_commander();
                     render_board(tasks);
                     let_in();
