@@ -1732,12 +1732,14 @@
                     workspace_id = "";
                 }
                 holder.hidden = false;
+                const scrolled = holder.scrollLeft;
                 holder.innerHTML = [{ id: "", name: "everything" }, ...workspaces]
                     .map(
                         (entry) =>
                             `<button class="${entry.id === workspace_id ? "here" : ""}" data-workspace="${escape(entry.id)}">${escape(entry.name)}</button>`,
                     )
                     .join("");
+                holder.scrollLeft = scrolled;
                 for (const chip of holder.querySelectorAll("button")) {
                     chip.addEventListener("click", () => {
                         workspace_id = chip.dataset.workspace;
@@ -1807,7 +1809,12 @@
                               })
                               .join("");
 
+                // The chip row is drawn again with the board, and a row drawn
+                // again starts at its left edge: tapping "review" scrolled the
+                // row back to "backlog" under the thumb.
+                const scrolled = holder.querySelector(".columns")?.scrollLeft ?? 0;
                 holder.innerHTML = `<div class="columns">${chips}</div>${cards}`;
+                holder.querySelector(".columns").scrollLeft = scrolled;
 
                 for (const chip of holder.querySelectorAll(".columns button")) {
                     chip.addEventListener("click", () => {
