@@ -632,13 +632,33 @@ impl Board {
             .ok_or_else(|| anyhow!("{id} has nothing called {name} on it"))
     }
 
+    /// Move a card to a column, at the bottom of it.
+    ///
+    /// A card kept the position it had in the column it left, so "done" read
+    /// in the order cards had once sat in "backlog" rather than the order they
+    /// finished in. Arriving at the bottom keeps a column in order of arrival;
+    /// a card already in the column keeps its place, which is somebody's
+    /// choice. Dropping between two cards is `place`.
     pub fn move_to(&self, id: &str, column: Column) -> Result<Task> {
         let mut state = self.state.lock();
+
+        let bottom = state
+            .tasks
+            .values()
+            .filter(|held| held.column == column && held.id != id)
+            .map(|held| held.position)
+            .fold(None, |most: Option<f64>, held| Some(most.map_or(held, |most| most.max(held))));
+
         let task = state
             .tasks
             .get_mut(id)
             .ok_or_else(|| anyhow!("unknown task: {id}"))?;
-        task.column = column;
+
+        if task.column != column {
+            task.column = column;
+            task.position = placed_between(bottom, None);
+        }
+
         let updated = task.clone();
         self.persist(&state);
         Ok(updated)
@@ -1417,6 +1437,37 @@ mod tests {
 
         assert_eq!(held.last().map(|(id, _)| id.as_str()), Some(first.id.as_str()));
         assert_eq!(held.first().map(|(id, _)| id.as_str()), Some(second.id.as_str()));
+    }
+
+    #[test]
+    fn a_card_arriving_in_a_column_lands_at_the_bottom() {
+        let board = board("move-bottom");
+        let first = a_card(&board, None);
+        let second = a_card(&board, None);
+        let third = a_card(&board, None);
+
+        board.place(&third.id, Column::Done, None).expect("first into done");
+        board.place(&first.id, Column::Done, None).expect("second into done");
+        let last = board.move_to(&second.id, Column::Done).expect("third into done");
+
+        let positions = |id: &str| board.get(id).expect("held").position;
+        assert!(
+            positions(&third.id) < positions(&first.id) && positions(&first.id) < last.position,
+            "done reads in the order cards arrived, not the order they sat in backlog"
+        );
+    }
+
+    #[test]
+    fn a_card_already_in_the_column_keeps_its_place() {
+        let board = board("move-stays");
+        let above = a_card(&board, None);
+        let card = a_card(&board, None);
+        board.place(&card.id, Column::Backlog, Some(&above.id)).expect("put above");
+        let before = board.get(&card.id).expect("held").position;
+
+        let moved = board.move_to(&card.id, Column::Backlog).expect("same column");
+
+        assert_eq!(moved.position, before, "moving to where it already is changes nothing");
     }
 
     #[test]
