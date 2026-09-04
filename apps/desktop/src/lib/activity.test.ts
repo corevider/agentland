@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { families_in, family_of, meters_of, moments_ago, rule_reads, short_count } from "@/lib/activity";
+import { actors_in, families_in, family_of, meters_of, moments_ago, rule_reads, short_count } from "@/lib/activity";
 import type { JournalEntry } from "@/lib/core";
 
 const CEILINGS = { requests: 500, input: 1_000_000, cached: 20_000_000, output: 200_000 };
@@ -108,5 +108,14 @@ describe("rule_reads", () => {
 
     it("leaves a shape it does not know alone rather than mangling it", () => {
         expect(rule_reads("WebFetch(domain:example.com)")).toBe("WebFetch(domain:example.com)");
+    });
+});
+
+describe("who did things", () => {
+    it("offers the busiest actor first and leaves out entries nobody signed", () => {
+        const entry = (actor: string) => ({ at: 0, kind: "card.moved", actor, subject: "", detail: "" });
+        const held = [entry("ada"), entry("the supervisor"), entry("ada"), entry(""), entry("x")];
+
+        expect(actors_in(held)).toEqual(["ada", "the supervisor", "x"]);
     });
 });

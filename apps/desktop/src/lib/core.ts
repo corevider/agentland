@@ -430,10 +430,15 @@ export interface JournalEntry {
     detail: string;
 }
 
-export function read_journal(ask: { kind?: string; limit?: number } = {}): Promise<JournalEntry[]> {
+export function read_journal(
+    ask: { kind?: string; actor?: string; limit?: number } = {},
+): Promise<JournalEntry[]> {
     const query = new URLSearchParams();
     if (ask.kind) {
         query.set("kind", ask.kind);
+    }
+    if (ask.actor) {
+        query.set("actor", ask.actor);
     }
     query.set("limit", String(ask.limit ?? 120));
     return request<JournalEntry[]>(`/journal?${query}`);

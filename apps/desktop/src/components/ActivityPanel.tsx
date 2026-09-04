@@ -13,7 +13,7 @@ import {
     type ProjectPermits,
     type Room,
 } from "@/lib/core";
-import { families_in, family_of, meters_of, moments_ago, rule_reads, short_count } from "@/lib/activity";
+import { actors_in, families_in, family_of, meters_of, moments_ago, rule_reads, short_count } from "@/lib/activity";
 import { use_poll } from "@/lib/poll";
 
 /// One subscription's allowance: what it has left, and what it is spending.
@@ -179,6 +179,7 @@ export function ActivityPanel({ active }: { active: boolean }) {
     const [entries, set_entries] = useState<JournalEntry[]>([]);
     const [permits, set_permits] = useState<ProjectPermits[]>([]);
     const [family, set_family] = useState<string | null>(null);
+    const [actor, set_actor] = useState<string | null>(null);
     const [editing, set_editing] = useState<string | null>(null);
     const [draft, set_draft] = useState({ requests: "", input: "", output: "" });
     const [notice, set_notice] = useState<string | null>(null);
@@ -187,14 +188,14 @@ export function ActivityPanel({ active }: { active: boolean }) {
     const refresh = useCallback(async () => {
         const [held, log, granted] = await Promise.all([
             read_budget(),
-            read_journal(family ? { kind: family } : {}),
+            read_journal({ kind: family ?? undefined, actor: actor ?? undefined }),
             read_permits(),
         ]);
         set_budget(held);
         set_entries(log);
         set_permits(granted);
         set_now(Math.floor(Date.now() / 1000));
-    }, [family]);
+    }, [family, actor]);
 
     use_poll(() => {
         refresh().catch((cause) => set_notice(cause instanceof Error ? cause.message : String(cause)));
@@ -235,6 +236,8 @@ export function ActivityPanel({ active }: { active: boolean }) {
     // The families come from what is actually in the journal rather than a list
     // written here, so a kind added to the core shows up without being added twice.
     const families = families_in(entries);
+    // The chosen actor stays offered while its own entries are the only ones shown.
+    const actors = actor && !actors_in(entries).includes(actor) ? [actor, ...actors_in(entries)] : actors_in(entries);
 
     return (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2.5 overflow-y-auto p-2.5">
@@ -308,6 +311,29 @@ export function ActivityPanel({ active }: { active: boolean }) {
                     ))}
                 </div>
 
+                {actors.length > 0 ? (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="mr-1 font-mono text-[9px] uppercase tracking-[0.14em] text-shade">
+                            by whom
+                        </span>
+                        <button
+                            className={`rounded px-1.5 py-[1px] font-mono text-[10px] ${actor === null ? "text-turquoise" : "text-shade hover:text-shell"}`}
+                            onClick={() => set_actor(null)}
+                        >
+                            anyone
+                        </button>
+                        {actors.map((held) => (
+                            <button
+                                key={held}
+                                className={`rounded px-1.5 py-[1px] font-mono text-[10px] ${actor === held ? "text-turquoise" : "text-shade hover:text-shell"}`}
+                                onClick={() => set_actor(held)}
+                            >
+                                {held}
+                            </button>
+                        ))}
+                    </div>
+                ) : null}
+
                 {entries.length === 0 ? (
                     <p className="font-mono text-[10px] text-shade">
                         Nothing recorded yet. Every decision the core takes lands here — who was
@@ -330,7 +356,13 @@ export function ActivityPanel({ active }: { active: boolean }) {
                             >
                                 {entry.kind}
                             </span>
-                            <span className="font-mono text-[10px] text-driftwood">{entry.actor}</span>
+                            <button
+                                className="font-mono text-[10px] text-driftwood hover:text-turquoise"
+                                title={`only what ${entry.actor} did`}
+                                onClick={() => set_actor(entry.actor)}
+                            >
+                                {entry.actor}
+                            </button>
                             {entry.subject ? (
                                 <span className="font-mono text-[10px] text-shade">{entry.subject}</span>
                             ) : null}

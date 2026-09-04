@@ -18,6 +18,18 @@ export function families_in(entries: JournalEntry[]): string[] {
     return [...count.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([f]) => f);
 }
 
+/// Who did things, most active first, so "what did ada do last" is one click.
+export function actors_in(entries: JournalEntry[]): string[] {
+    const count = new Map<string, number>();
+    for (const entry of entries) {
+        if (entry.actor) {
+            count.set(entry.actor, (count.get(entry.actor) ?? 0) + 1);
+        }
+    }
+
+    return [...count.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([a]) => a);
+}
+
 /// A number a person can hold in their head.
 export function short_count(value: number): string {
     if (value < 1000) {
