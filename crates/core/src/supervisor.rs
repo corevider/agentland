@@ -191,7 +191,17 @@ fn delivered_now(seen: &Observation, fingerprint: &str) -> bool {
     }
 }
 
+/// A pane that printed its step's own marker is finished.
+///
+/// A card with no plan behind it has no step id, and "done:" on its own is not
+/// a marker — it is the first word of any summary. Measured on the commander's
+/// pane: two cards it held settled on "the pane printed DONE:" the moment it
+/// wrote up what it had delegated, with nothing written and nowhere to go.
 fn done_marker(tail: &str, step_id: &str) -> Option<String> {
+    if step_id.trim().is_empty() {
+        return None;
+    }
+
     let wanted = format!("done:{}", step_id.to_lowercase());
     squash(tail)
         .contains(&squash(&wanted))
@@ -845,6 +855,21 @@ mod tests {
             Verdict::Finished(why) => assert!(why.contains("DONE:p1s2"), "{why}"),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn a_card_with_no_step_has_no_marker_to_print() {
+        let watch = Watch { step_id: String::new(), ..watch() };
+        let seen = Observation {
+            session_alive: true,
+            tail: "Done: handed the fix to ada and the test to iris\n".into(),
+            ..Observation::default()
+        };
+
+        assert!(
+            matches!(judge(&watch, &seen, &Rules::default()), Verdict::Working),
+            "a summary that starts with done: is not a marker"
+        );
     }
 
     #[test]

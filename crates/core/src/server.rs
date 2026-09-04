@@ -947,11 +947,27 @@ fn spawn_supervisor(state: AppState) {
                             .map(|held| held.files > 0)
                             .unwrap_or(false);
 
+                        // Nothing written leaves the card for the commander to
+                        // decide — unless the commander is who held it. It does
+                        // not edit code, so its cards never write anything, and
+                        // there is nobody above it to decide: measured, two cards
+                        // handed to X stayed in "working" after X had delegated
+                        // and written up every one of them.
+                        let held_by_the_commander = state
+                            .crew
+                            .list()
+                            .into_iter()
+                            .any(|agent| agent.id == watch.agent_id && agent.role == "commander");
+
                         let wanted = state.board.get(&watch.task_id).and_then(|task| {
-                            crate::board::where_a_settled_card_goes(
-                                task.column,
-                                if wrote_something { 1 } else { 0 },
-                            )
+                            if held_by_the_commander {
+                                crate::board::where_a_decided_card_goes(task.column)
+                            } else {
+                                crate::board::where_a_settled_card_goes(
+                                    task.column,
+                                    if wrote_something { 1 } else { 0 },
+                                )
+                            }
                         });
 
                         if let Some(column) = wanted {
@@ -5782,13 +5798,52 @@ async fn mark_step(
     Path((id, step)): Path<(String, String)>,
     Json(body): Json<MarkStep>,
 ) -> Result<Json<Plan>, ApiError> {
-    if let Some(task_id) = body.task_id {
-        state.plans.attach_task(&id, &step, &task_id)?;
+    if let Some(task_id) = &body.task_id {
+        state.plans.attach_task(&id, &step, task_id)?;
     }
 
     let (plan, just_finished) = state
         .plans
-        .mark_and_notice(&id, &step, body.state, body.note)?;
+        .mark_and_notice(&id, &step, body.state, body.note.clone())?;
+
+    // Marking a step done is the commander's decision about its card, and a
+    // decision that never reached the board left the card in "working" over
+    // finished work — the plan said done while the column said otherwise.
+    if body.state == StepState::Done {
+        let card = plan
+            .steps
+            .iter()
+            .find(|held| held.id == step)
+            .and_then(|held| held.task_id.clone())
+            .and_then(|task_id| state.board.get(&task_id));
+
+        if let Some(task) = card {
+            if let Some(column) = crate::board::where_a_decided_card_goes(task.column) {
+                let now = now_secs();
+                let by = plan.created_by.clone();
+                let said = body
+                    .note
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .map(|text| format!(": {text}"))
+                    .unwrap_or_default();
+
+                let _ = state.board.attach(
+                    &task.id,
+                    Evidence::Note {
+                        text: format!("{by} marked its step done{said}"),
+                    },
+                    &by,
+                    now,
+                );
+
+                if state.board.move_to(&task.id, column).is_ok() {
+                    note(&state, "card.for_review", &by, &task.id, "its step was marked done");
+                }
+            }
+        }
+    }
 
     if just_finished {
         state.leader_words.lock().push(plan_finished_word(&plan));

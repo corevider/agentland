@@ -916,6 +916,17 @@ pub fn where_a_settled_card_goes(column: Column, files_written: usize) -> Option
     }
 }
 
+/// Where a card goes when somebody who does not merge has decided it is over.
+///
+/// The commander marking a step done, or finishing a card it held itself,
+/// is a decision and not a diff: with or without files written there is
+/// nobody left to wait for, and leaving the card in `working` says the
+/// opposite. It goes to review rather than done because done is still a merge,
+/// or a person saying so — and only forward, never over a column a person chose.
+pub fn where_a_decided_card_goes(column: Column) -> Option<Column> {
+    matches!(column, Column::Assigned | Column::Working).then_some(Column::Review)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1341,6 +1352,19 @@ mod tests {
     #[test]
     fn a_step_that_wrote_nothing_moves_no_card() {
         assert_eq!(where_a_settled_card_goes(Column::Working, 0), None);
+    }
+
+    #[test]
+    fn a_decision_moves_the_card_on_whether_or_not_anything_was_written() {
+        assert_eq!(where_a_decided_card_goes(Column::Working), Some(Column::Review));
+        assert_eq!(where_a_decided_card_goes(Column::Assigned), Some(Column::Review));
+    }
+
+    #[test]
+    fn a_decision_never_moves_a_card_backwards_or_past_a_person() {
+        for held in [Column::Review, Column::Ready, Column::Done, Column::Backlog] {
+            assert_eq!(where_a_decided_card_goes(held), None, "{held:?} is not the app's to change");
+        }
     }
 
     #[test]
