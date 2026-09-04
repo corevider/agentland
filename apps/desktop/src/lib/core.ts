@@ -455,10 +455,17 @@ export interface PhoneWayIn {
     urls: string[];
     code?: string;
     reachable: boolean;
+    /// Open by how the core was started, open from here, or closed.
+    door: "config" | "open" | "closed";
 }
 
 export function phone_way_in(): Promise<PhoneWayIn> {
     return request<PhoneWayIn>("/phone");
+}
+
+/// Open or close the door a phone comes in by, without restarting anything.
+export function set_phone_door(open: boolean): Promise<PhoneWayIn> {
+    return request<PhoneWayIn>("/phone/door", { method: "POST", body: JSON.stringify({ open }) });
 }
 
 /// How the house works: handed to every agent, in every project, for every

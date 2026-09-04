@@ -15,23 +15,32 @@ pub struct Papers {
 }
 
 /// Make them if they are not there, and leave them alone if they are: a new
-/// certificate every start would mean the same warning every start.
+/// certificate every start would mean the same warning every start. Made
+/// again only when the names have changed — the door opened on an address
+/// the papers never named.
 pub fn papers_for(data_dir: &Path, hosts: &[String]) -> anyhow::Result<Papers> {
     let folder = data_dir.join("tls");
     std::fs::create_dir_all(&folder)?;
 
     let certificate = folder.join("certificate.pem");
     let key = folder.join("key.pem");
+    let named = folder.join("names.txt");
 
-    if certificate.is_file() && key.is_file() {
+    let names = names_for(hosts);
+    let wanted = names.join("\n");
+    let covered = std::fs::read_to_string(&named)
+        .map(|held| names.iter().all(|name| held.lines().any(|line| line == name)))
+        .unwrap_or(false);
+
+    if certificate.is_file() && key.is_file() && covered {
         return Ok(Papers { certificate, key });
     }
 
-    let names = names_for(hosts);
     let made = rcgen::generate_simple_self_signed(names)?;
 
     std::fs::write(&certificate, made.cert.pem())?;
     std::fs::write(&key, made.key_pair.serialize_pem())?;
+    std::fs::write(&named, wanted)?;
 
     Ok(Papers { certificate, key })
 }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { Waiting } from "@/components/Spinner";
-import { phone_way_in, type PhoneWayIn } from "@/lib/core";
+import { phone_way_in, set_phone_door, type PhoneWayIn } from "@/lib/core";
 
 /// Getting a phone in.
 ///
@@ -11,6 +11,19 @@ import { phone_way_in, type PhoneWayIn } from "@/lib/core";
 export function PhoneSection() {
     const [way, set_way] = useState<PhoneWayIn | null>(null);
     const [notice, set_notice] = useState<string | null>(null);
+    const [busy, set_busy] = useState(false);
+
+    const swing = useCallback(async (open: boolean) => {
+        set_busy(true);
+        set_notice(null);
+        try {
+            set_way(await set_phone_door(open));
+        } catch (cause) {
+            set_notice(cause instanceof Error ? cause.message : String(cause));
+        } finally {
+            set_busy(false);
+        }
+    }, []);
 
     const refresh = useCallback(async () => {
         set_way(await phone_way_in());
@@ -26,13 +39,44 @@ export function PhoneSection() {
 
     return (
         <section className="flex flex-col gap-3">
-            {!way.reachable ? (
-                <p className="font-mono text-[11px] text-sun">
-                    The core answers only this machine, so a code for it would go nowhere. Start it
-                    with <span className="text-linen">AGENTLAND_HOST=0.0.0.0</span> to let a phone on
-                    your network reach it.
-                </p>
-            ) : null}
+            <div className="flex flex-wrap items-center gap-2">
+                {way.door === "closed" ? (
+                    <>
+                        <button
+                            className="rounded-lg border border-turquoise px-2 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40"
+                            disabled={busy}
+                            onClick={() => void swing(true)}
+                            title="answer this machine's network address as well, so a phone can reach the core"
+                        >
+                            {busy ? "opening…" : "let phones in"}
+                        </button>
+                        <span className="font-mono text-[11px] text-sun">
+                            The core answers only this machine, so a code for it would go nowhere.
+                        </span>
+                    </>
+                ) : way.door === "open" ? (
+                    <>
+                        <button
+                            className="rounded-lg border border-coral px-2 py-1 font-mono text-[11px] text-coral disabled:opacity-40"
+                            disabled={busy}
+                            onClick={() => void swing(false)}
+                            title="stop answering the network; the window keeps working"
+                        >
+                            {busy ? "closing…" : "close the door"}
+                        </button>
+                        <span className="font-mono text-[11px] text-palm">
+                            Phones on this network can reach the core. Nothing running is disturbed
+                            either way.
+                        </span>
+                    </>
+                ) : (
+                    <span className="font-mono text-[11px] text-shade">
+                        The core was started answering the network
+                        (<span className="text-linen">AGENTLAND_HOST</span>), so the door is open
+                        for as long as it runs.
+                    </span>
+                )}
+            </div>
 
             {way.code ? (
                 <div

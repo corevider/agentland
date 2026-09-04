@@ -1775,3 +1775,17 @@ a recent input event of the claimant's own, and the click that asked went to
 the tray. Whether the claim takes is still not certain on this machine; the
 desktop's own screenshot picker copies to the clipboard as well, which is the
 path that works today.
+
+
+## A door for the phone, opened from the window
+
+The Phone page in Settings used to say: *start the core with
+`AGENTLAND_HOST=0.0.0.0`.* That is a restart, and a restart stops every agent
+mid-turn. The page has a button now. *Let phones in* binds the core to this
+machine's own network address — plain port and secure port — while the loopback
+door stays where it was, so the window notices nothing. *Close the door* lets
+those go. The guard learns and forgets the `host:port` names to accept along
+with the door, the certificate is made again only when the door opens on an
+address it never named, and the wish is remembered: a core started later opens
+the door on its own. A core started with `AGENTLAND_HOST` set is open by
+configuration and says so; that one is closed by starting it without.

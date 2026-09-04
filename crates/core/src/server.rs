@@ -80,6 +80,10 @@ struct AppState {
     ui_commands: Arc<parking_lot::Mutex<Vec<String>>>,
     pane_views: Arc<parking_lot::Mutex<BTreeMap<String, PaneView>>>,
     vault: Arc<crate::vault::Vault>,
+    /// The `host:port` names a request may arrive under. Grows when the
+    /// phone's door is opened and shrinks when it is closed.
+    allowed_hosts: Arc<parking_lot::RwLock<Vec<String>>>,
+    door: Arc<crate::door::Door>,
     /// Things the commander should be told when it is safe to type at it. The
     /// supervisor's tick delivers these the same way it delivers its own news.
     leader_words: Arc<parking_lot::Mutex<Vec<String>>>,
@@ -157,6 +161,9 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         ]);
 
     let data_dir = config.data_dir.clone();
+    let allowed_hosts = Arc::new(parking_lot::RwLock::new(config.allowed_hosts.clone()));
+    let door_port = config.port;
+    let door_by_config = crate::phone::reachable(&config.host);
     // The vault is opened first: what the crew remembers lives in it, so the
     // store that decides what an agent is told reads from the same files a
     // person can open.
@@ -199,6 +206,13 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         ceilings: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
         ui_commands: Arc::new(parking_lot::Mutex::new(Vec::new())),
         pane_views: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
+        allowed_hosts: allowed_hosts.clone(),
+        door: Arc::new(crate::door::Door::new(
+            data_dir.clone(),
+            door_port,
+            door_by_config,
+            allowed_hosts,
+        )),
     };
 
     spawn_routine_ticker(state.clone());
@@ -307,6 +321,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/goals", get(read_goals))
         .route("/standards", get(read_standards).post(set_standards))
         .route("/phone", get(phone_way_in))
+        .route("/phone/door", post(set_phone_door))
         .route("/stop", post(stop_everything))
         .route("/commander", get(commander_says))
         .route("/voice", get(read_voice).post(set_transcriber))
@@ -401,13 +416,26 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .layer(cors);
 
+    // The phone's door, opened from the window: bound to this machine's own
+    // network address while the loopback door stays. Opened again on start
+    // when it was open last time.
+    state.door.serve_with(app.clone());
+    if state.door.wanted() && !crate::phone::reachable(&state.config.host) {
+        let door = state.door.clone();
+        tokio::spawn(async move {
+            if let Err(error) = door.open().await {
+                tracing::warn!(%error, "the phone's door did not open on start");
+            }
+        });
+    }
+
     // A second door, for the phone. Browsers refuse a camera and a microphone
     // on a plain http page, so the companion could show the crew but never
     // speak to it. The certificate is this machine's own — a phone will say it
     // does not recognise it, which is true, and what it buys is that the token
     // is not readable by everybody else on the network.
     if crate::phone::reachable(&state.config.host) {
-        let hosts = state.config.allowed_hosts.clone();
+        let hosts = state.allowed_hosts.read().clone();
         let secure_port = state.config.port + 1;
         let secure_addr: SocketAddr = format!("{}:{secure_port}", state.config.host).parse()?;
         let app_for_tls = app.clone();
@@ -481,7 +509,7 @@ async fn guard(
         .unwrap_or_default()
         .to_ascii_lowercase();
 
-    if !state.config.allowed_hosts.iter().any(|allowed| allowed == &host) {
+    if !state.allowed_hosts.read().iter().any(|allowed| allowed == &host) {
         return (
             StatusCode::FORBIDDEN,
             Json(ErrorBody {
@@ -4762,6 +4790,9 @@ struct PhoneWayIn {
     /// False when the core answers only the machine it runs on, which is a
     /// code that goes nowhere.
     reachable: bool,
+    /// Whether the network door is open by configuration, open from the
+    /// window, or closed.
+    door: crate::door::DoorState,
 }
 
 /// Asked, from the tray, to stop the crew and go.
@@ -4782,10 +4813,31 @@ async fn stop_everything(State(state): State<AppState>) -> StatusCode {
 }
 
 /// How to get a phone in without typing a token off a screen.
+#[derive(Deserialize)]
+struct DoorWish {
+    open: bool,
+}
+
+/// Open or close the phone's door, from the window rather than the shell.
+async fn set_phone_door(
+    State(state): State<AppState>,
+    Json(wish): Json<DoorWish>,
+) -> Result<Json<PhoneWayIn>, ApiError> {
+    if wish.open {
+        state.door.open().await?;
+        note(&state, "phone.door", "a person", "opened", "phones on this network can reach the core");
+    } else {
+        state.door.close()?;
+        note(&state, "phone.door", "a person", "closed", "the core answers this machine only");
+    }
+    Ok(phone_way_in(State(state)).await)
+}
+
 async fn phone_way_in(State(state): State<AppState>) -> Json<PhoneWayIn> {
     let port = state.config.port;
     let token = &state.config.token;
-    let reachable = crate::phone::reachable(&state.config.host);
+    let door = state.door.state();
+    let reachable = door != crate::door::DoorState::Closed;
 
     // The secure door, because a phone that arrives there can use its camera
     // and its microphone; the plain one is offered after it for anything that
@@ -4811,6 +4863,7 @@ async fn phone_way_in(State(state): State<AppState>) -> Json<PhoneWayIn> {
         urls,
         code,
         reachable,
+        door,
     })
 }
 
