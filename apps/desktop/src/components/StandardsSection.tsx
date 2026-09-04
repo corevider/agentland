@@ -59,7 +59,7 @@ export function StandardsSection() {
             </p>
 
             <textarea
-                className="min-h-0 flex-1 rounded-lg border border-reef bg-lagoon p-2 font-mono text-[11px] leading-relaxed"
+                className="min-h-[360px] flex-1 resize-y rounded-lg border border-reef bg-lagoon p-2 font-mono text-[11px] leading-relaxed"
                 spellCheck={false}
                 placeholder={"# House rules\n\n- Four spaces, and names that say what they are.\n- Tests with behaviour changes.\n- Never a secret in a log."}
                 value={draft}
