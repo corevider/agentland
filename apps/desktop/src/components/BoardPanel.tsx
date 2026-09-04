@@ -4,7 +4,7 @@ import { dated } from "@/lib/dated";
 import { use_services } from "@/workspace/registry";
 
 import { exactly, when } from "@/lib/when";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { column_keeps_the_turn, place_of, use_sideways_wheel } from "@/lib/wheel";
@@ -431,6 +431,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                             </header>
 
                             <Column
+                                shown={active}
                                 // The carried card leaves the list while it is
                                 // held: the gap stands in for it, so a column
                                 // does not grow by a card and then shrink back.
@@ -663,8 +664,11 @@ function Column({
     tasks,
     gap,
     render,
+    shown: on_screen = true,
 }: {
     tasks: Task[];
+    /// Whether the board is on screen. A hidden column measures nothing true.
+    shown?: boolean;
     /// Where the carried card would land, and how tall it is: the cards below
     /// step down by that much and the space between them is drawn, so the drop
     /// is aimed at a place rather than at a line.
@@ -676,9 +680,26 @@ function Column({
     const rows = useVirtualizer({
         count: tasks.length,
         getScrollElement: () => holder.current,
+        // Measurements follow the card, not the row: a cache keyed by index
+        // hands a short card's height to the tall one that takes its place.
+        getItemKey: (index) => tasks[index]?.id ?? index,
         estimateSize: () => 96,
         overscan: 6,
     });
+
+    // Measured again whenever the list changes or the board comes back on
+    // screen. A card grows when its chips arrive or its title wraps in a
+    // narrower column, and a column measured while hidden has no heights at
+    // all; a stale height puts the next card on top of this one.
+    useLayoutEffect(() => {
+        if (!on_screen || !holder.current) {
+            return;
+        }
+
+        for (const node of holder.current.querySelectorAll<HTMLElement>("[data-index]")) {
+            rows.measureElement(node);
+        }
+    }, [rows, tasks, on_screen]);
 
     const seat = gap
         ? gap.before
