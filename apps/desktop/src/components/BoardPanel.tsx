@@ -5,7 +5,7 @@ import { exactly, when } from "@/lib/when";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
-import { use_sideways_wheel } from "@/lib/wheel";
+import { column_keeps_the_turn, place_of, use_sideways_wheel } from "@/lib/wheel";
 import { files_from_paste, is_typing_into } from "@/lib/attachments";
 
 import { marked_copy_of, originals } from "@/lib/marks";
@@ -39,7 +39,9 @@ const COLUMNS: Column[] = ["backlog", "assigned", "working", "review", "ready", 
 
 /// The panel beside the columns: half the board when the board is wide
 /// enough for both, the whole of it when it is not.
-export const ASIDE =
+export const keeps_the_turn = (target: EventTarget | null) => column_keeps_the_turn(place_of(target));
+
+const ASIDE =
     "flex w-full min-w-0 flex-col border-l border-reef @[820px]:w-[46%] @[820px]:min-w-[380px]";
 
 function patch_line_color(line: string): string {
@@ -68,7 +70,10 @@ function in_order(tasks: Task[]): Task[] {
 }
 
 export function BoardPanel({ active, repositories }: { active: boolean; repositories: string[] | null }) {
-    const columns = use_sideways_wheel<HTMLDivElement>();
+    // The toolbar above the columns turns the wheel into a sideways scroll of
+    // the columns; a column with cards below its fold keeps the turn for itself.
+    const surface = useRef<HTMLDivElement>(null);
+    const columns = use_sideways_wheel<HTMLDivElement>({ surface, keeps: keeps_the_turn });
     const [all_tasks, set_tasks] = useState<Task[]>([]);
     const tasks = repositories
         ? all_tasks.filter((task) => repositories.includes(task.repository_id))
@@ -373,6 +378,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
     return (
         <div className="@container flex h-full min-h-0 min-w-0 flex-1">
             <div
+                ref={surface}
                 className={`h-full min-h-0 min-w-0 flex-1 flex-col gap-3 p-2.5 ${
                     aside_open ? "hidden @[820px]:flex" : "flex"
                 }`}
@@ -405,11 +411,11 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                             key={column}
                             // The columns share whatever width the panel has and
                             // stop shrinking at a card's worth, at which point
-                            // the row scrolls. Fixed at 150px they left the rest
+                            // the row scrolls. Fixed at one width they left the rest
                             // of a wide panel empty and pushed "done" off the
                             // edge of a narrow one with room to spare.
                             data-column={column}
-                            className={`flex min-h-0 min-w-[150px] flex-1 flex-col rounded-md border bg-lagoon transition-colors ${
+                            className={`flex min-h-0 min-w-[220px] flex-1 flex-col rounded-md border bg-lagoon transition-colors ${
                                 aiming?.column === column && carry
                                     ? "border-turquoise bg-lagoon-deep"
                                     : "border-reef"
