@@ -1,5 +1,6 @@
 import { use_poll } from "@/lib/poll";
 import { on_a_control } from "@/lib/controls";
+import { dated } from "@/lib/dated";
 import { use_services } from "@/workspace/registry";
 
 import { exactly, when } from "@/lib/when";
@@ -1011,8 +1012,11 @@ function BoardCard({
                         >
                             <div className="flex items-baseline justify-between gap-2">
                                 <span className="text-[11px] text-linen">{task.title}</span>
-                                <span className="font-mono text-[10px] text-shade" title={exactly(task.at ?? 0)}>
-                                    {task.id} · {when(task.at ?? 0, Math.floor(Date.now() / 1000))}
+                                <span
+                                    className="font-mono text-[10px] text-shade"
+                                    title={exactly(dated(task.at, task.evidence))}
+                                >
+                                    {task.id} · {when(dated(task.at, task.evidence), Math.floor(Date.now() / 1000))}
                                 </span>
                             </div>
         
