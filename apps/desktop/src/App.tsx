@@ -46,24 +46,12 @@ import {
 import { island_frames } from "@/lib/frames";
 import { probe_gpu, type GpuReport } from "@/lib/gpu";
 import { load_settings, save_settings, type Settings } from "@/lib/settings";
+import { detect_surface } from "@/lib/surface";
 
 const IslandPanel = lazy(() =>
     import("@/components/IslandPanel").then((module) => ({ default: module.IslandPanel })),
 );
 
-function detect_surface(): string {
-    const agent = navigator.userAgent;
-    if (is_tauri()) {
-        return agent.includes("WebKit") && !agent.includes("Chrome") ? "tauri-webkitgtk" : "tauri-webview";
-    }
-    if (agent.includes("Firefox")) {
-        return "firefox";
-    }
-    if (agent.includes("Chrome") || agent.includes("Chromium")) {
-        return "chromium";
-    }
-    return "webkit";
-}
 
 interface FrameStats {
     fps: number;

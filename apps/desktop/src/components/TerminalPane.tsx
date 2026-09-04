@@ -6,7 +6,8 @@ import "@xterm/xterm/css/xterm.css";
 
 import { ReadablePane } from "@/components/ReadablePane";
 import { upgrade_soon } from "@/lib/gpu_queue";
-import { SETTINGS_EVENT, load_settings, type Settings } from "@/lib/settings";
+import { SETTINGS_EVENT, load_settings, resolve_renderer, type Settings } from "@/lib/settings";
+import { detect_surface } from "@/lib/surface";
 import { use_poll } from "@/lib/poll";
 import {
     format_bytes,
@@ -21,6 +22,8 @@ import {
 /// Its own kind, so a task card dropped on the island and a terminal dragged
 /// across the grid are never mistaken for one another.
 export const PANE_DRAG = "text/agentland-pane";
+
+const wanted_renderer = () => resolve_renderer(load_settings().renderer, detect_surface());
 
 const TAIL_LIMIT_BYTES = 48 * 1024;
 const QUEUE_LIMIT_BYTES = TAIL_LIMIT_BYTES * 4;
@@ -162,7 +165,7 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
         let webgl: WebglAddon | null = null;
 
         const take_gpu = () => {
-            if (disposed || readable_ref.current || webgl || load_settings().renderer === "dom") {
+            if (disposed || readable_ref.current || webgl || wanted_renderer() === "dom") {
                 return;
             }
 
@@ -192,7 +195,7 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
         // A renderer chosen in settings applies to panes already open: the
         // WebGL addon is let go, or taken, without rebuilding the terminal.
         const follow_settings = (event: Event) => {
-            const wanted = (event as CustomEvent<Settings>).detail.renderer;
+            const wanted = resolve_renderer((event as CustomEvent<Settings>).detail.renderer, detect_surface());
             if (wanted === "dom" && webgl) {
                 webgl.dispose();
                 webgl = null;
@@ -360,7 +363,7 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
 
         return () => {
             const terminal = screen_ref.current;
-            if (!terminal || load_settings().renderer === "dom") {
+            if (!terminal || wanted_renderer() === "dom") {
                 return;
             }
 

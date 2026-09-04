@@ -8,6 +8,20 @@ export type Renderer = "auto" | "webgl" | "dom";
 
 export const RENDERERS: Renderer[] = ["auto", "webgl", "dom"];
 
+/// What `auto` means on a given surface.
+///
+/// Measured on WebKitGTK without a GPU: a WebGL pane showed each keystroke
+/// only when the next one made the page paint, and the DOM renderer showed
+/// every one as it came. So WebKit draws with the DOM unless somebody says
+/// otherwise, and everything else takes WebGL.
+export function resolve_renderer(choice: Renderer, surface: string): "webgl" | "dom" {
+    if (choice !== "auto") {
+        return choice;
+    }
+
+    return surface.includes("webkit") ? "dom" : "webgl";
+}
+
 export interface Settings {
     panes: number;
     lines_per_second: number;
