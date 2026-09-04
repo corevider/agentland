@@ -5,7 +5,7 @@ import { PhoneSection } from "@/components/PhoneSection";
 import { StandardsSection } from "@/components/StandardsSection";
 import { VoiceSection } from "@/components/VoiceSection";
 import type { GpuReport } from "@/lib/gpu";
-import type { Settings } from "@/lib/settings";
+import { RENDERERS, type Renderer, type Settings } from "@/lib/settings";
 
 const PANE_CHOICES = [1, 2, 4, 8, 12];
 const RATE_CHOICES = [1_000, 5_000, 10_000, 20_000, 50_000];
@@ -194,6 +194,24 @@ export function SettingsPage({
                                 Under heavy output a pane renders what a human can read and records the rest.
                                 These limits are why the gate passes.
                             </p>
+                            <Row
+                                label="Renderer"
+                                hint="webgl is fastest under load; dom shows every frame the moment it is drawn"
+                            >
+                                <select
+                                    className="rounded-md border border-reef bg-lagoon px-2 py-1 font-mono text-xs text-linen"
+                                    value={settings.renderer}
+                                    onChange={(event) =>
+                                        on_change({ ...settings, renderer: event.target.value as Renderer })
+                                    }
+                                >
+                                    {RENDERERS.map((held) => (
+                                        <option key={held} value={held}>
+                                            {held}
+                                        </option>
+                                    ))}
+                                </select>
+                            </Row>
                             <Row label="Focused pane" hint="writes once per animation frame">
                                 <span className="font-mono text-xs text-shell">live</span>
                             </Row>

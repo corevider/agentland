@@ -6,6 +6,7 @@ import "@xterm/xterm/css/xterm.css";
 
 import { ReadablePane } from "@/components/ReadablePane";
 import { upgrade_soon } from "@/lib/gpu_queue";
+import { SETTINGS_EVENT, load_settings, type Settings } from "@/lib/settings";
 import { use_poll } from "@/lib/poll";
 import {
     format_bytes,
@@ -103,7 +104,7 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
     // it draws every frame whether or not it has the focus.
     const crowned_ref = useRef(crowned);
     crowned_ref.current = crowned;
-    const [renderer, set_renderer] = useState("canvas");
+    const [renderer, set_renderer] = useState("dom");
     const [stats, set_stats] = useState<SessionInfo | null>(null);
     const [now, set_now] = useState(() => Math.floor(Date.now() / 1000));
 
@@ -134,7 +135,7 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
             bytes: 0,
             dropped_frames: 0,
             collapsed_bytes: 0,
-            renderer: "canvas",
+            renderer: "dom",
         };
 
         const terminal = new Terminal({
@@ -156,12 +157,12 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
         // with a 1357 ms stall, so the four-context probe does not bind here.
         //
         // What does bind is when the context arrives. Creating one costs about
-        // 190 ms, so a pane opens on the canvas renderer and is upgraded a moment
+        // 190 ms, so a pane opens on the DOM renderer and is upgraded a moment
         // later, one pane at a time.
         let webgl: WebglAddon | null = null;
 
         const take_gpu = () => {
-            if (disposed || readable_ref.current) {
+            if (disposed || readable_ref.current || webgl || load_settings().renderer === "dom") {
                 return;
             }
 
@@ -171,8 +172,8 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
                     addon.dispose();
                     webgl = null;
                     gpu_ref.current = null;
-                    metrics.renderer = "canvas (context lost)";
-                    set_renderer("canvas");
+                    metrics.renderer = "dom (context lost)";
+                    set_renderer("dom");
                 });
                 terminal.loadAddon(addon);
                 webgl = addon;
@@ -181,12 +182,30 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
                 set_renderer("webgl");
             } catch (cause) {
                 const reason = cause instanceof Error ? cause.message : String(cause);
-                metrics.renderer = `canvas (${reason.slice(0, 60)})`;
-                set_renderer("canvas");
+                metrics.renderer = `dom (${reason.slice(0, 60)})`;
+                set_renderer("dom");
             }
         };
 
         let cancel_upgrade = () => undefined as void;
+
+        // A renderer chosen in settings applies to panes already open: the
+        // WebGL addon is let go, or taken, without rebuilding the terminal.
+        const follow_settings = (event: Event) => {
+            const wanted = (event as CustomEvent<Settings>).detail.renderer;
+            if (wanted === "dom" && webgl) {
+                webgl.dispose();
+                webgl = null;
+                gpu_ref.current = null;
+                metrics.renderer = "dom";
+                set_renderer("dom");
+            } else if (wanted !== "dom" && !webgl) {
+                cancel_upgrade();
+            window.removeEventListener(SETTINGS_EVENT, follow_settings);
+                cancel_upgrade = upgrade_soon(take_gpu);
+            }
+        };
+        window.addEventListener(SETTINGS_EVENT, follow_settings);
         let queue: Uint8Array[] = [];
         let queued_bytes = 0;
         let writing = false;
@@ -337,11 +356,11 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
         // buffer either way — that is what the readable view reads.
         gpu_ref.current?.dispose();
         gpu_ref.current = null;
-        set_renderer("canvas");
+        set_renderer("dom");
 
         return () => {
             const terminal = screen_ref.current;
-            if (!terminal) {
+            if (!terminal || load_settings().renderer === "dom") {
                 return;
             }
 
@@ -351,7 +370,7 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
                 gpu_ref.current = addon;
                 set_renderer("webgl");
             } catch {
-                set_renderer("canvas");
+                set_renderer("dom");
             }
         };
     }, [readable]);
