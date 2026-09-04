@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use std::io::{self, BufRead, Write};
 
 use serde_json::{json, Value};
@@ -120,6 +122,15 @@ fn tools() -> Value {
         {
             "name": "crew_dismiss",
             "description": "Let an agent go. Allowed only for one holding nothing — no unfinished card, no open pane, nothing uncommitted, no commit that exists on its branch alone. Anything else is refused and belongs to a person, who is shown what would be lost. Its worktree is left on disk either way.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "id": { "type": "string" } },
+                "required": ["id"]
+            }
+        },
+        {
+            "name": "crew_stop",
+            "description": "Close an agent's pane once its step is over: the process ends, its slot under the caps comes free, and the agent stays hired for the next step. A person can also put a pane away without stopping it; this is the stop. Read the card's evidence first — a pane mid-turn loses the turn.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "id": { "type": "string" } },
@@ -492,6 +503,7 @@ fn call_tool(core: &Core, name: &str, arguments: &Value) -> Result<Value, String
             Some(json!({ "repository_id": text("repository_id")?, "as_the_crew": true })),
         ),
         "crew_dismiss" => core.call("DELETE", &format!("/agents/{}", text("id")?), None),
+        "crew_stop" => core.call("POST", &format!("/agents/{}/stop", text("id")?), None),
         "crew_list" => core.call("GET", "/agents", None),
         "note_write" => core.call(
             "POST",
