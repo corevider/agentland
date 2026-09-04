@@ -1789,3 +1789,21 @@ with the door, the certificate is made again only when the door opens on an
 address it never named, and the wish is remembered: a core started later opens
 the door on its own. A core started with `AGENTLAND_HOST` set is open by
 configuration and says so; that one is closed by starting it without.
+
+
+## The phone looks at a workspace, and carries a pen
+
+The phone shows the workspaces as a row of chips above everything else, and
+the choice is the phone's own — kept on the phone, not sent to the core, so a
+pocket cannot change what the desk is looking at. The board, the crew, the
+project a card goes on and the project a goal is set for all follow it.
+
+A picture on a card can be marked up from the phone as well. It is the same
+pen as the desktop's, drawn in the same shapes and kept in the same pixels,
+with a touch instead of a pointer: the tools above the picture, the numbered
+marks and their words below it, a tap on a number to change its words, and
+the flattened copy made on the phone and sent up — so the agent sees the same
+numbered picture whichever screen drew it. The two painters are the same
+routine written twice, once in TypeScript and once in the page's own script;
+the phone is one file served from disk, and a shared module would cost it
+that.

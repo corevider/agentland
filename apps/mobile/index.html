@@ -209,6 +209,19 @@
                 margin-top: 0;
             }
 
+            .edit .photos .shot .marked {
+                position: absolute;
+                left: 4px;
+                top: 4px;
+                background: var(--bad);
+                color: #fff;
+                border-radius: 6px;
+                padding: 1px 5px;
+                font-size: 11px;
+                font-weight: 700;
+                pointer-events: none;
+            }
+
             .edit .photos .add {
                 width: 4.5rem;
                 height: 4.5rem;
@@ -228,6 +241,123 @@
 
             .edit .actions button {
                 padding: 10px;
+                font-size: 14px;
+            }
+
+            /* The pen: the picture as large as the phone allows, a row of
+               tools above it and the numbered marks below, each with the words
+               that go with it. */
+            #pen {
+                position: fixed;
+                inset: 0;
+                z-index: 40;
+                display: flex;
+                flex-direction: column;
+                background: var(--paper, #0d1c1f);
+                overflow-y: auto;
+                padding: 10px 12px 90px;
+                gap: 8px;
+            }
+
+            #pen[hidden] {
+                display: none;
+            }
+
+            .pen-head .columns {
+                margin-bottom: 4px;
+            }
+
+            .pen-acts {
+                gap: 8px;
+            }
+
+            .pen-acts button {
+                padding: 10px;
+                font-size: 14px;
+            }
+
+            .pen-stage {
+                display: flex;
+                justify-content: center;
+            }
+
+            .pen-frame {
+                position: relative;
+                line-height: 0;
+                max-width: 100%;
+            }
+
+            .pen-frame img {
+                max-width: 100%;
+                max-height: 60vh;
+                border: 1px solid var(--line);
+                border-radius: 8px;
+                user-select: none;
+                -webkit-user-select: none;
+            }
+
+            .pen-frame canvas {
+                position: absolute;
+                left: 0;
+                top: 0;
+                touch-action: none;
+            }
+
+            .pen-marks {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+            }
+
+            .pen-mark {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                border: 1px solid var(--line);
+                border-radius: 10px;
+                padding: 8px 10px;
+            }
+
+            .pen-mark.here {
+                border-color: var(--bad);
+            }
+
+            .pen-mark .num {
+                flex: none;
+                width: 1.6rem;
+                height: 1.6rem;
+                border-radius: 50%;
+                background: var(--bad);
+                color: #fff;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 12px;
+                font-weight: 700;
+            }
+
+            .pen-mark .kind {
+                flex: none;
+                font-family: ui-monospace, monospace;
+                font-size: 12px;
+                color: var(--muted);
+            }
+
+            .pen-mark input {
+                flex: 1;
+                min-width: 0;
+                padding: 8px 10px;
+                border: 1px solid var(--line);
+                border-radius: 8px;
+                background: transparent;
+                color: var(--ink);
+                font: 14px system-ui, -apple-system, sans-serif;
+            }
+
+            .pen-mark button {
+                flex: none;
+                width: 2.2rem;
+                padding: 6px;
                 font-size: 14px;
             }
 
@@ -1031,6 +1161,8 @@
                 <p class="empty" id="what-this-is"></p>
             </section>
 
+            <div id="workspaces" class="columns" hidden></div>
+
             <section class="page">
                 <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16v11H8l-4 3z"/></svg> Say something</h2>
                 <div id="voice">
@@ -1071,6 +1203,25 @@
                 <div id="board"><p class="empty">No cards.</p></div>
             </section>
         </main>
+
+        <div id="pen" hidden>
+            <div class="pen-head">
+                <div class="columns" id="pen-tools"></div>
+                <div class="row pen-acts">
+                    <button id="pen-undo">undo</button>
+                    <button id="pen-apply" class="approve">apply marks</button>
+                    <button id="pen-close">close</button>
+                </div>
+            </div>
+            <div class="pen-stage" id="pen-stage">
+                <div class="pen-frame" id="pen-frame">
+                    <img id="pen-image" alt="" draggable="false" />
+                    <canvas id="pen-canvas"></canvas>
+                </div>
+            </div>
+            <div class="pen-marks" id="pen-marks"></div>
+            <p class="empty" id="pen-note"></p>
+        </div>
 
         <nav id="bar">
             <span class="hint" id="hint-lock">Slide up to lock <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 20V4M6 10l6-6 6 6M6 18l6-6 6 6"/></svg></span>
@@ -1433,15 +1584,17 @@
 
             let last_agents = [];
 
-            function render_crew(agents) {
+            function render_crew(all) {
+                last_agents = all;
                 // The commander first: it is the one a person looks for, and
                 // the rest are working to what it decided.
-                agents = [...agents].sort((one, other) => {
+                const agents = [...all]
+                    .filter((agent) => in_workspace(agent.repository_id))
+                    .sort((one, other) => {
                     const rank = (held) => (held.role === "commander" ? 0 : 1);
                     return rank(one) - rank(other) || one.name.localeCompare(other.name);
                 });
 
-                last_agents = agents;
                 const holder = document.getElementById("crew");
                 if (agents.length === 0) {
                     holder.innerHTML = '<p class="empty">No crew yet.</p>';
@@ -1471,6 +1624,52 @@
                 }
             }
 
+            // Which workspace this phone looks at. The phone's own choice,
+            // kept here: changing what the desktop is looking at from a pocket
+            // would be a surprise for whoever is at the desk.
+            let workspaces = [];
+            let workspace_id = localStorage.getItem("agentland-mobile-workspace") || "";
+
+            function workspace_repos() {
+                const held = workspaces.find((entry) => entry.id === workspace_id);
+                return held ? held.repository_ids : null;
+            }
+
+            function in_workspace(repository_id) {
+                const repos = workspace_repos();
+                return repos === null || repos.includes(repository_id);
+            }
+
+            function render_workspaces(list) {
+                workspaces = list.workspaces ?? [];
+                const holder = document.getElementById("workspaces");
+                if (workspaces.length === 0) {
+                    holder.hidden = true;
+                    workspace_id = "";
+                    return;
+                }
+                if (workspace_id && !workspaces.some((entry) => entry.id === workspace_id)) {
+                    workspace_id = "";
+                }
+                holder.hidden = false;
+                holder.innerHTML = [{ id: "", name: "everything" }, ...workspaces]
+                    .map(
+                        (entry) =>
+                            `<button class="${entry.id === workspace_id ? "here" : ""}" data-workspace="${escape(entry.id)}">${escape(entry.name)}</button>`,
+                    )
+                    .join("");
+                for (const chip of holder.querySelectorAll("button")) {
+                    chip.addEventListener("click", () => {
+                        workspace_id = chip.dataset.workspace;
+                        localStorage.setItem("agentland-mobile-workspace", workspace_id);
+                        render_workspaces(list);
+                        render_crew(last_agents);
+                        render_board(last_tasks);
+                        render_where(projects);
+                    });
+                }
+            }
+
             const COLUMNS = ["backlog", "assigned", "working", "review", "ready", "done"];
             let board_column = "backlog";
             let last_tasks = [];
@@ -1491,13 +1690,15 @@
                 return (task.attachments ?? []).filter((held) => !held.derived_from);
             }
 
-            function render_board(tasks) {
-                last_tasks = tasks;
+            function render_board(all) {
+                last_tasks = all;
                 const holder = document.getElementById("board");
 
                 if (editing) {
                     return;
                 }
+
+                const tasks = all.filter((task) => in_workspace(task.repository_id));
 
                 const chips = COLUMNS.map((column) => {
                     const count = tasks.filter((task) => task.column === column).length;
@@ -1628,6 +1829,16 @@
                                 image.src = url;
                             })
                             .catch(() => undefined);
+                        image.addEventListener("click", () => {
+                            keep_typed();
+                            open_pen(task, held);
+                        });
+                        if (held.marks?.marks?.length) {
+                            const badge = document.createElement("span");
+                            badge.className = "marked";
+                            badge.textContent = `✎ ${held.marks.marks.length}`;
+                            shot.append(badge);
+                        }
                         shot.append(image);
                     } else {
                         shot.innerHTML = `<div class="add" title="${escape(held.name)}">${escape(held.kind.split("/")[1] ?? "file")}</div>`;
@@ -1730,6 +1941,450 @@
                     }
                 });
             }
+
+            // The pen: what the desktop draws with, drawn here in the same
+            // shapes. Marks are kept in the picture's own pixels, and the
+            // flattened copy is made on this phone and sent up, so an agent
+            // opening the card sees the same numbered picture whichever
+            // screen it was drawn on.
+            const MARK_COLOR = "#e5705f";
+            const PEN_TOOLS = [
+                ["box", "box"],
+                ["arrow", "arrow"],
+                ["pen", "pen"],
+                ["pin", "pin"],
+                ["label", "label"],
+            ];
+            let pen = null;
+
+            function normalized_box(one, other) {
+                return [
+                    [Math.min(one[0], other[0]), Math.min(one[1], other[1])],
+                    [Math.max(one[0], other[0]), Math.max(one[1], other[1])],
+                ];
+            }
+
+            function badge_point(mark) {
+                if (mark.points.length === 0) {
+                    return null;
+                }
+                if (mark.kind === "box") {
+                    return normalized_box(mark.points[0], mark.points[1] ?? mark.points[0])[0];
+                }
+                if (mark.kind === "arrow") {
+                    return mark.points[1] ?? mark.points[0];
+                }
+                return mark.points[0];
+            }
+
+            function badge_circle(mark, scale) {
+                const spot = badge_point(mark);
+                if (!spot) {
+                    return null;
+                }
+                const radius = Math.max(9, 11 * scale);
+                const x = spot[0] * scale;
+                const y = spot[1] * scale;
+                return mark.kind === "pin" ? { x: x + radius * 1.4, y: y - radius * 1.4, radius } : { x, y, radius };
+            }
+
+            function badge_under(marks, scale, x, y) {
+                for (let index = marks.length - 1; index >= 0; index -= 1) {
+                    const circle = badge_circle(marks[index], scale);
+                    if (circle && Math.hypot(circle.x - x, circle.y - y) <= circle.radius + 6) {
+                        return index;
+                    }
+                }
+                return null;
+            }
+
+            function worth_keeping(mark) {
+                if (mark.points.length === 0) {
+                    return false;
+                }
+                if (mark.kind === "pin" || mark.kind === "label") {
+                    return true;
+                }
+                if (mark.kind === "pen") {
+                    return mark.points.length > 2;
+                }
+                const [from, to] = [mark.points[0], mark.points[1] ?? mark.points[0]];
+                return Math.abs(from[0] - to[0]) + Math.abs(from[1] - to[1]) > 4;
+            }
+
+            function paint(ctx, width, marks, scale, options = {}) {
+                const stroke = Math.max(2, 3 * scale);
+                const font_size = Math.max(11, 14 * scale);
+                ctx.save();
+                ctx.lineCap = "round";
+                ctx.lineJoin = "round";
+                const all = options.draft ? [...marks, options.draft] : marks;
+                all.forEach((mark, index) => {
+                    const is_draft = options.draft === mark;
+                    ctx.strokeStyle = MARK_COLOR;
+                    ctx.fillStyle = MARK_COLOR;
+                    ctx.lineWidth = stroke;
+                    ctx.globalAlpha = is_draft ? 0.7 : 1;
+                    const at = (point) => [point[0] * scale, point[1] * scale];
+
+                    if (mark.kind === "box" && mark.points.length >= 1) {
+                        const [a, b] = normalized_box(mark.points[0], mark.points[1] ?? mark.points[0]);
+                        const [x, y] = at(a);
+                        const [x2, y2] = at(b);
+                        ctx.strokeRect(x, y, x2 - x, y2 - y);
+                    } else if (mark.kind === "arrow" && mark.points.length >= 1) {
+                        const [x, y] = at(mark.points[0]);
+                        const [x2, y2] = at(mark.points[1] ?? mark.points[0]);
+                        ctx.beginPath();
+                        ctx.moveTo(x, y);
+                        ctx.lineTo(x2, y2);
+                        ctx.stroke();
+                        const angle = Math.atan2(y2 - y, x2 - x);
+                        const head = Math.max(10, 16 * scale);
+                        ctx.beginPath();
+                        ctx.moveTo(x2, y2);
+                        ctx.lineTo(x2 - head * Math.cos(angle - Math.PI / 6), y2 - head * Math.sin(angle - Math.PI / 6));
+                        ctx.lineTo(x2 - head * Math.cos(angle + Math.PI / 6), y2 - head * Math.sin(angle + Math.PI / 6));
+                        ctx.closePath();
+                        ctx.fill();
+                    } else if (mark.kind === "pen" && mark.points.length >= 1) {
+                        ctx.beginPath();
+                        mark.points.forEach((point, n) => {
+                            const [x, y] = at(point);
+                            if (n === 0) {
+                                ctx.moveTo(x, y);
+                            } else {
+                                ctx.lineTo(x, y);
+                            }
+                        });
+                        ctx.stroke();
+                    } else if (mark.kind === "pin" && mark.points.length >= 1) {
+                        const [x, y] = at(mark.points[0]);
+                        ctx.beginPath();
+                        ctx.arc(x, y, Math.max(4, 6 * scale), 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+
+                    if (!is_draft) {
+                        const circle = badge_circle(mark, scale);
+                        if (!circle) {
+                            return;
+                        }
+                        const { x: bx, y: by, radius } = circle;
+                        if (options.selected === index) {
+                            ctx.beginPath();
+                            ctx.arc(bx, by, radius + Math.max(3, 3 * scale), 0, Math.PI * 2);
+                            ctx.fillStyle = "#ffffff";
+                            ctx.fill();
+                        }
+                        ctx.beginPath();
+                        ctx.arc(bx, by, radius, 0, Math.PI * 2);
+                        ctx.fillStyle = MARK_COLOR;
+                        ctx.fill();
+                        ctx.fillStyle = "#ffffff";
+                        ctx.font = `bold ${font_size}px sans-serif`;
+                        ctx.textAlign = "center";
+                        ctx.textBaseline = "middle";
+                        ctx.fillText(String(index + 1), bx, by + 0.5);
+
+                        const said = mark.text.trim();
+                        if (said && (mark.kind === "label" || mark.kind === "pin" || mark.kind === "box")) {
+                            ctx.font = `${font_size}px sans-serif`;
+                            const text_width = ctx.measureText(said).width + font_size;
+                            const edge = width * scale;
+                            const rightward = bx + radius + 4 * scale;
+                            const tx = rightward + text_width > edge ? Math.max(0, bx - radius - 4 * scale - text_width) : rightward;
+                            const ty = by - font_size * 0.8;
+                            ctx.fillStyle = "rgba(13, 28, 31, 0.85)";
+                            ctx.fillRect(tx, ty, text_width, font_size * 1.6);
+                            ctx.fillStyle = "#ffffff";
+                            ctx.textAlign = "left";
+                            ctx.fillText(said, tx + font_size / 2, by);
+                        }
+                    }
+                });
+                ctx.restore();
+            }
+
+            function derived_name(name) {
+                const dot = name.lastIndexOf(".");
+                return `${dot > 0 ? name.slice(0, dot) : name}.marked.png`;
+            }
+
+            const pen_view = document.getElementById("pen");
+            const pen_image = document.getElementById("pen-image");
+            const pen_canvas = document.getElementById("pen-canvas");
+            const pen_tools = document.getElementById("pen-tools");
+            const pen_marks_list = document.getElementById("pen-marks");
+            const pen_note = document.getElementById("pen-note");
+
+            async function open_pen(task, attachment) {
+                pen = {
+                    task,
+                    attachment,
+                    marks: (attachment.marks?.marks ?? []).map((mark) => ({ ...mark, points: mark.points.map((point) => [...point]) })),
+                    was: JSON.stringify(attachment.marks?.marks ?? []),
+                    tool: "box",
+                    draft: null,
+                    selected: null,
+                    natural: null,
+                };
+                pen_note.textContent = "";
+                pen_image.src = "";
+                pen_view.hidden = false;
+                render_pen_tools();
+                render_pen_marks();
+                try {
+                    pen_image.src = await thumb_of(task.id, attachment.name);
+                } catch (cause) {
+                    pen_note.textContent = cause.message;
+                }
+            }
+
+            function pen_changed() {
+                return pen && JSON.stringify(pen.marks) !== pen.was;
+            }
+
+            function close_pen() {
+                if (pen_changed() && !confirm("Leave without applying the marks? What you drew since the last apply will be lost.")) {
+                    return;
+                }
+                pen = null;
+                pen_view.hidden = true;
+            }
+
+            function pen_scale() {
+                return pen?.natural ? pen_canvas.clientWidth / pen.natural.width : 1;
+            }
+
+            function draw_pen() {
+                if (!pen?.natural) {
+                    return;
+                }
+                const shown_width = pen_image.clientWidth;
+                const shown_height = pen_image.clientHeight;
+                const ratio = window.devicePixelRatio || 1;
+                pen_canvas.style.width = `${shown_width}px`;
+                pen_canvas.style.height = `${shown_height}px`;
+                pen_canvas.width = Math.round(shown_width * ratio);
+                pen_canvas.height = Math.round(shown_height * ratio);
+                const ctx = pen_canvas.getContext("2d");
+                ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+                ctx.clearRect(0, 0, shown_width, shown_height);
+                paint(ctx, pen.natural.width, pen.marks, shown_width / pen.natural.width, {
+                    draft: pen.draft,
+                    selected: pen.selected,
+                });
+            }
+
+            pen_image.addEventListener("load", () => {
+                if (!pen) {
+                    return;
+                }
+                pen.natural = { width: pen_image.naturalWidth, height: pen_image.naturalHeight };
+                draw_pen();
+            });
+            new ResizeObserver(draw_pen).observe(pen_image);
+
+            function render_pen_tools() {
+                pen_tools.innerHTML = PEN_TOOLS.map(
+                    ([kind, label]) => `<button class="${pen?.tool === kind ? "here" : ""}" data-tool="${kind}">${label}</button>`,
+                ).join("");
+                for (const chip of pen_tools.querySelectorAll("button")) {
+                    chip.addEventListener("click", () => {
+                        pen.tool = chip.dataset.tool;
+                        render_pen_tools();
+                    });
+                }
+            }
+
+            function render_pen_marks() {
+                if (!pen) {
+                    return;
+                }
+                pen_marks_list.innerHTML = "";
+                if (pen.marks.length === 0) {
+                    pen_marks_list.innerHTML = '<p class="empty">Pick a tool and draw on the picture. Each mark is numbered, and whoever takes the card is told about every one.</p>';
+                    return;
+                }
+                pen.marks.forEach((mark, index) => {
+                    const row = document.createElement("div");
+                    row.className = `pen-mark ${pen.selected === index ? "here" : ""}`;
+                    const num = document.createElement("span");
+                    num.className = "num";
+                    num.textContent = String(index + 1);
+                    const kind = document.createElement("span");
+                    kind.className = "kind";
+                    kind.textContent = mark.kind;
+                    const words = document.createElement("input");
+                    words.type = "text";
+                    words.placeholder = "what is this? the crew reads these words";
+                    words.value = mark.text;
+                    words.addEventListener("focus", () => {
+                        pen.selected = index;
+                        draw_pen();
+                        for (const other of pen_marks_list.querySelectorAll(".pen-mark")) {
+                            other.classList.remove("here");
+                        }
+                        row.classList.add("here");
+                    });
+                    words.addEventListener("input", () => {
+                        mark.text = words.value;
+                        draw_pen();
+                    });
+                    const drop = document.createElement("button");
+                    drop.className = "reject";
+                    drop.textContent = "×";
+                    drop.setAttribute("aria-label", "remove this mark");
+                    drop.addEventListener("click", () => {
+                        pen.marks.splice(index, 1);
+                        pen.selected = null;
+                        render_pen_marks();
+                        draw_pen();
+                    });
+                    row.append(num, kind, words, drop);
+                    pen_marks_list.append(row);
+                });
+            }
+
+            function pen_point(event) {
+                const box = pen_canvas.getBoundingClientRect();
+                const scale = pen_scale();
+                const clamp = (value, most) => Math.max(0, Math.min(most, value));
+                return [
+                    clamp((event.clientX - box.left) / scale, pen.natural.width),
+                    clamp((event.clientY - box.top) / scale, pen.natural.height),
+                ];
+            }
+
+            pen_canvas.addEventListener("pointerdown", (event) => {
+                if (!pen?.natural) {
+                    return;
+                }
+                event.preventDefault();
+                try {
+                    pen_canvas.setPointerCapture(event.pointerId);
+                } catch {
+                    // A pointer the browser does not know cannot be captured.
+                }
+                const box = pen_canvas.getBoundingClientRect();
+                const under = badge_under(pen.marks, pen_scale(), event.clientX - box.left, event.clientY - box.top);
+                if (under !== null) {
+                    pen.selected = under;
+                    render_pen_marks();
+                    draw_pen();
+                    pen_marks_list.querySelectorAll("input")[under]?.focus();
+                    return;
+                }
+                const point = pen_point(event);
+                if (pen.tool === "pin" || pen.tool === "label") {
+                    pen.marks.push({ kind: pen.tool, points: [point], text: "" });
+                    pen.selected = pen.marks.length - 1;
+                    render_pen_marks();
+                    draw_pen();
+                    pen_marks_list.querySelectorAll("input")[pen.selected]?.focus();
+                    return;
+                }
+                pen.draft = { kind: pen.tool, points: pen.tool === "pen" ? [point] : [point, point], text: "" };
+                draw_pen();
+            });
+
+            pen_canvas.addEventListener("pointermove", (event) => {
+                if (!pen?.draft) {
+                    return;
+                }
+                event.preventDefault();
+                const point = pen_point(event);
+                if (pen.draft.kind === "pen") {
+                    pen.draft.points.push(point);
+                } else {
+                    pen.draft.points[1] = point;
+                }
+                draw_pen();
+            });
+
+            const pen_lift = () => {
+                if (!pen?.draft) {
+                    return;
+                }
+                const drawn = pen.draft;
+                pen.draft = null;
+                if (worth_keeping(drawn)) {
+                    pen.marks.push(drawn);
+                    pen.selected = pen.marks.length - 1;
+                    render_pen_marks();
+                    if (drawn.kind === "box") {
+                        pen_marks_list.querySelectorAll("input")[pen.selected]?.focus();
+                    }
+                }
+                draw_pen();
+            };
+            pen_canvas.addEventListener("pointerup", pen_lift);
+            pen_canvas.addEventListener("pointercancel", () => {
+                if (pen) {
+                    pen.draft = null;
+                    draw_pen();
+                }
+            });
+
+            document.getElementById("pen-undo").addEventListener("click", () => {
+                if (!pen) {
+                    return;
+                }
+                pen.marks.pop();
+                pen.selected = null;
+                render_pen_marks();
+                draw_pen();
+            });
+
+            document.getElementById("pen-close").addEventListener("click", close_pen);
+
+            document.getElementById("pen-apply").addEventListener("click", async () => {
+                if (!pen?.natural) {
+                    return;
+                }
+                const apply = document.getElementById("pen-apply");
+                apply.disabled = true;
+                apply.textContent = "applying…";
+                const { task, attachment, marks, natural } = pen;
+                try {
+                    await api(`/tasks/${encodeURIComponent(task.id)}/attachments/${encodeURIComponent(attachment.name)}/marks`, {
+                        method: "PUT",
+                        body: JSON.stringify({ width: natural.width, height: natural.height, marks }),
+                    });
+                    const copy = (task.attachments ?? []).find((held) => held.derived_from === attachment.name);
+                    if (marks.length === 0) {
+                        if (copy) {
+                            await api(`/tasks/${encodeURIComponent(task.id)}/attachments/${encodeURIComponent(copy.name)}`, { method: "DELETE" });
+                        }
+                    } else {
+                        const flat = document.createElement("canvas");
+                        flat.width = natural.width;
+                        flat.height = natural.height;
+                        const ctx = flat.getContext("2d");
+                        ctx.drawImage(pen_image, 0, 0, natural.width, natural.height);
+                        paint(ctx, natural.width, marks, 1);
+                        const blob = await new Promise((ok) => flat.toBlob(ok, "image/png"));
+                        const file = new File([blob], derived_name(attachment.name), { type: "image/png" });
+                        const response = await fetch(
+                            `/tasks/${encodeURIComponent(task.id)}/attachments?name=${encodeURIComponent(file.name)}&derived_from=${encodeURIComponent(attachment.name)}`,
+                            { method: "POST", headers: { "content-type": "image/png", "x-auth-token": held_token }, body: file },
+                        );
+                        if (!response.ok) {
+                            throw new Error(await response.text());
+                        }
+                    }
+                    pen = null;
+                    pen_view.hidden = true;
+                    editing = null;
+                    await refresh();
+                } catch (cause) {
+                    pen_note.textContent = cause.message;
+                } finally {
+                    apply.disabled = false;
+                    apply.textContent = "apply marks";
+                }
+            });
 
             // Speaking from the phone, because the machine running the crew has
             // no microphone: over a remote desktop there is nothing to record,
@@ -1997,10 +2652,10 @@
             }
 
             function render_where(repos) {
-                projects = repos;
+                projects = repos.filter((repo) => in_workspace(repo.id));
                 const chosen = where.value;
                 where.innerHTML = "";
-                for (const repo of repos) {
+                for (const repo of projects) {
                     where.append(new Option(repo.name ?? repo.id, repo.id));
                 }
                 if (chosen && repos.some((repo) => repo.id === chosen)) {
@@ -2126,7 +2781,11 @@
 
                     await api("/voice/said", {
                         method: "POST",
-                        body: JSON.stringify({ text, to: whom.value || undefined }),
+                        body: JSON.stringify({
+                            text,
+                            to: whom.value || undefined,
+                            repository_id: whom.value ? undefined : projects[0]?.id,
+                        }),
                     });
 
                     said.value = "";
@@ -2202,13 +2861,15 @@
                 }
 
                 try {
-                    const [approvals, agents, tasks, repos] = await Promise.all([
+                    const [approvals, agents, tasks, repos, spaces] = await Promise.all([
                         api("/approvals"),
                         api("/agents"),
                         api("/tasks"),
                         api("/repos").catch(() => []),
+                        api("/workspaces").catch(() => ({ workspaces: [] })),
                     ]);
 
+                    render_workspaces(spaces);
                     render_approvals(approvals);
                     render_crew(agents);
                     render_whom(agents);
