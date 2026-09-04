@@ -341,6 +341,11 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/notices", get(list_notices).post(mark_notices_seen))
         .route("/notes/{*slug}", get(read_note).delete(forget_note))
         .route("/ui/commands", get(take_ui_commands).post(queue_ui_command))
+        .route(
+            "/shelf",
+            post(shelve_a_file).layer(axum::extract::DefaultBodyLimit::max(MOST_ATTACHMENT_BYTES)),
+        )
+        .route("/shelf/{name}", get(read_shelved))
         .route("/ui/windows", get(list_windows).post(set_window))
         .route("/dispatch/tasks/{id}", post(dispatch_task))
         .route("/repos/{id}/files", get(list_project_files))
@@ -3189,6 +3194,69 @@ struct PullRequestBody {
 #[derive(Deserialize)]
 struct UiCommandBody {
     name: String,
+}
+
+/// The shelf: files on their way to a card, from wherever they were made.
+///
+/// A screenshot taken from the tray is made by the desktop process and wanted
+/// by the window, and the two share nothing but the core. The desktop puts it
+/// here, tells the window its name, and the window picks it up and puts it on
+/// a card. Only the last few are kept; a shelf is not a folder.
+fn shelf_of(state: &AppState) -> PathBuf {
+    state.config.data_dir.join("shelf")
+}
+
+const SHELF_KEEPS: usize = 20;
+
+async fn shelve_a_file(
+    State(state): State<AppState>,
+    Query(query): Query<AttachQuery>,
+    body: axum::body::Bytes,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if body.is_empty() {
+        return Err(anyhow::anyhow!("nothing arrived to shelve").into());
+    }
+
+    let shelf = shelf_of(&state);
+    std::fs::create_dir_all(&shelf).map_err(anyhow::Error::from)?;
+    let name = format!("{}-{}", now_secs(), crate::board::safe_name(&query.name));
+    std::fs::write(shelf.join(&name), &body).map_err(anyhow::Error::from)?;
+
+    let mut held: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(&shelf)
+        .map_err(anyhow::Error::from)?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let modified = entry.metadata().and_then(|meta| meta.modified()).ok()?;
+            Some((modified, entry.path()))
+        })
+        .collect();
+    held.sort_by(|one, other| other.0.cmp(&one.0));
+    for (_, old) in held.into_iter().skip(SHELF_KEEPS) {
+        let _ = std::fs::remove_file(old);
+    }
+
+    Ok(Json(serde_json::json!({ "name": name })))
+}
+
+async fn read_shelved(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Response, ApiError> {
+    let safe = crate::board::safe_name(&name);
+    let path = shelf_of(&state).join(&safe);
+    let bytes = tokio::fs::read(&path)
+        .await
+        .map_err(|_| anyhow::anyhow!("nothing on the shelf called {safe}"))?;
+
+    let kind = if safe.to_lowercase().ends_with(".png") {
+        "image/png"
+    } else if safe.to_lowercase().ends_with(".jpg") || safe.to_lowercase().ends_with(".jpeg") {
+        "image/jpeg"
+    } else {
+        "application/octet-stream"
+    };
+
+    Ok(([(header::CONTENT_TYPE, kind)], bytes).into_response())
 }
 
 async fn queue_ui_command(

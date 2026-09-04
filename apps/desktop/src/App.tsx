@@ -301,6 +301,20 @@ export default function App() {
                             continue;
                         }
 
+                        // From the tray: a screenshot on the shelf, for a
+                        // card. The board comes forward first, and hears of
+                        // the picture a moment later, once it is there to
+                        // hear.
+                        if (command.startsWith("shot:")) {
+                            focus_panel("board");
+                            window.setTimeout(() => {
+                                window.dispatchEvent(
+                                    new CustomEvent("agentland:command", { detail: command }),
+                                );
+                            }, 400);
+                            continue;
+                        }
+
                         window.dispatchEvent(
                             new CustomEvent("agentland:command", { detail: command }),
                         );

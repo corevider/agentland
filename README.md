@@ -1754,3 +1754,24 @@ The overlay while drawing and the flattened copy are painted by one routine, so
 they cannot disagree. Pointer moves read the stroke in progress through a ref
 rather than from state: moves arrive faster than renders, and a box drawn
 quickly was lost between them.
+
+**The camera.** The tray has *Take a screenshot for a card*. It asks the
+desktop's own picker — the screenshot portal on Linux, `screencapture` on macOS
+— rather than grabbing pixels, which a Wayland desktop does not allow an
+application to do. The file lands on a shelf in the core (`data/shelf/`, the
+last twenty kept), the window is told its name, and the board comes forward
+with the editor open and the picture already on the card. The portal answers
+with a signal sent only to the connection that asked, which a command-line
+call cannot hear, so the asking is a short Python script on the desktop's own
+bindings, embedded in the binary.
+
+Two things learned the hard way. A menu handler given to a Tauri tray is kept
+by the app for good, and this tray is rebuilt under a new id whenever the crew
+changes state — so one click asked the desktop three times over, one dialog
+answered and two waiting behind it. The handler is registered once, on the app.
+And the clipboard is claimed after the window comes up rather than before,
+because a Wayland compositor honours a clipboard claim only on the strength of
+a recent input event of the claimant's own, and the click that asked went to
+the tray. Whether the claim takes is still not certain on this machine; the
+desktop's own screenshot picker copies to the clipboard as well, which is the
+path that works today.

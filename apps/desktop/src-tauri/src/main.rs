@@ -8,6 +8,8 @@ use serde::Serialize;
 use tauri::Manager;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
+mod screenshot;
+
 const DEFAULT_PORT: u16 = 9470;
 
 #[derive(Clone, Serialize)]
@@ -183,6 +185,74 @@ fn send_the_window_to(client: &reqwest::blocking::Client, endpoint: &CoreEndpoin
         .send();
 }
 
+/// A screenshot from the tray: taken with the desktop's own picker, put on
+/// the clipboard so it pastes anywhere, and handed to the board so the window
+/// comes up with it already on a card.
+///
+/// Blocks while the picker is up, so it runs on its own thread; the clipboard
+/// is a GTK object and is set on the main one.
+fn take_a_screenshot_for_a_card(app: &tauri::AppHandle, endpoint: &CoreEndpoint) {
+    let path = match screenshot::take_one() {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::info!(%error, "no screenshot for the board");
+            return;
+        }
+    };
+
+    // The window first, the clipboard after: on Wayland a program may only
+    // claim the clipboard on the strength of a recent input event of its own,
+    // and the click that asked for this went to the tray, not to the window.
+    // Once the window is up and has the focus it has an event to claim with.
+    show_the_window(app);
+    let for_clipboard = path.clone();
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(900));
+        let _ = handle.run_on_main_thread(move || {
+            match screenshot::put_on_clipboard(&for_clipboard) {
+                Ok(()) => tracing::info!("the screenshot is on the clipboard"),
+                Err(error) => tracing::warn!(%error, "the screenshot did not reach the clipboard"),
+            }
+        });
+    });
+
+    let Ok(bytes) = std::fs::read(&path) else {
+        return;
+    };
+    let name = screenshot::name_for(&path);
+
+    let Ok(client) = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    else {
+        return;
+    };
+
+    let shelved = client
+        .post(format!("http://{}:{}/shelf", endpoint.host, endpoint.port))
+        .query(&[("name", name.as_str())])
+        .header("x-auth-token", &endpoint.token)
+        .header("content-type", "image/png")
+        .body(bytes)
+        .send()
+        .and_then(|response| response.error_for_status())
+        .and_then(|response| response.json::<serde_json::Value>());
+
+    match shelved {
+        Ok(answer) => {
+            if let Some(kept) = answer["name"].as_str() {
+                let _ = client
+                    .post(format!("http://{}:{}/ui/commands", endpoint.host, endpoint.port))
+                    .header("x-auth-token", &endpoint.token)
+                    .json(&serde_json::json!({ "name": format!("shot:{kept}") }))
+                    .send();
+            }
+        }
+        Err(error) => tracing::warn!(%error, "the screenshot did not reach the core"),
+    }
+}
+
 /// The crew in one line, for the tray: how many, and what they are up to.
 fn crew_line(presences: &[String]) -> String {
     if presences.is_empty() {
@@ -255,7 +325,6 @@ struct TraySaid {
 fn build_the_tray(
     app: &tauri::AppHandle,
     id: &str,
-    endpoint: &CoreEndpoint,
     said: &TraySaid,
     plain_icon: Option<&tauri::image::Image<'static>>,
     marked: Option<&tauri::image::Image<'static>>,
@@ -271,6 +340,7 @@ fn build_the_tray(
         .map(|who| MenuItem::with_id(app, format!("open:agent:{}", who.agent_id), needs_you_line(who), true, None::<&str>))
         .collect::<Result<Vec<_>, _>>()?;
     let open = MenuItem::with_id(app, "open", "Open Agentland", true, None::<&str>)?;
+    let shot = MenuItem::with_id(app, "shot", "Take a screenshot for a card", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit — the crew keeps working", true, None::<&str>)?;
     let stop = MenuItem::with_id(app, "stop", "Stop the crew and quit", true, None::<&str>)?;
     let first_break = PredefinedMenuItem::separator(app)?;
@@ -280,7 +350,7 @@ fn build_the_tray(
     for line in &lines {
         items.push(line);
     }
-    items.extend([&first_break as &dyn IsMenuItem<tauri::Wry>, &open, &second_break, &quit, &stop]);
+    items.extend([&first_break as &dyn IsMenuItem<tauri::Wry>, &open, &shot, &second_break, &quit, &stop]);
     let menu = Menu::with_items(app, &items)?;
 
     let tooltip = match said.needing.first() {
@@ -288,41 +358,10 @@ fn build_the_tray(
         None => format!("Agentland — {}", said.crew),
     };
 
-    let for_events = endpoint.clone();
     let mut tray = TrayIconBuilder::with_id(id)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .tooltip(tooltip)
-        .on_menu_event(move |app, event| {
-            let id = event.id().as_ref().to_owned();
-            match id.as_str() {
-                "open" => show_the_window(app),
-                "quit" => app.exit(0),
-                "stop" => {
-                    let handle = app.clone();
-                    let endpoint = for_events.clone();
-                    std::thread::spawn(move || {
-                        stop_the_crew(&endpoint);
-                        handle.exit(0);
-                    });
-                }
-                _ => {
-                    if let Some(opens) = id.strip_prefix("open:") {
-                        show_the_window(app);
-                        let endpoint = for_events.clone();
-                        let opens = opens.to_owned();
-                        std::thread::spawn(move || {
-                            if let Ok(client) = reqwest::blocking::Client::builder()
-                                .timeout(std::time::Duration::from_millis(1500))
-                                .build()
-                            {
-                                send_the_window_to(&client, &endpoint, &opens);
-                            }
-                        });
-                    }
-                }
-            }
-        })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -346,6 +385,50 @@ fn tray_id(made: u64) -> String {
     format!("agentland-{made}")
 }
 
+/// What a line on the tray menu does when it is clicked.
+///
+/// Registered once, on the app, and not on each tray: a handler given to a
+/// tray is kept by the app for good, and lives on after that tray is removed.
+/// With one per rebuild, a click on "take a screenshot" asked the desktop
+/// three times over — one dialog answered, two waiting behind it.
+fn on_tray_menu(endpoint: CoreEndpoint) -> impl Fn(&tauri::AppHandle, tauri::menu::MenuEvent) + Send + Sync + 'static {
+    move |app, event| {
+        let id = event.id().as_ref().to_owned();
+        match id.as_str() {
+            "open" => show_the_window(app),
+            "shot" => {
+                let handle = app.clone();
+                let endpoint = endpoint.clone();
+                std::thread::spawn(move || take_a_screenshot_for_a_card(&handle, &endpoint));
+            }
+            "quit" => app.exit(0),
+            "stop" => {
+                let handle = app.clone();
+                let endpoint = endpoint.clone();
+                std::thread::spawn(move || {
+                    stop_the_crew(&endpoint);
+                    handle.exit(0);
+                });
+            }
+            _ => {
+                if let Some(opens) = id.strip_prefix("open:") {
+                    show_the_window(app);
+                    let endpoint = endpoint.clone();
+                    let opens = opens.to_owned();
+                    std::thread::spawn(move || {
+                        if let Ok(client) = reqwest::blocking::Client::builder()
+                            .timeout(std::time::Duration::from_millis(1500))
+                            .build()
+                        {
+                            send_the_window_to(&client, &endpoint, &opens);
+                        }
+                    });
+                }
+            }
+        }
+    }
+}
+
 /// An icon in the tray, so closing the window puts it away rather than ending it.
 ///
 /// The crew goes on working in the core whether the window is there or not,
@@ -363,7 +446,8 @@ fn put_an_icon_in_the_tray(app: &tauri::App, endpoint: CoreEndpoint) -> tauri::R
         needing: Vec::new(),
     };
     let mut made = 0u64;
-    build_the_tray(app.handle(), &tray_id(made), &endpoint, &said, plain_icon.as_ref(), marked.as_ref())?;
+    app.on_menu_event(on_tray_menu(endpoint.clone()));
+    build_the_tray(app.handle(), &tray_id(made), &said, plain_icon.as_ref(), marked.as_ref())?;
 
     // What the crew is doing, read off the core every few seconds. The asking
     // happens on its own thread; the making has to happen on the main one,
@@ -412,12 +496,11 @@ fn put_an_icon_in_the_tray(app: &tauri::App, endpoint: CoreEndpoint) -> tauri::R
                 let after = tray_id(made);
 
                 let app = handle.clone();
-                let endpoint = endpoint.clone();
                 let plain_icon = plain_icon.clone();
                 let marked = marked.clone();
                 let _ = handle.run_on_main_thread(move || {
                     drop(app.remove_tray_by_id(&before));
-                    if let Err(error) = build_the_tray(&app, &after, &endpoint, &now, plain_icon.as_ref(), marked.as_ref()) {
+                    if let Err(error) = build_the_tray(&app, &after, &now, plain_icon.as_ref(), marked.as_ref()) {
                         tracing::warn!(%error, "cannot put the icon back in the tray");
                     }
                 });
