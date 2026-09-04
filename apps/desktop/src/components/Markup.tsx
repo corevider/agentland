@@ -79,6 +79,7 @@ export function MarkupView({
     const [selected, set_selected] = useState<number | null>(null);
     const [busy, set_busy] = useState(false);
     const [error, set_error] = useState<string | null>(null);
+    const [leaving, set_leaving] = useState(false);
     const image = useRef<HTMLImageElement>(null);
     const canvas = useRef<HTMLCanvasElement>(null);
     const words = useRef<HTMLInputElement>(null);
@@ -112,6 +113,16 @@ export function MarkupView({
         };
     }, [task_id, attachment.name]);
     const changed_or_new = changed || task_id === null;
+
+    // Closing with marks that were never applied asks first: a box drawn
+    // and a line of words written are easy to lose to one key.
+    const close = useCallback(() => {
+        if (changed) {
+            set_leaving(true);
+        } else {
+            on_close();
+        }
+    }, [changed, on_close]);
 
     // The canvas sits over the picture at the picture's shown size, whatever
     // the window makes of it.
@@ -210,12 +221,14 @@ export function MarkupView({
         const key = (event: KeyboardEvent) => {
             const typing = event.target instanceof HTMLInputElement;
             if (event.key === "Escape") {
-                if (draft) {
+                if (leaving) {
+                    set_leaving(false);
+                } else if (draft) {
                     set_draft(null);
                 } else if (typing) {
                     words.current?.blur();
                 } else {
-                    on_close();
+                    close();
                 }
             } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
                 void save();
@@ -226,7 +239,7 @@ export function MarkupView({
         };
         window.addEventListener("keydown", key);
         return () => window.removeEventListener("keydown", key);
-    }, [draft, on_close, save, selected]);
+    }, [close, draft, leaving, save, selected, set_draft]);
 
     const current = selected !== null ? marks[selected] : undefined;
     const hint = MARK_TOOLS.find((entry) => entry.kind === tool)?.hint ?? "";
@@ -275,16 +288,54 @@ export function MarkupView({
                     onClick={() => void save()}
                     title="keep the marks on the card, and a numbered copy for the crew"
                 >
-                    {busy ? "saving…" : task_id === null ? "keep the marks" : "save the marks"}
+                    {busy ? "applying…" : "apply marks"}
                 </button>
                 <button
                     className="rounded px-1.5 font-mono text-[11px] text-shell hover:text-linen"
-                    onClick={on_close}
+                    onClick={close}
                     title="close"
                 >
                     ✕
                 </button>
             </header>
+
+            {leaving ? (
+                <div className="fixed inset-0 z-[80] flex items-center justify-center bg-lagoon-deep/70 p-6" onClick={() => set_leaving(false)}>
+                    <div
+                        className="flex w-full max-w-sm flex-col gap-3 rounded-lg border border-reef bg-lagoon-deep p-4"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <h3 className="font-mono text-[12px] text-linen">Leave without applying the marks?</h3>
+                        <p className="font-mono text-[11px] text-shade">
+                            What you drew or wrote since the last apply will be lost.
+                        </p>
+                        <div className="flex justify-end gap-2">
+                            <button
+                                className="rounded-lg border border-reef px-2 py-1 font-mono text-[11px] text-shell"
+                                onClick={() => set_leaving(false)}
+                            >
+                                keep editing
+                            </button>
+                            <button
+                                className="rounded-lg border border-turquoise px-2 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40"
+                                disabled={busy || !natural}
+                                onClick={() => {
+                                    set_leaving(false);
+                                    void save();
+                                }}
+                            >
+                                apply marks
+                            </button>
+                            <button
+                                className="rounded-lg border border-coral px-2 py-1 font-mono text-[11px] text-coral"
+                                onClick={on_close}
+                            >
+                                discard them
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            ) : null}
 
             <div className="flex min-h-0 flex-1">
             <aside className="flex w-[260px] shrink-0 flex-col border-r border-reef bg-lagoon-deep">
