@@ -305,6 +305,7 @@ mod tests {
             evidence: Vec::new(),
             at: 0,
             position: 0.0,
+            attachments: Vec::new(),
         }
     }
 

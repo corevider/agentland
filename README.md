@@ -1697,3 +1697,60 @@ is built:
 A fifth was not silent, only wasteful: the bundle targets were `deb` and
 `appimage`, both Linux, so the macOS runner compiled for six minutes and
 thirty-nine seconds and then found nothing to package.
+
+
+## A card with a picture on it
+
+A bug is a screenshot before it is a sentence. The board took only sentences: a
+title and one line of brief, typed into a bar above the columns, and once a card
+was written nothing more could be said about it — a typo in the brief meant
+deleting the card and its history with it.
+
+**The card has an editor now.** *New card* opens a panel on the right of the
+board with the title, the brief, the project, and a place for files. Opening a
+card and pressing *edit* opens the same panel over that card. Nothing changes on
+the board until the panel is saved, so a half-written card is not a card.
+
+**Files go on by paste, by drop, or by choosing.** Ctrl+V with a screenshot on
+the clipboard puts it on the card — anywhere on the panel, not only in a field,
+and anywhere on the board when the panel is closed, which opens the panel with
+the picture already on it. Dropping files from the desktop does the same. A
+screenshot arrives from every browser as `image.png`, so it is renamed by the
+moment it was pasted, `pasted-20260904-140509.png`, and a second file with a
+name the card already has gets a number rather than overwriting the first.
+
+**An agent is handed the files by path.** The bytes live under Agentland's own
+folder, `data/attachments/<card>/`, and the card carries the absolute path. The
+brief an agent gets when it takes the card ends with a list of those paths and
+an instruction to read them, which is how ccdo has handed screenshots to Claude
+Code all along: a path in the prompt is a file the engine opens. The commander
+sees the same paths in `task_list` and is told to quote them in any brief it
+writes for the card, so a plan made from a screenshot delegates the screenshot.
+Nothing is inlined; the board stays text.
+
+The window fetches a picture with the token and shows it as an object URL,
+because an `<img>` cannot carry a header. Tauri's own file-drop handling is
+turned off for the window so that a drop reaches the page as files rather than
+as paths the page cannot open. Deleting a card removes its folder.
+
+
+## A pen for the picture, and a camera in the tray
+
+Two things a card with a picture on it was still missing.
+
+**Marks.** Clicking a picture on a card opens it with a pen: a box, an arrow, a
+freehand stroke, a numbered pin, a label, each with a line of words. What is
+drawn is kept twice. The marks themselves go on the attachment, in the
+picture's own pixels, so the brief can say in words where each one is —
+*"1. box from (120, 40) to (340, 90): 'overlaps the menu'"* — and the commander
+sees the same list in `task_list`. And the picture is flattened with the marks
+numbered on it and uploaded as a second file, `shot.marked.png`, derived from
+the first: not shown as a file of its own, replaced whenever the marks change,
+gone when the original goes. The brief hands the agent the marked copy and the
+legend together, so it sees what the person circled and reads what they meant
+by it.
+
+The overlay while drawing and the flattened copy are painted by one routine, so
+they cannot disagree. Pointer moves read the stroke in progress through a ref
+rather than from state: moves arrive faster than renders, and a box drawn
+quickly was lost between them.

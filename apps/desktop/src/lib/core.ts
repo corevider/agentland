@@ -1066,6 +1066,37 @@ export interface Entry {
     at: number;
 }
 
+/// One thing drawn on a picture: a box, an arrow, a freehand stroke, a pin
+/// or a label, with its points in the picture's own pixels and whatever the
+/// person said about it.
+export type MarkKind = "box" | "arrow" | "pen" | "pin" | "label";
+
+export interface Mark {
+    kind: MarkKind;
+    points: [number, number][];
+    text: string;
+}
+
+/// Everything drawn on one picture, and the size it was drawn at.
+export interface Marks {
+    width: number;
+    height: number;
+    marks: Mark[];
+}
+
+/// A file a person put on a card, kept under Agentland's own folder. The path
+/// is what an agent is told; the name is what the window shows.
+export interface Attachment {
+    name: string;
+    path: string;
+    kind: string;
+    bytes: number;
+    at: number;
+    marks?: Marks;
+    /// The attachment this was made from: a marked copy of a picture.
+    derived_from?: string;
+}
+
 export interface Task {
     /// When the card was written. Zero for cards from before this was recorded.
     at?: number;
@@ -1080,6 +1111,7 @@ export interface Task {
     evidence: Entry[];
     /// Where it sits in its column, smallest first.
     position?: number;
+    attachments?: Attachment[];
 }
 
 export interface CommitInfo {
@@ -1122,6 +1154,83 @@ export function create_task(title: string, body: string, repository_id: string):
         method: "POST",
         body: JSON.stringify({ title, body, repository_id }),
     });
+}
+
+export function edit_task(id: string, change: { title?: string; body?: string }): Promise<Task> {
+    return request<Task>(`/tasks/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: JSON.stringify(change),
+    });
+}
+
+/// Put a file on a card. The bytes go as they are; the name rides in the query
+/// and the kind in the content type.
+export async function attach_to_task(id: string, file: File, derived_from?: string): Promise<Task> {
+    const target = await resolve_endpoint();
+    const from = derived_from ? `&derived_from=${encodeURIComponent(derived_from)}` : "";
+    const url = `${base_url(target)}/tasks/${encodeURIComponent(id)}/attachments?name=${encodeURIComponent(file.name)}${from}`;
+    const response = await fetch(url, {
+        method: "POST",
+        headers: {
+            "content-type": file.type || "application/octet-stream",
+            "x-auth-token": target.token,
+        },
+        body: file,
+    });
+
+    if (!response.ok) {
+        throw new Error(`${response.status} ${await response.text()}`);
+    }
+
+    return (await response.json()) as Task;
+}
+
+/// Write down what was drawn on a picture on a card.
+export function set_marks(id: string, name: string, marks: Marks): Promise<Task> {
+    return request<Task>(
+        `/tasks/${encodeURIComponent(id)}/attachments/${encodeURIComponent(name)}/marks`,
+        { method: "PUT", body: JSON.stringify(marks) },
+    );
+}
+
+export function detach_from_task(id: string, name: string): Promise<Task> {
+    return request<Task>(
+        `/tasks/${encodeURIComponent(id)}/attachments/${encodeURIComponent(name)}`,
+        { method: "DELETE" },
+    );
+}
+
+/// The bytes of a file on a card, as something an <img> can show.
+///
+/// An image tag cannot carry the token, so the bytes are fetched with it and
+/// handed over as an object URL. The caller revokes it when the picture goes.
+export async function attachment_object_url(id: string, name: string): Promise<string> {
+    const target = await resolve_endpoint();
+    const url = `${base_url(target)}/tasks/${encodeURIComponent(id)}/attachments/${encodeURIComponent(name)}`;
+    const response = await fetch(url, { headers: { "x-auth-token": target.token } });
+
+    if (!response.ok) {
+        throw new Error(`${response.status} ${await response.text()}`);
+    }
+
+    return URL.createObjectURL(await response.blob());
+}
+
+/// A file left on the shelf by the desktop — a screenshot from the tray —
+/// as something the editor can put on a card.
+export async function shelved_file(name: string): Promise<File> {
+    const target = await resolve_endpoint();
+    const response = await fetch(`${base_url(target)}/shelf/${encodeURIComponent(name)}`, {
+        headers: { "x-auth-token": target.token },
+    });
+
+    if (!response.ok) {
+        throw new Error(`${response.status} ${await response.text()}`);
+    }
+
+    const blob = await response.blob();
+    const shown = name.replace(/^\d+-/, "");
+    return new File([blob], shown, { type: blob.type || "image/png" });
 }
 
 export function move_task(id: string, column: Column): Promise<Task> {

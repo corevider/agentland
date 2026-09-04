@@ -6,6 +6,118 @@ use anyhow::{anyhow, bail, Result};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+/// A file somebody put on a card: a screenshot of the bug, a design, a log.
+///
+/// The bytes live on disk under Agentland's own folder and the card carries
+/// the path. An agent is a process on this machine reading a brief, and a path
+/// in a brief is a file it opens — the same way a screenshot pasted into a
+/// terminal reaches Claude Code. Nothing is inlined, so the board stays text.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct Attachment {
+    pub name: String,
+    /// Absolute, so it reads the same from any worktree.
+    pub path: String,
+    pub kind: String,
+    pub bytes: u64,
+    #[serde(default)]
+    pub at: u64,
+    /// What a person drew on the picture, in the picture's own pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marks: Option<Marks>,
+    /// The attachment this one was made from — a marked-up copy of a
+    /// picture is derived from the picture. Derived files are not shown as
+    /// files of their own, and go when their original goes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derived_from: Option<String>,
+}
+
+impl Attachment {
+    pub fn is_image(&self) -> bool {
+        self.kind.starts_with("image/")
+    }
+}
+
+/// One thing drawn on a picture.
+///
+/// `kind` is one of `box`, `arrow`, `pen`, `pin` and `label`; `points` are
+/// in the picture's pixels, x then y — two corners for a box, from and to
+/// for an arrow, the stroke for a pen, one point for a pin or a label. The
+/// text is what the person said about it, if anything.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct Mark {
+    pub kind: String,
+    #[serde(default)]
+    pub points: Vec<[f64; 2]>,
+    #[serde(default)]
+    pub text: String,
+}
+
+/// Everything drawn on one picture, and the size it was drawn at.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct Marks {
+    pub width: u32,
+    pub height: u32,
+    #[serde(default)]
+    pub marks: Vec<Mark>,
+}
+
+impl Marks {
+    /// The marks in words, numbered as they are drawn on the marked copy.
+    ///
+    /// An agent reads the picture, but a box is a region and a region is
+    /// coordinates: the words say where, and what the person meant by it.
+    pub fn legend(&self) -> Vec<String> {
+        self.marks
+            .iter()
+            .enumerate()
+            .map(|(n, mark)| {
+                let at = |index: usize| {
+                    mark.points
+                        .get(index)
+                        .map(|point| format!("({}, {})", point[0].round(), point[1].round()))
+                        .unwrap_or_else(|| "(?)".to_owned())
+                };
+                let place = match mark.kind.as_str() {
+                    "box" => format!("box from {} to {}", at(0), at(1)),
+                    "arrow" => format!("arrow from {} pointing at {}", at(0), at(1)),
+                    "pen" => {
+                        let (left, top, right, bottom) = bounds(&mark.points);
+                        format!(
+                            "freehand stroke within ({left}, {top}) to ({right}, {bottom})"
+                        )
+                    }
+                    "pin" => format!("pin at {}", at(0)),
+                    "label" => format!("label at {}", at(0)),
+                    other => format!("{other} at {}", at(0)),
+                };
+                let said = mark.text.trim();
+                if said.is_empty() {
+                    format!("{}. {place}", n + 1)
+                } else {
+                    format!("{}. {place}: \"{said}\"", n + 1)
+                }
+            })
+            .collect()
+    }
+}
+
+fn bounds(points: &[[f64; 2]]) -> (f64, f64, f64, f64) {
+    points.iter().fold(
+        (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY),
+        |(left, top, right, bottom), point| {
+            (
+                left.min(point[0]).round(),
+                top.min(point[1]).round(),
+                right.max(point[0]).round(),
+                bottom.max(point[1]).round(),
+            )
+        },
+    )
+}
+
+/// How many bytes one attached file may be.
+pub const MOST_ATTACHMENT_BYTES: usize = 32 * 1024 * 1024;
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Column {
@@ -142,6 +254,118 @@ pub struct Task {
     /// before anyone could order them share zero and fall back to their id.
     #[serde(default)]
     pub position: f64,
+    /// Files put on the card by a person: what the work looks like, or should.
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
+}
+
+impl Task {
+    /// What an agent is told when it is handed this card.
+    ///
+    /// The title, the body, and then every attached file by its path, so the
+    /// agent reads the screenshot rather than being told there was one.
+    pub fn brief(&self) -> String {
+        let mut brief = format!("{}\n\n{}", self.title, self.body);
+
+        let originals: Vec<&Attachment> = self
+            .attachments
+            .iter()
+            .filter(|held| held.derived_from.is_none())
+            .collect();
+
+        if !originals.is_empty() {
+            brief.push_str(
+                "\n\nAttached to this card — open and read each of these before you start, they are part of the brief:",
+            );
+            for held in originals {
+                brief.push_str(&format!("\n- {} ({}, {})", held.path, held.kind, sized(held.bytes)));
+
+                let marked = self
+                    .attachments
+                    .iter()
+                    .find(|other| other.derived_from.as_deref() == Some(held.name.as_str()));
+
+                if let Some(marks) = held.marks.as_ref().filter(|marks| !marks.marks.is_empty()) {
+                    match marked {
+                        Some(copy) => brief.push_str(&format!(
+                            "\n  A person marked this picture up. Read the marked copy, {}, where each mark is numbered; the picture is {}×{} pixels and the marks are:",
+                            copy.path, marks.width, marks.height
+                        )),
+                        None => brief.push_str(&format!(
+                            "\n  A person marked this picture up. It is {}×{} pixels and the marks, in its pixels, are:",
+                            marks.width, marks.height
+                        )),
+                    }
+                    for line in marks.legend() {
+                        brief.push_str(&format!("\n    {line}"));
+                    }
+                }
+            }
+        }
+
+        brief
+    }
+}
+
+/// A size as a person would say it.
+fn sized(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.0} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+/// A file name as it may be written under the card's folder.
+///
+/// Whatever arrived — a path, a name with slashes, dots leading somewhere —
+/// becomes one plain name, because the folder it lands in is chosen here and
+/// not by the sender.
+pub fn safe_name(wanted: &str) -> String {
+    let base = wanted
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .trim_start_matches('.');
+
+    let cleaned: String = base
+        .chars()
+        .map(|c| if c.is_control() || matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
+        .collect();
+
+    if cleaned.is_empty() {
+        "file".to_owned()
+    } else {
+        cleaned
+    }
+}
+
+/// A name no file in the folder has yet: the wanted one, or it with a number.
+fn unclaimed(folder: &std::path::Path, wanted: &str) -> String {
+    if !folder.join(wanted).exists() {
+        return wanted.to_owned();
+    }
+
+    let (stem, extension) = match wanted.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() => (stem, format!(".{extension}")),
+        _ => (wanted, String::new()),
+    };
+
+    (2..)
+        .map(|n| format!("{stem}-{n}{extension}"))
+        .find(|name| !folder.join(name).exists())
+        .expect("the numbers do not run out")
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct EditTask {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub body: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -225,11 +449,184 @@ impl Board {
                 .map(|held| held.position)
                 .fold(0.0_f64, f64::max)
                 + 1.0,
+            attachments: Vec::new(),
         };
 
         state.tasks.insert(id, task.clone());
         self.persist(&state);
         Ok(task)
+    }
+
+    /// Change what a card says.
+    ///
+    /// A card used to be written once: a typo in the brief, or a detail learned
+    /// after the fact, meant deleting it and losing its history.
+    pub fn edit(&self, id: &str, change: EditTask) -> Result<Task> {
+        let mut state = self.state.lock();
+        let task = state
+            .tasks
+            .get_mut(id)
+            .ok_or_else(|| anyhow!("unknown task: {id}"))?;
+
+        if let Some(title) = change.title {
+            if title.trim().is_empty() {
+                bail!("a task needs a title");
+            }
+            task.title = title;
+        }
+
+        if let Some(body) = change.body {
+            task.body = body;
+        }
+
+        let updated = task.clone();
+        self.persist(&state);
+        Ok(updated)
+    }
+
+    /// Where a card's files live.
+    fn folder_of(&self, id: &str) -> PathBuf {
+        self.data_dir.join("attachments").join(id)
+    }
+
+    /// Put a file on a card.
+    ///
+    /// A file derived from another — the marked copy of a picture — keeps the
+    /// name it is given and replaces what was there under it: there is one
+    /// marked copy of a picture, and it is the latest.
+    pub fn attach_file(
+        &self,
+        id: &str,
+        name: &str,
+        kind: &str,
+        bytes: &[u8],
+        derived_from: Option<&str>,
+    ) -> Result<Task> {
+        if bytes.is_empty() {
+            bail!("nothing arrived to attach");
+        }
+        if bytes.len() > MOST_ATTACHMENT_BYTES {
+            bail!("{name} is too large to attach — {} is the most", sized(MOST_ATTACHMENT_BYTES as u64));
+        }
+
+        let mut state = self.state.lock();
+        if !state.tasks.contains_key(id) {
+            bail!("unknown task: {id}");
+        }
+
+        if let Some(original) = derived_from {
+            let task = state.tasks.get(id).expect("checked above");
+            if !task.attachments.iter().any(|held| held.name == original) {
+                bail!("{id} has nothing called {original} to derive from");
+            }
+        }
+
+        let folder = self.folder_of(id);
+        fs::create_dir_all(&folder)?;
+        let name = match derived_from {
+            Some(_) => safe_name(name),
+            None => unclaimed(&folder, &safe_name(name)),
+        };
+        let path = folder.join(&name);
+        fs::write(&path, bytes)?;
+
+        let kind = if kind.trim().is_empty() {
+            "application/octet-stream"
+        } else {
+            kind.trim()
+        };
+
+        let task = state.tasks.get_mut(id).expect("checked above");
+        if derived_from.is_some() {
+            task.attachments.retain(|held| held.name != name);
+        }
+        task.attachments.push(Attachment {
+            name,
+            path: path.to_string_lossy().into_owned(),
+            kind: kind.to_owned(),
+            bytes: bytes.len() as u64,
+            at: now_secs(),
+            marks: None,
+            derived_from: derived_from.map(str::to_owned),
+        });
+
+        let updated = task.clone();
+        self.persist(&state);
+        Ok(updated)
+    }
+
+    /// Write down what a person drew on a picture.
+    pub fn set_marks(&self, id: &str, name: &str, marks: Marks) -> Result<Task> {
+        let mut state = self.state.lock();
+        let task = state
+            .tasks
+            .get_mut(id)
+            .ok_or_else(|| anyhow!("unknown task: {id}"))?;
+
+        let held = task
+            .attachments
+            .iter_mut()
+            .find(|held| held.name == name)
+            .ok_or_else(|| anyhow!("{id} has nothing called {name} on it"))?;
+
+        if !held.is_image() {
+            bail!("{name} is not a picture, and marks go on pictures");
+        }
+
+        held.marks = if marks.marks.is_empty() { None } else { Some(marks) };
+
+        let updated = task.clone();
+        self.persist(&state);
+        Ok(updated)
+    }
+
+    /// Take a file off a card, and off the disk.
+    pub fn detach_file(&self, id: &str, name: &str) -> Result<Task> {
+        let mut state = self.state.lock();
+        let task = state
+            .tasks
+            .get_mut(id)
+            .ok_or_else(|| anyhow!("unknown task: {id}"))?;
+
+        let seat = task
+            .attachments
+            .iter()
+            .position(|held| held.name == name)
+            .ok_or_else(|| anyhow!("{id} has nothing called {name} on it"))?;
+
+        let gone = task.attachments.remove(seat);
+        let _ = fs::remove_file(&gone.path);
+
+        // What was made from it goes with it.
+        let derived: Vec<Attachment> = task
+            .attachments
+            .iter()
+            .filter(|held| held.derived_from.as_deref() == Some(name))
+            .cloned()
+            .collect();
+        for copy in derived {
+            let _ = fs::remove_file(&copy.path);
+            task.attachments.retain(|held| held.name != copy.name);
+        }
+
+        let updated = task.clone();
+        self.persist(&state);
+        Ok(updated)
+    }
+
+    /// The file behind an attachment, if the card has it.
+    pub fn attachment(&self, id: &str, name: &str) -> Result<Attachment> {
+        let state = self.state.lock();
+        let task = state
+            .tasks
+            .get(id)
+            .ok_or_else(|| anyhow!("unknown task: {id}"))?;
+
+        task.attachments
+            .iter()
+            .find(|held| held.name == name)
+            .cloned()
+            .ok_or_else(|| anyhow!("{id} has nothing called {name} on it"))
     }
 
     pub fn move_to(&self, id: &str, column: Column) -> Result<Task> {
@@ -441,6 +838,7 @@ impl Board {
             .tasks
             .remove(id)
             .ok_or_else(|| anyhow!("unknown task: {id}"))?;
+        let _ = fs::remove_dir_all(self.folder_of(id));
         self.persist(&state);
         Ok(())
     }
@@ -473,6 +871,7 @@ impl Board {
 
         let discarded = task.clone();
         state.tasks.remove(id);
+        let _ = fs::remove_dir_all(self.folder_of(id));
         self.persist(&state);
         Ok(discarded)
     }
@@ -607,6 +1006,193 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("agentland-board-{name}"));
         let _ = fs::remove_dir_all(&dir);
         Board::new(dir)
+    }
+
+    #[test]
+    fn a_card_can_be_reworded_without_losing_its_history() {
+        let board = board("edit");
+        let card = a_card(&board, None);
+        board
+            .attach(&card.id, Evidence::Note { text: "seen".into() }, "ada", 3)
+            .expect("a note");
+
+        let changed = board
+            .edit(
+                &card.id,
+                EditTask {
+                    title: Some("document the whole API".into()),
+                    body: Some("every endpoint, with an example".into()),
+                },
+            )
+            .expect("edit");
+
+        assert_eq!(changed.title, "document the whole API");
+        assert_eq!(changed.body, "every endpoint, with an example");
+        assert_eq!(changed.evidence.len(), 1, "the history stays");
+
+        let blank = board.edit(&card.id, EditTask { title: Some("  ".into()), body: None });
+        assert!(blank.is_err(), "a card cannot lose its title");
+    }
+
+    #[test]
+    fn a_file_put_on_a_card_lands_on_disk_and_in_the_brief() {
+        let board = board("attach");
+        let card = a_card(&board, None);
+
+        let with = board
+            .attach_file(&card.id, "../../shot.png", "image/png", b"PNG", None)
+            .expect("attach");
+        assert_eq!(with.attachments.len(), 1);
+        assert_eq!(with.attachments[0].name, "shot.png", "the name is a name, not a path");
+        assert!(with.attachments[0].is_image());
+
+        let path = PathBuf::from(&with.attachments[0].path);
+        assert!(path.is_absolute());
+        assert!(path.starts_with(&board.data_dir), "it lives in Agentland's own folder");
+        assert_eq!(fs::read(&path).expect("written"), b"PNG");
+
+        let again = board
+            .attach_file(&card.id, "shot.png", "image/png", b"PNG2", None)
+            .expect("a second with the same name");
+        assert_eq!(again.attachments[1].name, "shot-2.png", "the first is not overwritten");
+
+        let brief = again.brief();
+        assert!(brief.starts_with("document the endpoint\n\n"));
+        assert!(brief.contains("Attached to this card"));
+        assert!(brief.contains(&again.attachments[0].path), "{brief}");
+        assert!(brief.contains(&again.attachments[1].path), "{brief}");
+
+        let bare = a_card(&board, None).brief();
+        assert!(!bare.contains("Attached"), "nothing attached, nothing said");
+    }
+
+    #[test]
+    fn a_file_taken_off_a_card_leaves_the_disk_too() {
+        let board = board("detach");
+        let card = a_card(&board, None);
+        let with = board
+            .attach_file(&card.id, "log.txt", "text/plain", b"boom", None)
+            .expect("attach");
+        let path = PathBuf::from(&with.attachments[0].path);
+
+        let without = board.detach_file(&card.id, "log.txt").expect("detach");
+        assert!(without.attachments.is_empty());
+        assert!(!path.exists());
+
+        assert!(board.detach_file(&card.id, "log.txt").is_err(), "gone is gone");
+    }
+
+    #[test]
+    fn deleting_a_card_removes_its_files() {
+        let board = board("delete-files");
+        let card = a_card(&board, None);
+        let with = board
+            .attach_file(&card.id, "a.png", "image/png", b"x", None)
+            .expect("attach");
+        let folder = PathBuf::from(&with.attachments[0].path)
+            .parent()
+            .expect("a folder")
+            .to_path_buf();
+        assert!(folder.is_dir());
+
+        board.delete(&card.id).expect("delete");
+        assert!(!folder.exists(), "the folder went with the card");
+    }
+
+    #[test]
+    fn nothing_and_too_much_are_both_refused() {
+        let board = board("limits");
+        let card = a_card(&board, None);
+        assert!(board.attach_file(&card.id, "empty", "text/plain", b"", None).is_err());
+        assert!(board.attach_file("t999", "a", "text/plain", b"x", None).is_err());
+    }
+
+    #[test]
+    fn marks_on_a_picture_are_read_back_in_words_and_the_marked_copy_named() {
+        let board = board("marks");
+        let card = a_card(&board, None);
+        board
+            .attach_file(&card.id, "shot.png", "image/png", b"PNG", None)
+            .expect("attach");
+
+        let marks = Marks {
+            width: 1440,
+            height: 900,
+            marks: vec![
+                Mark { kind: "box".into(), points: vec![[120.4, 40.0], [340.0, 90.6]], text: "overlaps the menu".into() },
+                Mark { kind: "arrow".into(), points: vec![[10.0, 10.0], [200.0, 300.0]], text: String::new() },
+                Mark { kind: "pen".into(), points: vec![[5.0, 9.0], [50.0, 2.0], [30.0, 40.0]], text: "wobbly".into() },
+                Mark { kind: "pin".into(), points: vec![[700.0, 20.0]], text: "here".into() },
+            ],
+        };
+        let with = board.set_marks(&card.id, "shot.png", marks).expect("marks");
+        assert_eq!(with.attachments[0].marks.as_ref().map(|held| held.marks.len()), Some(4));
+
+        let legend = with.attachments[0].marks.as_ref().unwrap().legend();
+        assert_eq!(legend[0], "1. box from (120, 40) to (340, 91): \"overlaps the menu\"");
+        assert_eq!(legend[1], "2. arrow from (10, 10) pointing at (200, 300)");
+        assert_eq!(legend[2], "3. freehand stroke within (5, 2) to (50, 40): \"wobbly\"");
+        assert_eq!(legend[3], "4. pin at (700, 20): \"here\"");
+
+        let brief = with.brief();
+        assert!(brief.contains("1440×900"), "{brief}");
+        assert!(brief.contains("1. box from (120, 40)"), "{brief}");
+        assert!(!brief.contains("marked copy"), "there is no copy yet");
+
+        let copied = board
+            .attach_file(&card.id, "shot.marked.png", "image/png", b"PNG+marks", Some("shot.png"))
+            .expect("the marked copy");
+        assert_eq!(copied.attachments.len(), 2);
+        assert_eq!(copied.attachments[1].derived_from.as_deref(), Some("shot.png"));
+
+        let again = board
+            .attach_file(&card.id, "shot.marked.png", "image/png", b"PNG+more", Some("shot.png"))
+            .expect("the copy again");
+        assert_eq!(again.attachments.len(), 2, "the copy is replaced, not numbered");
+        assert_eq!(fs::read(&again.attachments[1].path).unwrap(), b"PNG+more");
+
+        let brief = again.brief();
+        assert!(brief.contains("Read the marked copy"), "{brief}");
+        assert!(brief.contains(&again.attachments[1].path), "{brief}");
+        let listed = brief.matches("\n- ").count();
+        assert_eq!(listed, 1, "the copy is not listed as a file of its own: {brief}");
+
+        assert!(
+            board.attach_file(&card.id, "x.png", "image/png", b"x", Some("nothing.png")).is_err(),
+            "a copy of nothing is refused"
+        );
+
+        let cleared = board
+            .set_marks(&card.id, "shot.png", Marks { width: 1, height: 1, marks: vec![] })
+            .expect("clear");
+        assert!(cleared.attachments[0].marks.is_none());
+
+        let copy_path = PathBuf::from(&again.attachments[1].path);
+        let without = board.detach_file(&card.id, "shot.png").expect("detach the original");
+        assert!(without.attachments.is_empty(), "the copy went with it");
+        assert!(!copy_path.exists());
+    }
+
+    #[test]
+    fn marks_go_on_pictures_only() {
+        let board = board("marks-text");
+        let card = a_card(&board, None);
+        board
+            .attach_file(&card.id, "log.txt", "text/plain", b"boom", None)
+            .expect("attach");
+        assert!(board
+            .set_marks(&card.id, "log.txt", Marks { width: 1, height: 1, marks: vec![Mark { kind: "pin".into(), points: vec![[1.0, 1.0]], text: String::new() }] })
+            .is_err());
+    }
+
+    #[test]
+    fn names_are_made_safe() {
+        assert_eq!(safe_name("/etc/passwd"), "passwd");
+        assert_eq!(safe_name("..\\..\\win.ini"), "win.ini");
+        assert_eq!(safe_name("...hidden"), "hidden");
+        assert_eq!(safe_name("a:b*c?.png"), "a_b_c_.png");
+        assert_eq!(safe_name(""), "file");
+        assert_eq!(safe_name("Screen Shot 2026-08-13 at 17.20.45.png"), "Screen Shot 2026-08-13 at 17.20.45.png");
     }
 
     fn a_card(board: &Board, worktree: Option<&str>) -> Task {

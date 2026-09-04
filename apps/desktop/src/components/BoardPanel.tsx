@@ -5,10 +5,17 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { use_sideways_wheel } from "@/lib/wheel";
+import { files_from_paste, is_typing_into } from "@/lib/attachments";
+
+import { marked_copy_of, originals } from "@/lib/marks";
+
+import { AttachmentTile } from "./Attachments";
+import { CardEditor } from "./CardEditor";
+import { MarkupView } from "./Markup";
 
 import {
     assign_task,
-    create_task,
+    attachment_object_url,
     delete_task,
     list_agents,
     list_repos,
@@ -17,6 +24,7 @@ import {
     place_task,
     open_pull_request,
     review_worktree,
+    shelved_file,
     type Agent,
     type Column,
     type Entry,
@@ -27,6 +35,11 @@ import {
 } from "@/lib/core";
 
 const COLUMNS: Column[] = ["backlog", "assigned", "working", "review", "ready", "done"];
+
+/// The panel beside the columns: half the board when the board is wide
+/// enough for both, the whole of it when it is not.
+export const ASIDE =
+    "flex w-full min-w-0 flex-col border-l border-reef @[820px]:w-[46%] @[820px]:min-w-[380px]";
 
 function patch_line_color(line: string): string {
     if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ")) {
@@ -61,7 +74,10 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
         : all_tasks;
     const [agents, set_agents] = useState<Agent[]>([]);
     const [repos, set_repos] = useState<Repository[]>([]);
-    const [draft, set_draft] = useState({ title: "", body: "", repository_id: "" });
+    /// The card being written or rewritten, and any files that arrived with
+    /// the request to write it — a screenshot pasted onto the board opens the
+    /// editor with the screenshot already on the card.
+    const [editing, set_editing] = useState<{ task: Task | null; seed: File[] } | null>(null);
     const [review, set_review] = useState<{ task: Task; data: Review } | null>(null);
     /// Where the card being dragged would land: the column, and the card it
     /// would sit above (null meaning the bottom). Drawn, so a drop is aimed
@@ -195,10 +211,6 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
         set_tasks(board);
         set_agents(crew);
         set_repos(repositories);
-        set_draft((current) => ({
-            ...current,
-            repository_id: current.repository_id || repositories[0]?.id || "",
-        }));
     }, []);
 
     // A drag that ends anywhere — dropped, cancelled, let go over the sidebar —
@@ -219,6 +231,73 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
     use_poll(() => {
         list_tasks().then(set_tasks).catch(() => undefined);
     }, 4000, active && !carry);
+
+    // The board reads the crew and the projects once it is on screen. The
+    // editor needs the projects to offer one, and they used to arrive only
+    // after the first action on the board.
+    useEffect(() => {
+        if (active) {
+            refresh().catch(() => undefined);
+        }
+    }, [active, refresh]);
+
+    // A screenshot pasted onto the board is a card waiting to be written: the
+    // editor opens with the picture already on it. With a card open for
+    // reading, the paste goes onto that card; with the editor open, onto the
+    // card being written, wherever the focus happens to be. A paste into a
+    // text field is the field's own, and one the editor already took is done.
+    useEffect(() => {
+        if (!active) {
+            return;
+        }
+
+        const pasted = (event: ClipboardEvent) => {
+            if (event.defaultPrevented || is_typing_into(event.target)) {
+                return;
+            }
+            const files = files_from_paste(event.clipboardData);
+            if (files.length === 0) {
+                return;
+            }
+            event.preventDefault();
+            set_editing((held) => {
+                if (held) {
+                    return { ...held, seed: [...held.seed, ...files] };
+                }
+                const card = opened ? tasks_now.current.find((task) => task.id === opened) ?? null : null;
+                return { task: card, seed: files };
+            });
+        };
+
+        window.addEventListener("paste", pasted);
+        return () => window.removeEventListener("paste", pasted);
+    }, [active, opened]);
+
+    // A screenshot taken from the tray arrives by name, off the shelf, and
+    // goes where a paste would go.
+    useEffect(() => {
+        const heard = (event: Event) => {
+            const command = (event as CustomEvent<string>).detail;
+            if (!command.startsWith("shot:")) {
+                return;
+            }
+
+            shelved_file(command.slice("shot:".length))
+                .then((file) => {
+                    set_editing((held) => {
+                        if (held) {
+                            return { ...held, seed: [...held.seed, file] };
+                        }
+                        const card = opened ? tasks_now.current.find((task) => task.id === opened) ?? null : null;
+                        return { task: card, seed: [file] };
+                    });
+                })
+                .catch((cause) => set_error(cause instanceof Error ? cause.message : String(cause)));
+        };
+
+        window.addEventListener("agentland:command", heard);
+        return () => window.removeEventListener("agentland:command", heard);
+    }, [opened]);
 
     const run = useCallback(
         async (action: () => Promise<unknown>) => {
@@ -284,45 +363,33 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
         set_review({ task, data });
     }, []);
 
+    // A panel on the right — a card, its diff, or the editor — shares the
+    // width with the columns when there is width to share, and takes all of
+    // it when there is not. Measured in the Work preset: at 390px the panel
+    // and the columns both got 380px and drew over each other.
+    const aside_open = Boolean(editing || review || (opened && tasks.some((task) => task.id === opened)));
+
     return (
-        <div className="flex h-full min-h-0 min-w-0 flex-1">
-            <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-3 p-2.5">
-                <div className="flex flex-wrap items-center gap-2">
-                    <input
-                        className="min-w-[110px] flex-1 rounded-md border border-reef bg-lagoon px-2 py-1 font-mono text-[11px]"
-                        placeholder="task title"
-                        value={draft.title}
-                        onChange={(event) => set_draft({ ...draft, title: event.target.value })}
-                    />
-                    <input
-                        className="min-w-[130px] flex-[2] rounded-md border border-reef bg-lagoon px-2 py-1 font-mono text-[11px]"
-                        placeholder="brief for the agent"
-                        value={draft.body}
-                        onChange={(event) => set_draft({ ...draft, body: event.target.value })}
-                    />
-                    <select
-                        className="border border-reef bg-lagoon px-2 py-1 font-mono text-[11px] rounded-lg"
-                        value={draft.repository_id}
-                        onChange={(event) => set_draft({ ...draft, repository_id: event.target.value })}
-                    >
-                        {repos.map((repo) => (
-                            <option key={repo.id} value={repo.id}>
-                                {repo.name}
-                            </option>
-                        ))}
-                    </select>
+        <div className="@container flex h-full min-h-0 min-w-0 flex-1">
+            <div
+                className={`h-full min-h-0 min-w-0 flex-1 flex-col gap-3 p-2.5 ${
+                    aside_open ? "hidden @[820px]:flex" : "flex"
+                }`}
+            >
+                <div className="flex items-center gap-2">
                     <button
                         className="shrink-0 rounded-md border border-turquoise px-2 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40"
-                        disabled={busy || !draft.title.trim() || !draft.repository_id}
-                        onClick={() =>
-                            run(async () => {
-                                await create_task(draft.title.trim(), draft.body, draft.repository_id);
-                                set_draft({ ...draft, title: "", body: "" });
-                            })
-                        }
+                        disabled={busy || repos.length === 0}
+                        onClick={() => set_editing({ task: null, seed: [] })}
+                        title="write a card: a title, a brief, and the screenshots or files that show it"
                     >
-                        add task
+                        + new card
                     </button>
+                    <span className="min-w-0 truncate font-mono text-[10px] text-shade">
+                        {repos.length === 0
+                            ? "add a project first"
+                            : "or paste a screenshot anywhere on the board"}
+                    </span>
                 </div>
 
                 {error ? (
@@ -418,10 +485,37 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                   })()
                 : null}
 
-            {!review && opened && tasks.some((task) => task.id === opened) ? (
+            {editing ? (
+                <CardEditor
+                    key={editing.task?.id ?? "new"}
+                    task={editing.task}
+                    repos={repos}
+                    default_repository={
+                        (repositories ? repos.find((repo) => repositories.includes(repo.id)) : repos[0])?.id ??
+                        repos[0]?.id ??
+                        ""
+                    }
+                    seed={editing.seed}
+                    on_close={() => set_editing(null)}
+                    on_saved={(saved) => {
+                        set_editing(null);
+                        set_opened(saved.id);
+                        void refresh();
+                    }}
+                />
+            ) : null}
+
+            {!editing && !review && opened && tasks.some((task) => task.id === opened) ? (
                 <CardDetail
                     task={tasks.find((task) => task.id === opened)!}
                     on_close={() => set_opened(null)}
+                    on_edit={() => {
+                        const held = tasks.find((task) => task.id === opened);
+                        if (held) {
+                            set_editing({ task: held, seed: [] });
+                        }
+                    }}
+                    on_changed={() => void refresh()}
                     on_review={() => {
                         const held = tasks.find((task) => task.id === opened);
                         if (held) {
@@ -439,8 +533,8 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                 />
             ) : null}
 
-            {review ? (
-                <aside className="flex w-[46%] min-w-[440px] flex-col border-l border-reef">
+            {!editing && review ? (
+                <aside className={`${ASIDE} @[820px]:min-w-[440px]`}>
                     <header className="flex items-center justify-between gap-2 border-b border-reef px-2 py-1">
                         <div className="font-mono text-[11px] text-shell">
                             {review.data.branch} vs {review.data.base} · {review.data.files} files ·{" "}
@@ -615,19 +709,29 @@ function said(entry: Entry): string {
 function CardDetail({
     task,
     on_close,
+    on_edit,
+    on_changed,
     on_review,
     on_merge,
 }: {
     task: Task;
     on_close: () => void;
+    on_edit: () => void;
+    on_changed: () => void;
     on_review: () => void;
     on_merge: () => void;
 }) {
     const now = Math.floor(Date.now() / 1000);
     const finish = task.evidence.filter((entry) => what_of(entry).kind === "finished").at(-1);
+    const attachments = originals(task.attachments);
+    const [shown, set_shown] = useState<string | null>(null);
+    const loader_for = useCallback(
+        (name: string) => () => attachment_object_url(task.id, name),
+        [task.id],
+    );
 
     return (
-        <aside className="flex w-[46%] min-w-[380px] flex-col border-l border-reef">
+        <aside className={ASIDE}>
             <header className="flex items-start justify-between gap-2 border-b border-reef px-2 py-1.5">
                 <div className="min-w-0">
                     <div className="text-[12px] text-linen">{task.title}</div>
@@ -635,17 +739,51 @@ function CardDetail({
                         {task.id} · {task.column} · written {when(task.at ?? 0, now)}
                     </div>
                 </div>
-                <button
-                    className="rounded px-1.5 font-mono text-[11px] text-shell hover:text-linen"
-                    onClick={on_close}
-                >
-                    ✕
-                </button>
+                <div className="flex shrink-0 items-center gap-1">
+                    <button
+                        className="rounded-lg border border-reef px-2 py-0.5 font-mono text-[11px] text-driftwood hover:text-linen"
+                        onClick={on_edit}
+                        title="rewrite the card, or put a screenshot on it"
+                    >
+                        edit
+                    </button>
+                    <button
+                        className="rounded px-1.5 font-mono text-[11px] text-shell hover:text-linen"
+                        onClick={on_close}
+                    >
+                        ✕
+                    </button>
+                </div>
             </header>
 
             <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-2.5">
                 {task.body.trim() ? (
                     <p className="whitespace-pre-wrap text-[11px] text-shell">{task.body}</p>
+                ) : null}
+
+                {attachments.length > 0 ? (
+                    <section>
+                        <h3 className="mb-1 font-mono text-[9px] uppercase tracking-[0.14em] text-shade">
+                            Attached · {attachments.length}
+                        </h3>
+                        <div className="flex flex-wrap gap-1.5">
+                            {attachments.map((held) => (
+                                <AttachmentTile
+                                    key={held.name}
+                                    id={`${task.id}/${held.name}`}
+                                    name={held.name}
+                                    kind={held.kind}
+                                    bytes={held.bytes}
+                                    load={loader_for(held.name)}
+                                    marked={held.marks?.marks.length}
+                                    on_open={() => (held.kind.startsWith("image/") ? set_shown(held.name) : undefined)}
+                                />
+                            ))}
+                        </div>
+                        <p className="mt-1 font-mono text-[9px] text-shade">
+                            whoever takes this card is handed these by path, and reads them · click a picture to draw on it
+                        </p>
+                    </section>
                 ) : null}
 
                 <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-[10px]">
@@ -724,6 +862,21 @@ function CardDetail({
                     ) : null}
                 </div>
             </div>
+
+            {shown && attachments.some((held) => held.name === shown) ? (
+                <MarkupView
+                    key={shown}
+                    task_id={task.id}
+                    attachment={attachments.find((held) => held.name === shown)!}
+                    copy={marked_copy_of(task.attachments, shown)}
+                    load={loader_for(shown)}
+                    on_close={() => set_shown(null)}
+                    on_saved={() => {
+                        set_shown(null);
+                        on_changed();
+                    }}
+                />
+            ) : null}
         </aside>
     );
 }
@@ -802,6 +955,15 @@ function BoardCard({
                                 </div>
                             ) : null}
         
+                            {originals(task.attachments).length > 0 ? (
+                                <div className="mt-1 font-mono text-[10px] text-shell">
+                                    {originals(task.attachments).length} attached
+                                    {originals(task.attachments).some((held) => held.marks?.marks.length)
+                                        ? " · marked up"
+                                        : ""}
+                                </div>
+                            ) : null}
+
                             {task.evidence.length > 0 ? (
                                 <div className="mt-1 font-mono text-[10px] text-palm">
                                     {task.evidence.some((entry) => what_of(entry).kind === "finished")

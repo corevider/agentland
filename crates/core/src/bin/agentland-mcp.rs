@@ -67,7 +67,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "task_list",
-            "description": "List every card on the board with its column, assignee and branch.",
+            "description": "List every card on the board with its column, assignee, branch and attachments. An attachment is a file a person put on the card — a screenshot, a design, a log — given as an absolute path on this machine: open and read it, it is part of what the card asks for, and quote the path in any brief you write for the card. A picture may carry marks — boxes, arrows, pins and labels a person drew on it, in the picture's pixels, with words — and a marked copy (derived_from names the original) with the marks numbered on it: read the copy, and treat each mark as a thing the person pointed at.",
             "inputSchema": { "type": "object", "properties": {} }
         },
         {

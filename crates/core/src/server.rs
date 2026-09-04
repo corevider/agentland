@@ -20,7 +20,7 @@ use crate::approvals::{AnswerApproval, Approval, Approvals, RequestApproval};
 use crate::auth::{permits as scope_permits, Scope as TokenScope, TokenStore};
 use crate::bench::GeneratorSpec;
 use crate::context::{read_context, ContextReading};
-use crate::board::{Board, Column, CreateTask, Evidence, MoveTask, Task};
+use crate::board::{Board, Column, CreateTask, EditTask, Evidence, Marks, MoveTask, Task, MOST_ATTACHMENT_BYTES};
 use crate::crew::{Agent, Crew, Engine, HireRequest};
 use crate::dispatch::{Decision, Dispatch, DispatchState};
 use crate::embed::{EmbedderReport, EmbedderSettings};
@@ -150,7 +150,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .collect();
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list(origins))
-        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE, Method::OPTIONS])
         .allow_headers([
             header::CONTENT_TYPE,
             HeaderName::from_static("x-auth-token"),
@@ -268,7 +268,16 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/agents/{id}/start", post(start_agent))
         .route("/agents/{id}/stop", post(stop_agent))
         .route("/tasks", get(list_tasks).post(create_task))
-        .route("/tasks/{id}", delete(delete_task))
+        .route("/tasks/{id}", delete(delete_task).patch(edit_task))
+        .route(
+            "/tasks/{id}/attachments",
+            post(attach_to_task).layer(axum::extract::DefaultBodyLimit::max(MOST_ATTACHMENT_BYTES)),
+        )
+        .route(
+            "/tasks/{id}/attachments/{name}",
+            get(read_attachment).delete(detach_from_task),
+        )
+        .route("/tasks/{id}/attachments/{name}/marks", axum::routing::put(mark_attachment))
         .route("/tasks/{id}/move", post(move_task))
         .route("/tasks/{id}/place", post(place_task))
         .route("/tasks/{id}/project", post(take_task_to))
@@ -2123,6 +2132,91 @@ async fn create_task(
     Ok(Json(state.board.create(request)?))
 }
 
+/// Change what a card says.
+async fn edit_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(change): Json<EditTask>,
+) -> Result<Json<Task>, ApiError> {
+    Ok(Json(state.board.edit(&id, change)?))
+}
+
+#[derive(Deserialize)]
+struct AttachQuery {
+    name: String,
+    /// The attachment this file was made from, when it is a marked copy.
+    #[serde(default)]
+    derived_from: Option<String>,
+}
+
+/// Put a file on a card: the bytes are the body, the name is in the query and
+/// the kind is the content type. Multipart would carry the same three things
+/// with more ceremony.
+async fn attach_to_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<AttachQuery>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Json<Task>, ApiError> {
+    let kind = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/octet-stream");
+
+    let task = state
+        .board
+        .attach_file(&id, &query.name, kind, &body, query.derived_from.as_deref())?;
+    let name = task
+        .attachments
+        .last()
+        .map(|held| held.name.clone())
+        .unwrap_or_default();
+    note(&state, "card.attached", "a person", &id, &name);
+    Ok(Json(task))
+}
+
+/// The bytes of a file on a card, for the window to show.
+async fn read_attachment(
+    State(state): State<AppState>,
+    Path((id, name)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    let held = state.board.attachment(&id, &name)?;
+    let bytes = tokio::fs::read(&held.path)
+        .await
+        .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", held.name))?;
+
+    Ok((
+        [
+            (header::CONTENT_TYPE, held.kind),
+            (header::CACHE_CONTROL, "private, max-age=3600".to_owned()),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+/// Write down what a person drew on a picture on a card.
+async fn mark_attachment(
+    State(state): State<AppState>,
+    Path((id, name)): Path<(String, String)>,
+    Json(marks): Json<Marks>,
+) -> Result<Json<Task>, ApiError> {
+    let count = marks.marks.len();
+    let task = state.board.set_marks(&id, &name, marks)?;
+    note(&state, "card.marked", "a person", &id, &format!("{name}: {count} mark(s)"));
+    Ok(Json(task))
+}
+
+async fn detach_from_task(
+    State(state): State<AppState>,
+    Path((id, name)): Path<(String, String)>,
+) -> Result<Json<Task>, ApiError> {
+    let task = state.board.detach_file(&id, &name)?;
+    note(&state, "card.detached", "a person", &id, &name);
+    Ok(Json(task))
+}
+
 async fn move_task(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -2369,8 +2463,8 @@ async fn hand_back_what_it_was_holding(state: &AppState, agent: &Agent) {
             state,
             agent,
             &format!(
-                "Picking this up again after Agentland restarted — your pane is new, the work is not.\n\n{}\n\n{}",
-                task.title, task.body
+                "Picking this up again after Agentland restarted — your pane is new, the work is not.\n\n{}",
+                task.brief()
             ),
         )
         .await;
@@ -2613,7 +2707,7 @@ async fn assign_task(
         .ok_or_else(|| ApiError(anyhow::anyhow!("the agent's worktree is gone")))?
         .worktree;
 
-    let brief = compose_brief(&state, &agent, &format!("{}\n\n{}", task.title, task.body)).await;
+    let brief = compose_brief(&state, &agent, &task.brief()).await;
     if matches!(
         hand_the_work_over(&state, &agent, &worktree.path, &brief).await?,
         HandOver::Busy
@@ -2772,7 +2866,7 @@ async fn dispatch_task(
                 .ok_or_else(|| ApiError(anyhow::anyhow!("{}'s worktree is gone", agent.name)))?
                 .worktree;
 
-            let brief = compose_brief(&state, &agent, &format!("{}\n\n{}", task.title, task.body)).await;
+            let brief = compose_brief(&state, &agent, &task.brief()).await;
             if matches!(
                 hand_the_work_over(&state, &agent, &worktree.path, &brief).await?,
                 HandOver::Busy
