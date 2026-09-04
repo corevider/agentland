@@ -1,4 +1,5 @@
 import { use_poll } from "@/lib/poll";
+import { on_a_control } from "@/lib/controls";
 
 import { exactly, when } from "@/lib/when";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
@@ -908,7 +909,7 @@ function BoardCard({
                             // A few pixels of movement separate carrying it from
                             // clicking it open.
                             onPointerDown={(event) => {
-                                if (event.button !== 0) {
+                                if (event.button !== 0 || on_a_control(event.target)) {
                                     return;
                                 }
 
@@ -934,12 +935,20 @@ function BoardCard({
                                 const stop = () => {
                                     window.removeEventListener("pointermove", watch);
                                     window.removeEventListener("pointerup", stop);
+                                    window.removeEventListener("pointercancel", stop);
+                                    window.removeEventListener("blur", stop);
                                 };
 
                                 window.addEventListener("pointermove", watch);
                                 window.addEventListener("pointerup", stop);
+                                window.addEventListener("pointercancel", stop);
+                                window.addEventListener("blur", stop);
                             }}
-                            onClick={on_open}
+                            onClick={(event) => {
+                                if (!on_a_control(event.target)) {
+                                    on_open();
+                                }
+                            }}
                             className="cursor-grab select-none rounded-lg border border-reef bg-lagoon p-2"
                         >
                             <div className="flex items-baseline justify-between gap-2">
