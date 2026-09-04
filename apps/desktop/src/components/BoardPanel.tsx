@@ -476,12 +476,16 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                                                     label: "Hand to",
                                                     disabled: crew_here.length === 0,
                                                     hint: crew_here.length === 0 ? "nobody hired here" : undefined,
-                                                    items: crew_here.map((agent) => ({
-                                                        label: agent.name,
-                                                        hint: agent.role,
-                                                        disabled: agent.id === task.assignee,
-                                                        run: () => run(() => assign_task(task.id, agent.id)),
-                                                    })),
+                                                    items: crew_here.map((agent) => {
+                                                        const elsewhere =
+                                                            task.worktree !== null && agent.worktree !== task.worktree;
+                                                        return {
+                                                            label: agent.name,
+                                                            hint: elsewhere ? `stands in ${agent.worktree}` : agent.role,
+                                                            disabled: agent.id === task.assignee || elsewhere,
+                                                            run: () => run(() => assign_task(task.id, agent.id)),
+                                                        };
+                                                    }),
                                                 },
                                                 ...(task.assignee
                                                     ? [
