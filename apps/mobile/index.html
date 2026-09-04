@@ -130,6 +130,107 @@
             .attention { color: var(--bad); }
             .idle { color: var(--muted); }
 
+            /* The board, one column at a time: a phone is a column wide, and
+               a row of chips says which one is showing and how full the rest
+               are. A card opens in place to be reworded, moved, given a photo
+               or thrown away. */
+            .columns {
+                display: flex;
+                gap: 8px;
+                overflow-x: auto;
+                padding-bottom: 8px;
+                margin-bottom: 8px;
+                scrollbar-width: none;
+            }
+
+            .columns::-webkit-scrollbar {
+                display: none;
+            }
+
+            .columns button {
+                flex: none;
+                padding: 8px 12px;
+                font-size: 13px;
+                font-family: ui-monospace, monospace;
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+                color: var(--muted);
+            }
+
+            .columns button.here {
+                border-color: var(--accent);
+                color: var(--accent);
+            }
+
+            .card.opens .detail {
+                display: -webkit-box;
+                -webkit-line-clamp: 2;
+                -webkit-box-orient: vertical;
+                overflow: hidden;
+            }
+
+            .edit {
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+            }
+
+            .edit input,
+            .edit textarea,
+            .edit select {
+                width: 100%;
+                padding: 10px 12px;
+                border: 1px solid var(--line);
+                border-radius: 10px;
+                background: transparent;
+                color: var(--ink);
+                font: 15px/1.4 system-ui, -apple-system, sans-serif;
+                text-transform: none;
+                letter-spacing: normal;
+            }
+
+            .edit textarea {
+                min-height: 6rem;
+                resize: vertical;
+            }
+
+            .edit label {
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+                font-size: 12px;
+                font-family: ui-monospace, monospace;
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+                color: var(--muted);
+            }
+
+            .edit .photos {
+                margin-top: 0;
+            }
+
+            .edit .photos .add {
+                width: 4.5rem;
+                height: 4.5rem;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                border: 1px dashed var(--line);
+                border-radius: 0.6rem;
+                color: var(--muted);
+                cursor: pointer;
+            }
+
+            .edit .photos .add svg {
+                width: 1.5rem;
+                height: 1.5rem;
+            }
+
+            .edit .actions button {
+                padding: 10px;
+                font-size: 14px;
+            }
+
             .empty {
                 color: var(--muted);
                 font-size: 14px;
@@ -1370,33 +1471,264 @@
                 }
             }
 
-            function render_board(tasks) {
-                const holder = document.getElementById("board");
-                const live = tasks.filter((task) => task.column !== "done");
+            const COLUMNS = ["backlog", "assigned", "working", "review", "ready", "done"];
+            let board_column = "backlog";
+            let last_tasks = [];
+            /// The card open for editing, with what has been typed so far. The
+            /// board is drawn again every few seconds, and a draft in the DOM
+            /// alone would be drawn over.
+            let editing = null;
+            const thumbs = new Map();
 
-                if (live.length === 0) {
-                    holder.innerHTML = '<p class="empty">No cards.</p>';
+            function in_order(tasks) {
+                return [...tasks].sort((one, other) => {
+                    const gap = (one.position ?? 0) - (other.position ?? 0);
+                    return gap !== 0 ? gap : one.id.localeCompare(other.id);
+                });
+            }
+
+            function originals_of(task) {
+                return (task.attachments ?? []).filter((held) => !held.derived_from);
+            }
+
+            function render_board(tasks) {
+                last_tasks = tasks;
+                const holder = document.getElementById("board");
+
+                if (editing) {
                     return;
                 }
 
-                holder.innerHTML = live
-                    .map(
-                        (task) => `
-                        <div class="card">
+                const chips = COLUMNS.map((column) => {
+                    const count = tasks.filter((task) => task.column === column).length;
+                    return `<button class="${column === board_column ? "here" : ""}" data-column="${column}">${column} · ${count}</button>`;
+                }).join("");
+
+                const shown = in_order(tasks.filter((task) => task.column === board_column));
+                const cards =
+                    shown.length === 0
+                        ? '<p class="empty">Nothing here.</p>'
+                        : shown
+                              .map((task) => {
+                                  const files = originals_of(task);
+                                  const marked = files.some((held) => held.marks?.marks?.length);
+                                  return `
+                        <div class="card opens" data-task="${escape(task.id)}">
                             <div class="row">
                                 <strong>${escape(task.title)}</strong>
-                                <span class="state">${escape(task.column)}</span>
+                                <span class="chev">${escape(task.id)}</span>
                             </div>
+                            ${task.body?.trim() ? `<div class="detail">${escape(task.body)}</div>` : ""}
                             <div class="detail">${escape(task.assignee ?? "unassigned")}${
                                 task.branch ? ` · ${escape(task.branch)}` : ""
-                            }${
-                                (task.attachments ?? []).filter((held) => !held.derived_from).length > 0
-                                    ? ` · ${(task.attachments ?? []).filter((held) => !held.derived_from).length} attached`
-                                    : ""
-                            }</div>
-                        </div>`,
-                    )
-                    .join("");
+                            }${files.length > 0 ? ` · ${files.length} attached${marked ? ", marked up" : ""}` : ""}</div>
+                        </div>`;
+                              })
+                              .join("");
+
+                holder.innerHTML = `<div class="columns">${chips}</div>${cards}`;
+
+                for (const chip of holder.querySelectorAll(".columns button")) {
+                    chip.addEventListener("click", () => {
+                        board_column = chip.dataset.column;
+                        render_board(last_tasks);
+                    });
+                }
+
+                for (const card of holder.querySelectorAll(".card.opens")) {
+                    card.addEventListener("click", () => {
+                        const task = last_tasks.find((held) => held.id === card.dataset.task);
+                        if (task) {
+                            open_card(task);
+                        }
+                    });
+                }
+            }
+
+            /// A picture on a card, fetched with the token: an image tag cannot
+            /// carry a header.
+            async function thumb_of(task_id, name) {
+                const key = `${task_id}/${name}`;
+                if (thumbs.has(key)) {
+                    return thumbs.get(key);
+                }
+                const response = await fetch(
+                    `/tasks/${encodeURIComponent(task_id)}/attachments/${encodeURIComponent(name)}`,
+                    { headers: { "x-auth-token": held_token } },
+                );
+                if (!response.ok) {
+                    throw new Error(await response.text());
+                }
+                const url = URL.createObjectURL(await response.blob());
+                thumbs.set(key, url);
+                return url;
+            }
+
+            function open_card(task) {
+                editing = {
+                    id: task.id,
+                    title: task.title,
+                    body: task.body ?? "",
+                    column: task.column,
+                    photos: [],
+                    busy: false,
+                    note: "",
+                };
+                render_editor(task);
+            }
+
+            function close_card() {
+                if (editing) {
+                    for (const held of editing.photos) {
+                        URL.revokeObjectURL(held.url);
+                    }
+                }
+                editing = null;
+                render_board(last_tasks);
+            }
+
+            function render_editor(task) {
+                const holder = document.getElementById("board");
+                const draft = editing;
+                const files = originals_of(task);
+
+                holder.innerHTML = `
+                    <div class="card">
+                        <div class="edit">
+                            <div class="row">
+                                <span class="chev">${escape(task.id)} · ${escape(task.assignee ?? "unassigned")}${
+                                    task.branch ? ` · ${escape(task.branch)}` : ""
+                                }</span>
+                            </div>
+                            <label>title<input id="edit-title" type="text" value="${escape(draft.title)}" /></label>
+                            <label>brief<textarea id="edit-body">${escape(draft.body)}</textarea></label>
+                            <label>column<select id="edit-column">${COLUMNS.map(
+                                (column) => `<option value="${column}" ${column === draft.column ? "selected" : ""}>${column}</option>`,
+                            ).join("")}</select></label>
+                            <label>attached · ${files.length + draft.photos.length}</label>
+                            <div class="photos" id="edit-photos"></div>
+                            <p class="empty" id="edit-note">${escape(draft.note)}</p>
+                            <div class="actions">
+                                <button id="edit-close">close</button>
+                                <button id="edit-delete" class="reject">delete</button>
+                                <button id="edit-save" class="approve">save</button>
+                            </div>
+                        </div>
+                    </div>`;
+
+                const strip = document.getElementById("edit-photos");
+                for (const held of files) {
+                    const shot = document.createElement("div");
+                    shot.className = "shot";
+                    if (held.kind.startsWith("image/")) {
+                        const image = document.createElement("img");
+                        image.alt = held.name;
+                        thumb_of(task.id, held.name)
+                            .then((url) => {
+                                image.src = url;
+                            })
+                            .catch(() => undefined);
+                        shot.append(image);
+                    } else {
+                        shot.innerHTML = `<div class="add" title="${escape(held.name)}">${escape(held.kind.split("/")[1] ?? "file")}</div>`;
+                    }
+                    strip.append(shot);
+                }
+                draft.photos.forEach((held, index) => {
+                    const shot = document.createElement("div");
+                    shot.className = "shot";
+                    const image = document.createElement("img");
+                    image.src = held.url;
+                    image.alt = held.file.name;
+                    const drop = document.createElement("button");
+                    drop.className = "reject drop";
+                    drop.textContent = "×";
+                    drop.addEventListener("click", () => {
+                        URL.revokeObjectURL(held.url);
+                        draft.photos.splice(index, 1);
+                        keep_typed();
+                        render_editor(task);
+                    });
+                    shot.append(image, drop);
+                    strip.append(shot);
+                });
+                const add = document.createElement("label");
+                add.className = "add";
+                add.title = "take a photo for this card";
+                add.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><input type="file" accept="image/*" capture="environment" multiple hidden />';
+                add.querySelector("input").addEventListener("change", (event) => {
+                    for (const file of event.target.files ?? []) {
+                        draft.photos.push({ file, url: URL.createObjectURL(file) });
+                    }
+                    keep_typed();
+                    render_editor(task);
+                });
+                strip.append(add);
+
+                function keep_typed() {
+                    draft.title = document.getElementById("edit-title").value;
+                    draft.body = document.getElementById("edit-body").value;
+                    draft.column = document.getElementById("edit-column").value;
+                }
+
+                document.getElementById("edit-close").addEventListener("click", close_card);
+
+                document.getElementById("edit-delete").addEventListener("click", async () => {
+                    if (!confirm(`Delete ${task.id}, "${task.title}"? Its history goes with it.`)) {
+                        return;
+                    }
+                    try {
+                        await api(`/tasks/${encodeURIComponent(task.id)}`, { method: "DELETE" });
+                        editing = null;
+                        await refresh();
+                    } catch (cause) {
+                        document.getElementById("edit-note").textContent = cause.message;
+                    }
+                });
+
+                document.getElementById("edit-save").addEventListener("click", async () => {
+                    keep_typed();
+                    const title = draft.title.trim();
+                    if (!title) {
+                        document.getElementById("edit-note").textContent = "A card needs a title.";
+                        return;
+                    }
+                    const save = document.getElementById("edit-save");
+                    save.disabled = true;
+                    save.textContent = "saving…";
+
+                    try {
+                        const change = {};
+                        if (title !== task.title) {
+                            change.title = title;
+                        }
+                        if (draft.body !== (task.body ?? "")) {
+                            change.body = draft.body;
+                        }
+                        if (Object.keys(change).length > 0) {
+                            await api(`/tasks/${encodeURIComponent(task.id)}`, {
+                                method: "PATCH",
+                                body: JSON.stringify(change),
+                            });
+                        }
+                        if (draft.column !== task.column) {
+                            await api(`/tasks/${encodeURIComponent(task.id)}/move`, {
+                                method: "POST",
+                                body: JSON.stringify({ column: draft.column }),
+                            });
+                        }
+                        for (const [index, held] of draft.photos.entries()) {
+                            await attach(task.id, await shrunk(held.file, index));
+                        }
+                        board_column = draft.column;
+                        close_card();
+                        await refresh();
+                    } catch (cause) {
+                        document.getElementById("edit-note").textContent = cause.message;
+                        save.disabled = false;
+                        save.textContent = "save";
+                    }
+                });
             }
 
             // Speaking from the phone, because the machine running the crew has
