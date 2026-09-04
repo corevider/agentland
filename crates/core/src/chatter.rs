@@ -28,15 +28,34 @@ pub fn last_words(frame: &str, wanted: usize) -> Vec<String> {
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .filter(|line| !is_furniture(line))
-        .map(|line| line.trim_start_matches(['❯', '>', '·', '⏵']).trim().to_owned())
+        .map(|line| line.trim_start_matches(['❯', '>', '·', '⏵', '●', '○', '◐', '◑', '◒', '◓']).trim().to_owned())
         .filter(|line| line.chars().count() > 3)
+        .filter(|line| !is_a_fragment(line))
         .collect();
 
-    // Consecutive redraws of the same line are one line.
-    said.dedup();
+    // A line drawn again is said once, wherever it was drawn: a notice the
+    // engine repaints whole shows up as the same paragraph twice, and the
+    // later copy is the one still on screen.
+    let mut kept: Vec<String> = Vec::new();
+    for line in said.drain(..).rev() {
+        if !kept.contains(&line) {
+            kept.push(line);
+        }
+    }
+    kept.reverse();
 
-    let from = said.len().saturating_sub(wanted);
-    said.split_off(from)
+    let from = kept.len().saturating_sub(wanted);
+    kept.split_off(from)
+}
+
+/// A piece of a word the pane was in the middle of drawing — "onnecting…" —
+/// or a bare status word: one token, no spaces, nothing a person said.
+fn is_a_fragment(line: &str) -> bool {
+    if line.contains(char::is_whitespace) {
+        return false;
+    }
+    let lowered = line.to_lowercase();
+    lowered.ends_with('…') || matches!(lowered.as_str(), "effort" | "thinking" | "connecting" | "working")
 }
 
 /// Whether a line is the interface rather than the conversation.
@@ -72,6 +91,15 @@ fn is_furniture(line: &str) -> bool {
         "/rcconnecting",
         "checkingforupdates",
         "cwd:",
+        // Claude Code's notice that another terminal holds Remote Control,
+        // wrapped over four lines and repainted whole.
+        "remotecontrol",
+        "/remote-control",
+        "moveittothisterminal",
+        "thisterminalcan'tsee",
+        "standingdown",
+        "(code4090)",
+        "sessionsonothermachines",
     ];
 
     if PAINTED.iter().any(|held| lowered.contains(held)) {
@@ -141,6 +169,44 @@ tmux focus-events off · add 'set -g focus-events on'
         let said = last_words(&frame, 3);
 
         assert_eq!(said, vec!["line number 18", "line number 19", "line number 20"]);
+    }
+
+    #[test]
+    fn the_remote_control_notice_and_the_status_words_are_not_words() {
+        let frame = "\
+● Remote Control not started here · another Claude Code on this machine (started 7s
+ago) already has Remote Control for this conversation, so this terminal can't see
+your sessions on other machines and they can't reach it · run /remote-control to
+move it to this terminal
+● Remote Control disconnected — another connection took over (code 4090)
+● I moved the listener into the worktree and the tests pass.
+● Remote Control not started here · another Claude Code on this machine (started 7s
+ago) already has Remote Control for this conversation, so this terminal can't see
+your sessions on other machines and they can't reach it · run /remote-control to
+move it to this terminal
+⏵⏵ bypass permissions on (shift+tab to cycle) · for agents ──────
+effort
+rc
+c
+onnecting…
+❯ what next?
+";
+        let said = last_words(frame, 10);
+        assert_eq!(
+            said,
+            vec![
+                "I moved the listener into the worktree and the tests pass.".to_owned(),
+                "what next?".to_owned()
+            ],
+            "{said:?}"
+        );
+    }
+
+    #[test]
+    fn a_paragraph_repainted_whole_is_said_once() {
+        let frame = "first thing said\nsecond thing said\nfirst thing said\nsecond thing said\nand the end\n";
+        let said = last_words(frame, 10);
+        assert_eq!(said, vec!["first thing said", "second thing said", "and the end"]);
     }
 
     #[test]
