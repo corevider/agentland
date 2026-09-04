@@ -1,5 +1,6 @@
 import { use_poll } from "@/lib/poll";
 import { on_a_control } from "@/lib/controls";
+import { use_services } from "@/workspace/registry";
 
 import { exactly, when } from "@/lib/when";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
@@ -24,6 +25,7 @@ import {
     merge_worktree,
     place_task,
     open_pull_request,
+    release_task,
     review_worktree,
     shelved_file,
     type Agent,
@@ -305,6 +307,8 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
         return () => window.removeEventListener("agentland:command", heard);
     }, [opened]);
 
+    const { open_menu } = use_services();
+
     const run = useCallback(
         async (action: () => Promise<unknown>) => {
             set_busy(true);
@@ -449,6 +453,51 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                                         on_assign={(agent_id) => run(() => assign_task(task.id, agent_id))}
                                         on_review={() => void open_review(task)}
                                         on_delete={() => run(() => delete_task(task.id))}
+                                        on_menu={(event) => {
+                                            const crew_here = agents.filter(
+                                                (agent) => agent.repository_id === task.repository_id,
+                                            );
+                                            open_menu(event, `${task.id} · ${task.title}`, [
+                                                { label: "Open", run: () => set_opened(task.id) },
+                                                ...(task.worktree
+                                                    ? [{ label: "Review the work", run: () => void open_review(task) }]
+                                                    : []),
+                                                {
+                                                    label: "Move to",
+                                                    items: COLUMNS.filter((column) => column !== task.column).map(
+                                                        (column) => ({
+                                                            label: column,
+                                                            run: () => run(() => place_task(task.id, column)),
+                                                        }),
+                                                    ),
+                                                },
+                                                {
+                                                    label: "Hand to",
+                                                    disabled: crew_here.length === 0,
+                                                    hint: crew_here.length === 0 ? "nobody hired here" : undefined,
+                                                    items: crew_here.map((agent) => ({
+                                                        label: agent.name,
+                                                        hint: agent.role,
+                                                        disabled: agent.id === task.assignee,
+                                                        run: () => run(() => assign_task(task.id, agent.id)),
+                                                    })),
+                                                },
+                                                ...(task.assignee
+                                                    ? [
+                                                          {
+                                                              label: `Take back from ${task.assignee}`,
+                                                              hint: "it returns to the backlog",
+                                                              run: () => run(() => release_task(task.id)),
+                                                          },
+                                                      ]
+                                                    : []),
+                                                {
+                                                    label: "Delete",
+                                                    danger: true,
+                                                    run: () => run(() => delete_task(task.id)),
+                                                },
+                                            ]);
+                                        }}
                                     />
                                 )}
                             />
@@ -896,6 +945,7 @@ function BoardCard({
     on_assign,
     on_review,
     on_delete,
+    on_menu,
 }: {
     task: Task;
     agents: Agent[];
@@ -904,6 +954,7 @@ function BoardCard({
     on_assign: (agent_id: string) => void;
     on_review: () => void;
     on_delete: () => void;
+    on_menu?: (event: React.MouseEvent) => void;
 }) {
     return (
         <article
@@ -955,6 +1006,7 @@ function BoardCard({
                                     on_open();
                                 }
                             }}
+                            onContextMenu={(event) => on_menu?.(event)}
                             className="cursor-grab select-none rounded-lg border border-reef bg-lagoon p-2"
                         >
                             <div className="flex items-baseline justify-between gap-2">

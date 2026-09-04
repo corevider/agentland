@@ -1251,6 +1251,11 @@ export function assign_task(id: string, agent_id: string): Promise<Task> {
     });
 }
 
+/// Take a card back from whoever holds it; it returns to the backlog.
+export function release_task(id: string): Promise<Task> {
+    return request<Task>(`/tasks/${id}/assign`, { method: "DELETE" });
+}
+
 export function delete_task(id: string): Promise<void> {
     return request<void>(`/tasks/${id}`, { method: "DELETE" });
 }
