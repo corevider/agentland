@@ -509,7 +509,6 @@
 
             /* Held down, a button is a button: without this, holding it starts
                selecting the label and the phone offers to copy it. */
-            #record,
             #scan,
             #gate .big {
                 user-select: none;
@@ -521,14 +520,8 @@
             /* A microphone owns the gesture on it: with the browser free to
                read an upward drag as a scroll, sliding up to lock scrolled the
                page and the recording went with it. */
-            #record,
             #bar .speak button {
                 touch-action: none;
-            }
-
-            #record.listening {
-                border-color: var(--bad);
-                color: var(--bad);
             }
         </style>
         <style>
@@ -748,6 +741,10 @@
                the microphone, and what it took shows before it is sent. */
             #voice .row.do #snap {
                 flex: 0 0 3.5rem;
+            }
+
+            #voice .row.do #send {
+                flex: 1;
             }
 
             #snap svg {
@@ -1206,7 +1203,6 @@
                     <textarea id="said" rows="3" placeholder="Tap the microphone on your keyboard, or hold the button below."></textarea>
                     <div id="photos" class="photos" hidden></div>
                     <div class="row do">
-                        <button id="record" class="approve hold" hidden aria-label="hold to speak"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/></svg> <span>Hold to speak</span></button>
                         <label id="snap" class="approve" aria-label="take a photo for a card" title="take a photo for a card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><input id="photo-in" type="file" accept="image/*" capture="environment" multiple hidden /></label>
                         <button id="send" class="approve wide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 3L3 10l7 3 3 7z"/></svg> Send</button>
                     </div>
@@ -2478,14 +2474,12 @@
             // and this device has a better one anyway.
             const said = document.getElementById("said");
             const whom = document.getElementById("whom");
-            const record = document.getElementById("record");
             const voice_note = document.getElementById("voice-note");
 
             // getUserMedia needs a secure page. Over plain http on a home
             // network there is none, so the keyboard's own dictation is the way
             // in and the button stays hidden rather than failing when pressed.
             const can_record = Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
-            record.hidden = !can_record;
 
             if (!can_record) {
                 voice_note.textContent =
@@ -2522,7 +2516,7 @@
             }
 
             function looks(state) {
-                for (const button of [record, speak]) {
+                for (const button of [speak]) {
                     button.classList.toggle("listening", state === "listening" && !locked);
                     button.classList.toggle("locked", locked && state !== "reading");
                 }
@@ -2531,7 +2525,7 @@
             }
 
             function reading(yes) {
-                for (const button of [record, speak]) {
+                for (const button of [speak]) {
                     button.classList.toggle("reading", yes);
                 }
 
@@ -2643,7 +2637,7 @@
             // are, and the one under the thumb.
             const speak = document.getElementById("speak");
 
-            for (const button of [record, speak]) {
+            for (const button of [speak]) {
                 button.addEventListener("pointerdown", (event) => {
                     event.preventDefault();
 
