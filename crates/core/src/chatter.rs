@@ -25,7 +25,7 @@ pub fn on_screen(raw: &[u8], rows: u16, cols: u16) -> String {
 pub fn last_words(frame: &str, wanted: usize) -> Vec<String> {
     let mut said: Vec<String> = frame
         .lines()
-        .map(str::trim)
+        .map(unruled)
         .filter(|line| !line.is_empty())
         .filter(|line| !is_furniture(line))
         .map(|line| line.trim_start_matches(['❯', '>', '·', '⏵', '●', '○', '◐', '◑', '◒', '◓']).trim().to_owned())
@@ -48,13 +48,32 @@ pub fn last_words(frame: &str, wanted: usize) -> Vec<String> {
     kept.split_off(from)
 }
 
+/// Whether a character is part of a rule or a border rather than a word.
+fn is_a_rule(c: char) -> bool {
+    matches!(c, '─' | '━' | '╌' | '╍' | '═' | '⎯' | '▁'..='▓' | '▐' | '▛' | '▜' | '▝' | '▗' | '│' | '┃' | '╭' | '╮' | '╯' | '╰')
+}
+
+/// A screen row with the rule it was drawn over taken out.
+///
+/// An engine draws a rule across the row and then writes its words on top,
+/// moving the cursor past the spaces, so what is left reads
+/// "──another─device─is─standing─down──": the words, threaded on the rule.
+fn unruled(line: &str) -> String {
+    let spaced: String = line.chars().map(|c| if is_a_rule(c) { ' ' } else { c }).collect();
+    spaced.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// A piece of a word the pane was in the middle of drawing — "onnecting…" —
-/// or a bare status word: one token, no spaces, nothing a person said.
+/// a bare status word, or the crumbs of a status line: nothing a person said.
 fn is_a_fragment(line: &str) -> bool {
-    if line.contains(char::is_whitespace) {
+    let lowered = line.to_lowercase();
+    let words: Vec<&str> = lowered.split_whitespace().collect();
+    if words.len() <= 2 && words.iter().all(|word| word.chars().count() <= 3) {
+        return true;
+    }
+    if words.len() > 1 {
         return false;
     }
-    let lowered = line.to_lowercase();
     lowered.ends_with('…') || matches!(lowered.as_str(), "effort" | "thinking" | "connecting" | "working")
 }
 
@@ -100,6 +119,8 @@ fn is_furniture(line: &str) -> bool {
         "standingdown",
         "(code4090)",
         "sessionsonothermachines",
+        "focus-events",
+        "anotherconnectiontookover",
     ];
 
     if PAINTED.iter().any(|held| lowered.contains(held)) {
@@ -200,6 +221,22 @@ onnecting…
             ],
             "{said:?}"
         );
+    }
+
+    #[test]
+    fn words_threaded_on_a_rule_are_read_and_the_notice_among_them_is_not() {
+        let frame = "\
+──another─device─or─Claude─Code─session)─—─this─device─is─standing─down─(code─4090)──────────
+─Remote─Control─disconnected─—─another─connection─took─over─this─session─(usually───────────
+─────────────────────────
+ontmuxifocus-events off · add 'set -g focus-events on' to ~/.tmux.conf and reattach for fo…
+──⏵⏵─bypass─permissions─on (shift+tab─to─cycle)─·─←─for─agents───────────────────────────────
+igh                                                                                         /
+rc                                                                                          c
+──I─wrote─the─tests─and─they─pass.──────
+";
+        let said = last_words(frame, 10);
+        assert_eq!(said, vec!["I wrote the tests and they pass.".to_owned()], "{said:?}");
     }
 
     #[test]
