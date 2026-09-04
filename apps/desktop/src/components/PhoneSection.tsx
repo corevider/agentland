@@ -39,42 +39,43 @@ export function PhoneSection() {
 
     return (
         <section className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-col gap-1.5">
                 {way.door === "closed" ? (
                     <>
+                        <p className="font-mono text-[11px] text-sun">
+                            Phone access is off. The core answers only this machine, so there is
+                            nothing to scan yet.
+                        </p>
                         <button
-                            className="rounded-lg border border-turquoise px-2 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40"
+                            className="self-start rounded-lg border border-turquoise px-2 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40"
                             disabled={busy}
                             onClick={() => void swing(true)}
-                            title="answer this machine's network address as well, so a phone can reach the core"
+                            title="also answer this machine's network address, so a phone on the same network can reach the core"
                         >
-                            {busy ? "opening…" : "let phones in"}
+                            {busy ? "turning phone access on…" : "turn phone access on"}
                         </button>
-                        <span className="font-mono text-[11px] text-sun">
-                            The core answers only this machine, so a code for it would go nowhere.
-                        </span>
                     </>
                 ) : way.door === "open" ? (
                     <>
+                        <p className="font-mono text-[11px] text-palm">
+                            Phone access is on. Phones on this network can reach the core; scan the
+                            code below or type the address. Nothing running is disturbed either way.
+                        </p>
                         <button
-                            className="rounded-lg border border-coral px-2 py-1 font-mono text-[11px] text-coral disabled:opacity-40"
+                            className="self-start rounded-lg border border-coral px-2 py-1 font-mono text-[11px] text-coral disabled:opacity-40"
                             disabled={busy}
                             onClick={() => void swing(false)}
-                            title="stop answering the network; the window keeps working"
+                            title="stop answering the network; this window keeps working"
                         >
-                            {busy ? "closing…" : "close the door"}
+                            {busy ? "turning phone access off…" : "turn phone access off"}
                         </button>
-                        <span className="font-mono text-[11px] text-palm">
-                            Phones on this network can reach the core. Nothing running is disturbed
-                            either way.
-                        </span>
                     </>
                 ) : (
-                    <span className="font-mono text-[11px] text-shade">
-                        The core was started answering the network
-                        (<span className="text-linen">AGENTLAND_HOST</span>), so the door is open
-                        for as long as it runs.
-                    </span>
+                    <p className="font-mono text-[11px] text-shade">
+                        Phone access is on by configuration: the core was started with{" "}
+                        <span className="text-linen">AGENTLAND_HOST</span> set, so it answers the
+                        network for as long as it runs. Start it without that to turn it off.
+                    </p>
                 )}
             </div>
 
