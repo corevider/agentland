@@ -201,7 +201,12 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
             queue = [];
             queued_bytes = 0;
 
-            if (payload.byteLength > TAIL_LIMIT_BYTES) {
+            // A pane somebody is reading is drawn whole. Collapsing a frame to
+            // its tail is for seven other panes streaming a build log; done to
+            // the pane being typed into, it cut a full-screen redraw in half
+            // and left the screen wrong until the engine drew it again.
+            const read_closely = focused_ref.current || crowned_ref.current;
+            if (!read_closely && payload.byteLength > TAIL_LIMIT_BYTES) {
                 metrics.collapsed_bytes += payload.byteLength - TAIL_LIMIT_BYTES;
                 payload = collapse_to_tail(payload);
             }
