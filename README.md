@@ -1807,3 +1807,9 @@ numbered picture whichever screen drew it. The two painters are the same
 routine written twice, once in TypeScript and once in the page's own script;
 the phone is one file served from disk, and a shared module would cost it
 that.
+
+On the phone, where the words go is chosen beside the heading — *to the
+project's goal*, *as a new card*, *to Ada* — and the row below is for saying and
+sending. Tapping an agent opens what it is doing: the card in its hand, why it
+is in the state it is, and the last lines on its screen, read off the pane the
+way the commander's are, then the skills it carries.

@@ -67,6 +67,43 @@
                 color: var(--muted);
             }
 
+            /* Where the words go, beside the heading that says they are words:
+               the row of buttons below is for saying and sending. */
+            h2 .whom {
+                float: right;
+                max-width: 58%;
+                margin-top: -6px;
+                padding: 6px 1.6rem 6px 10px;
+                border: 1px solid var(--line);
+                border-radius: 8px;
+                background: transparent;
+                color: var(--ink);
+                font: 13px system-ui, -apple-system, sans-serif;
+                text-transform: none;
+                letter-spacing: normal;
+                appearance: none;
+                -webkit-appearance: none;
+                background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2391a3a1' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+                background-repeat: no-repeat;
+                background-position: right 8px center;
+                background-size: 12px;
+            }
+
+            /* What an agent is doing, under its name: the card it holds, why
+               it is in the state it is, and the last lines on its screen. */
+            .doing {
+                margin-top: 12px;
+                border-top: 1px solid var(--line);
+                padding-top: 10px;
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+            }
+
+            .doing .said {
+                margin-top: 4px;
+            }
+
             .card {
                 border: 1px solid var(--line);
                 background: var(--surface);
@@ -1164,14 +1201,13 @@
             <div id="workspaces" class="columns" hidden></div>
 
             <section class="page">
-                <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16v11H8l-4 3z"/></svg> Say something</h2>
+                <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16v11H8l-4 3z"/></svg> Say something<select id="whom" class="whom" aria-label="to whom"><option value="">to the project&apos;s goal</option><option value="card">as a new card</option></select></h2>
                 <div id="voice">
                     <textarea id="said" rows="3" placeholder="Tap the microphone on your keyboard, or hold the button below."></textarea>
                     <div id="photos" class="photos" hidden></div>
                     <div class="row do">
                         <button id="record" class="approve hold" hidden aria-label="hold to speak"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/></svg> <span>Hold to speak</span></button>
                         <label id="snap" class="approve" aria-label="take a photo for a card" title="take a photo for a card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><input id="photo-in" type="file" accept="image/*" capture="environment" multiple hidden /></label>
-                        <select id="whom" aria-label="to whom"><option value="">the project&apos;s goal</option><option value="card">a new card on the board</option></select>
                         <button id="send" class="approve wide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 3L3 10l7 3 3 7z"/></svg> Send</button>
                     </div>
                     <div class="row" id="where-row" hidden>
@@ -1535,6 +1571,8 @@
                     opened.delete(agent_id);
                 } else {
                     opened.add(agent_id);
+                    render_crew(last_agents);
+                    await read_said(agent_id);
                     if (!skills_of.has(agent_id)) {
                         skills_of.set(agent_id, "loading");
                         try {
@@ -1549,6 +1587,47 @@
                 }
 
                 render_crew(last_agents);
+            }
+
+            /// What the crew last said, by agent, for the ones a person opened.
+            const said_of = new Map();
+
+            async function read_said(agent_id) {
+                try {
+                    const answer = await api(`/agents/${encodeURIComponent(agent_id)}/said`);
+                    said_of.set(agent_id, answer.said ?? []);
+                } catch (cause) {
+                    said_of.set(agent_id, [String(cause.message ?? cause)]);
+                }
+            }
+
+            function render_doing(agent) {
+                if (!opened.has(agent.id)) {
+                    return "";
+                }
+
+                const held = last_tasks.filter(
+                    (task) => task.assignee === agent.id && task.column !== "done",
+                );
+                const cards =
+                    held.length === 0
+                        ? '<div class="detail">No card in hand.</div>'
+                        : held
+                              .map(
+                                  (task) =>
+                                      `<div class="detail"><strong>${escape(task.id)}</strong> ${escape(task.title)} · ${escape(task.column)}</div>`,
+                              )
+                              .join("");
+                const reason = agent.reason ? `<div class="detail">${escape(agent.reason)}</div>` : "";
+                const said = said_of.get(agent.id);
+                const screen =
+                    said === undefined
+                        ? '<div class="said"><span class="empty">Reading its screen…</span></div>'
+                        : said.length === 0
+                          ? '<div class="said"><span class="empty">Nothing on its screen — no pane is open.</span></div>'
+                          : `<div class="said">${said.map((line) => `<div>${escape(line)}</div>`).join("")}</div>`;
+
+                return `<div class="doing">${cards}${reason}${screen}</div>`;
             }
 
             function render_skills(agent_id) {
@@ -1609,11 +1688,12 @@
                                 <span class="dot ${agent.presence}"></span>
                                 <strong>${escape(agent.name)}</strong>
                                 <span class="state ${agent.presence}">${escape(agent.presence === "attention" ? "needs you" : agent.presence)}</span>
-                                <span class="chev">${opened.has(agent.id) ? "hide skills" : "skills"}</span>
+                                <span class="chev">${opened.has(agent.id) ? "less" : "more"}</span>
                             </div>
                             <div class="detail">${escape(agent.role)} · ${escape(agent.engine_id)} · ${escape(
                                 agent.repository_id,
                             )}/${escape(agent.worktree)}</div>
+                            ${render_doing(agent)}
                             ${render_skills(agent.id)}
                         </div>`,
                     )
@@ -2832,11 +2912,11 @@
                 const chosen = whom.value;
 
                 whom.innerHTML = "";
-                whom.append(new Option("the project's goal", ""));
-                whom.append(new Option("a new card on the board", "card"));
+                whom.append(new Option("to the project's goal", ""));
+                whom.append(new Option("as a new card", "card"));
 
                 for (const agent of open) {
-                    whom.append(new Option(`${agent.name} · ${agent.role ?? ""}`.trim(), agent.id));
+                    whom.append(new Option(`to ${agent.name}`, agent.id));
                 }
 
                 if (chosen === "card" || (chosen && open.some((agent) => agent.id === chosen))) {
@@ -2871,11 +2951,12 @@
 
                     render_workspaces(spaces);
                     render_approvals(approvals);
+                    render_board(tasks);
+                    await Promise.all([...opened].map(read_said));
                     render_crew(agents);
                     render_whom(agents);
                     render_where(repos);
                     void render_commander();
-                    render_board(tasks);
                     let_in();
                     tick();
                 } catch (cause) {

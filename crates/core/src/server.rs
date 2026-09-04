@@ -279,6 +279,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/agents", get(list_agents).post(hire_agent))
         .route("/agents/{id}", delete(dismiss_agent).post(shape_agent))
         .route("/agents/{id}/holdings", get(read_holdings))
+        .route("/agents/{id}/said", get(agent_says))
         .route("/agents/{id}/start", post(start_agent))
         .route("/agents/{id}/stop", post(stop_agent))
         .route("/tasks", get(list_tasks).post(create_task))
@@ -4743,41 +4744,61 @@ struct CommanderSays {
 /// A person away from the machine wants to know what the crew is up to, and
 /// the commander is where that is said. Its pane redraws itself several times
 /// a second, so the words are picked out here rather than on the phone.
-async fn commander_says(State(state): State<AppState>) -> Json<Vec<CommanderSays>> {
-    let mut answers = Vec::new();
+/// The last few things on an agent's screen, in its own words.
+///
+/// Played into a screen the size of the pane's own, rather than stripped: a
+/// pane draws by moving the cursor, so stripping the moves gave the phone
+/// "RemoteControlnotstartedhere", and a screen of the wrong width gives the
+/// right-hand edges of wrapped lines.
+fn last_words_of(state: &AppState, agent: &Agent, lines: usize) -> Vec<String> {
+    agent
+        .session_id
+        .as_ref()
+        .and_then(|id| state.manager.get(id).map(|session| (id.clone(), session.info())))
+        .and_then(|(id, info)| {
+            state
+                .manager
+                .read_log(&id, 128 * 1024)
+                .ok()
+                .map(|raw| crate::chatter::on_screen(&raw, info.rows.max(24), info.cols.max(60)))
+        })
+        .map(|screen| crate::chatter::last_words(&screen, lines))
+        .unwrap_or_default()
+}
 
-    for agent in state.crew.list() {
-        if agent.role != "commander" {
-            continue;
-        }
-
-        // Played into a screen the size of the pane's own, rather than
-        // stripped: a pane draws by moving the cursor, so stripping the moves
-        // gave the phone "RemoteControlnotstartedhere", and a screen of the
-        // wrong width gives the right-hand edges of wrapped lines.
-        let said = agent
-            .session_id
-            .as_ref()
-            .and_then(|id| state.manager.get(id).map(|session| (id.clone(), session.info())))
-            .and_then(|(id, info)| {
-                state
-                    .manager
-                    .read_log(&id, 128 * 1024)
-                    .ok()
-                    .map(|raw| crate::chatter::on_screen(&raw, info.rows.max(24), info.cols.max(60)))
-            })
-            .map(|screen| crate::chatter::last_words(&screen, 8))
-            .unwrap_or_default();
-
-        answers.push(CommanderSays {
-            id: agent.id.clone(),
-            name: agent.name.clone(),
-            presence: Some(format!("{:?}", agent.state).to_lowercase()),
-            said,
-        });
+fn says(state: &AppState, agent: &Agent, lines: usize) -> CommanderSays {
+    CommanderSays {
+        id: agent.id.clone(),
+        name: agent.name.clone(),
+        presence: Some(format!("{:?}", agent.state).to_lowercase()),
+        said: last_words_of(state, agent, lines),
     }
+}
 
-    Json(answers)
+async fn commander_says(State(state): State<AppState>) -> Json<Vec<CommanderSays>> {
+    Json(
+        state
+            .crew
+            .list()
+            .iter()
+            .filter(|agent| agent.role == "commander")
+            .map(|agent| says(&state, agent, 8))
+            .collect(),
+    )
+}
+
+/// What one agent last said, for somebody who tapped its name on a phone.
+async fn agent_says(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<CommanderSays>, ApiError> {
+    let agent = state
+        .crew
+        .list()
+        .into_iter()
+        .find(|agent| agent.id == id)
+        .ok_or_else(|| anyhow::anyhow!("no agent called {id}"))?;
+    Ok(Json(says(&state, &agent, 12)))
 }
 
 #[derive(Serialize)]
