@@ -12,14 +12,16 @@ export const RENDERERS: Renderer[] = ["auto", "webgl", "dom"];
 ///
 /// Measured on WebKitGTK without a GPU: a WebGL pane showed each keystroke
 /// only when the next one made the page paint, and the DOM renderer showed
-/// every one as it came. So WebKit draws with the DOM unless somebody says
-/// otherwise, and everything else takes WebGL.
-export function resolve_renderer(choice: Renderer, surface: string): "webgl" | "dom" {
+/// every one as it came. That matters for the pane somebody types into — the
+/// commander's — so on WebKit that one draws with the DOM and the agents it
+/// runs keep WebGL, which is faster under their output. Everywhere else
+/// everything takes WebGL.
+export function resolve_renderer(choice: Renderer, surface: string, typed_into = false): "webgl" | "dom" {
     if (choice !== "auto") {
         return choice;
     }
 
-    return surface.includes("webkit") ? "dom" : "webgl";
+    return surface.includes("webkit") && typed_into ? "dom" : "webgl";
 }
 
 export interface Settings {

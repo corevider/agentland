@@ -23,7 +23,7 @@ import {
 /// across the grid are never mistaken for one another.
 export const PANE_DRAG = "text/agentland-pane";
 
-const wanted_renderer = () => resolve_renderer(load_settings().renderer, detect_surface());
+type Choice = Settings["renderer"];
 
 const TAIL_LIMIT_BYTES = 48 * 1024;
 const QUEUE_LIMIT_BYTES = TAIL_LIMIT_BYTES * 4;
@@ -108,6 +108,11 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
     const crowned_ref = useRef(crowned);
     crowned_ref.current = crowned;
     const [renderer, set_renderer] = useState("dom");
+    // This pane's own say, from a click on its footer; "auto" is the settings'.
+    const [choice, set_choice] = useState<Choice>("auto");
+    const choice_ref = useRef<Choice>(choice);
+    choice_ref.current = choice;
+    const apply_ref = useRef<(() => void) | null>(null);
     const [stats, set_stats] = useState<SessionInfo | null>(null);
     const [now, set_now] = useState(() => Math.floor(Date.now() / 1000));
 
@@ -164,6 +169,13 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
         // later, one pane at a time.
         let webgl: WebglAddon | null = null;
 
+        const wanted_renderer = () =>
+            resolve_renderer(
+                choice_ref.current === "auto" ? load_settings().renderer : choice_ref.current,
+                detect_surface(),
+                crowned_ref.current,
+            );
+
         const take_gpu = () => {
             if (disposed || readable_ref.current || webgl || wanted_renderer() === "dom") {
                 return;
@@ -192,23 +204,28 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
 
         let cancel_upgrade = () => undefined as void;
 
-        // A renderer chosen in settings applies to panes already open: the
-        // WebGL addon is let go, or taken, without rebuilding the terminal.
-        const follow_settings = (event: Event) => {
-            const wanted = resolve_renderer((event as CustomEvent<Settings>).detail.renderer, detect_surface());
+        // A renderer chosen in settings, or on this pane's footer, applies to
+        // a pane already open: the WebGL addon is let go, or taken, without
+        // rebuilding the terminal.
+        const apply_renderer = () => {
+            if (disposed || readable_ref.current) {
+                return;
+            }
+
+            const wanted = wanted_renderer();
             if (wanted === "dom" && webgl) {
                 webgl.dispose();
                 webgl = null;
                 gpu_ref.current = null;
                 metrics.renderer = "dom";
                 set_renderer("dom");
-            } else if (wanted !== "dom" && !webgl) {
+            } else if (wanted === "webgl" && !webgl) {
                 cancel_upgrade();
-            window.removeEventListener(SETTINGS_EVENT, follow_settings);
                 cancel_upgrade = upgrade_soon(take_gpu);
             }
         };
-        window.addEventListener(SETTINGS_EVENT, follow_settings);
+        apply_ref.current = apply_renderer;
+        window.addEventListener(SETTINGS_EVENT, apply_renderer);
         let queue: Uint8Array[] = [];
         let queued_bytes = 0;
         let writing = false;
@@ -338,6 +355,8 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
             window.clearTimeout(frame_handle);
             cancel_open();
             cancel_upgrade();
+            apply_ref.current = null;
+            window.removeEventListener(SETTINGS_EVENT, apply_renderer);
             window.clearInterval(flush_metrics);
             observer.disconnect();
             webgl?.dispose();
@@ -363,7 +382,12 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
 
         return () => {
             const terminal = screen_ref.current;
-            if (!terminal || wanted_renderer() === "dom") {
+            const wanted = resolve_renderer(
+                choice_ref.current === "auto" ? load_settings().renderer : choice_ref.current,
+                detect_surface(),
+                crowned_ref.current,
+            );
+            if (!terminal || wanted === "dom") {
                 return;
             }
 
@@ -377,6 +401,10 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
             }
         };
     }, [readable]);
+
+    useEffect(() => {
+        apply_ref.current?.();
+    }, [choice, crowned]);
 
     const state = !shown_stats
         ? "opening"
@@ -558,9 +586,27 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
                 </span>
                 {shown_stats ? <span className="tabular-nums">{format_elapsed(shown_now - shown_stats.last_output_at)}</span> : null}
                 <span className="ml-auto truncate">
-                    {readable
-                        ? "readable · text only"
-                        : `${focused || crowned ? "live" : `${BACKGROUND_FLUSH_MS}ms`} · ${renderer}`}
+                    {readable ? (
+                        "readable · text only"
+                    ) : (
+                        <>
+                            {focused || crowned ? "live" : `${BACKGROUND_FLUSH_MS}ms`} ·{" "}
+                            <button
+                                className="hover:text-turquoise"
+                                title={
+                                    renderer.startsWith("webgl")
+                                        ? "webgl — click to draw with the DOM, which shows every frame as it is drawn"
+                                        : "dom — click to draw with WebGL, which is faster under heavy output"
+                                }
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    set_choice(renderer.startsWith("webgl") ? "dom" : "webgl");
+                                }}
+                            >
+                                {renderer}
+                            </button>
+                        </>
+                    )}
                 </span>
             </div>
         </div>
