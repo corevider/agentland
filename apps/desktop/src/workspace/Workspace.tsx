@@ -2,12 +2,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 
 import type { MenuItem } from "@/components/ContextMenu";
+import { on_a_control } from "@/lib/controls";
 import { use_sideways_wheel } from "@/lib/wheel";
+import { zone_at, zone_rect, zone_says, type Zone } from "@/workspace/dock";
 import { PanelBoundary } from "@/workspace/Panel";
 import { PANELS, panel_entry, use_services } from "@/workspace/registry";
 import {
     add_panel,
     close_tab,
+    dock_tab,
     find_stack,
     is_minimised,
     minimise,
@@ -20,6 +23,7 @@ import {
     type Layout,
     type Node,
     type Stack,
+    type Tab,
 } from "@/workspace/layout";
 
 interface Props {
@@ -27,6 +31,36 @@ interface Props {
     on_layout: (next: Layout) => void;
     subtitle_for: (panel: string) => string | undefined;
 }
+
+/// A tab in the hand: what it is, where it came from, and where the pointer
+/// holds it. The tab is carried the way a card is on the board — by the
+/// pointer, with a copy following it — because the webview draws no drag image
+/// of its own, and a tab that vanishes while it is dragged is one nobody can aim.
+interface Carry {
+    instance: string;
+    panel: string;
+    label: string;
+    from: string;
+    x: number;
+    y: number;
+    grab_x: number;
+    grab_y: number;
+    width: number;
+    height: number;
+}
+
+interface Aim {
+    stack: string;
+    zone: Zone;
+}
+
+interface Drag {
+    carry: Carry | null;
+    aim: Aim | null;
+    take: (stack_id: string, tab: Tab, label: string, event: React.PointerEvent<HTMLElement>) => void;
+}
+
+type ViewProps = Props & { drag: Drag };
 
 function AddMenu({
     stack_id,
@@ -104,8 +138,8 @@ function panel_choices(run: (panel: string) => void): MenuItem[] {
     return PANELS.map((panel) => ({ label: panel.label, hint: panel.hint, run: () => run(panel.id) }));
 }
 
-function StackView({ stack, layout, on_layout, subtitle_for }: Props & { stack: Stack }) {
-    const [over, set_over] = useState(false);
+function StackView({ stack, layout, on_layout, subtitle_for, drag }: ViewProps & { stack: Stack }) {
+    const aimed = drag.carry && drag.aim?.stack === stack.id ? drag.aim.zone : null;
     const strip = use_sideways_wheel<HTMLDivElement>();
     const { open_menu } = use_services();
     const active_tab = stack.tabs[stack.active] ?? null;
@@ -171,29 +205,12 @@ function StackView({ stack, layout, on_layout, subtitle_for }: Props & { stack: 
         ...stack_items(),
     ];
 
-    const accept = useCallback(
-        (event: React.DragEvent) => {
-            event.preventDefault();
-            set_over(false);
-            const instance = event.dataTransfer.getData("text/agentland-tab");
-            if (instance) {
-                on_layout(move_tab(layout, instance, stack.id));
-            }
-        },
-        [layout, on_layout, stack.id],
-    );
-
     return (
         <section
-            className={`flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-md border bg-lagoon ${
-                over ? "border-turquoise" : "border-reef"
+            data-stack={stack.id}
+            className={`relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-md border bg-lagoon transition-colors ${
+                aimed ? "border-turquoise" : "border-reef"
             }`}
-            onDragOver={(event) => {
-                event.preventDefault();
-                set_over(true);
-            }}
-            onDragLeave={() => set_over(false)}
-            onDrop={accept}
         >
             <header
                 data-chrome
@@ -209,17 +226,55 @@ function StackView({ stack, layout, on_layout, subtitle_for }: Props & { stack: 
                         return (
                             <div
                                 key={tab.instance}
-                                draggable
-                                onDragStart={(event) => {
-                                    event.dataTransfer.setData("text/agentland-tab", tab.instance);
-                                    event.dataTransfer.effectAllowed = "move";
+                                // Taken with the pointer, after a few pixels of
+                                // travel, so a click still selects the tab and
+                                // a press on its close button is a close.
+                                onPointerDown={(event) => {
+                                    if (event.button !== 0 || on_a_control(event.target)) {
+                                        return;
+                                    }
+
+                                    const from = { x: event.clientX, y: event.clientY };
+                                    const target = event.currentTarget;
+                                    const label = meta?.label ?? tab.panel;
+
+                                    const watch = (moved: PointerEvent) => {
+                                        if (
+                                            Math.abs(moved.clientX - from.x) + Math.abs(moved.clientY - from.y) >
+                                            4
+                                        ) {
+                                            stop();
+                                            drag.take(stack.id, tab, label, {
+                                                ...event,
+                                                clientX: moved.clientX,
+                                                clientY: moved.clientY,
+                                                currentTarget: target,
+                                            } as unknown as React.PointerEvent<HTMLElement>);
+                                        }
+                                    };
+
+                                    const stop = () => {
+                                        window.removeEventListener("pointermove", watch);
+                                        window.removeEventListener("pointerup", stop);
+                                        window.removeEventListener("pointercancel", stop);
+                                        window.removeEventListener("blur", stop);
+                                    };
+
+                                    window.addEventListener("pointermove", watch);
+                                    window.addEventListener("pointerup", stop);
+                                    window.addEventListener("pointercancel", stop);
+                                    window.addEventListener("blur", stop);
                                 }}
                                 onClick={() => on_layout(set_active(layout, stack.id, index))}
                                 onContextMenu={(event) =>
                                     open_menu(event, meta?.label ?? tab.panel, tab_items(tab, index))
                                 }
-                                className={`group relative flex cursor-pointer items-center gap-1.5 px-2.5 py-1 ${
-                                    index === stack.active ? "text-linen" : "text-shell hover:text-linen"
+                                className={`group relative flex cursor-pointer select-none items-center gap-1.5 px-2.5 py-1 ${
+                                    drag.carry?.instance === tab.instance
+                                        ? "opacity-30"
+                                        : index === stack.active
+                                          ? "text-linen"
+                                          : "text-shell hover:text-linen"
                                 }`}
                             >
                                 {index === stack.active ? (
@@ -313,6 +368,27 @@ function StackView({ stack, layout, on_layout, subtitle_for }: Props & { stack: 
                     )}
                 </div>
             </PanelBoundary>
+
+            {aimed && drag.carry ? (
+                (() => {
+                    const rect = zone_rect(aimed);
+                    return (
+                        <div
+                            className="pointer-events-none absolute z-30 rounded-md border border-turquoise bg-turquoise/10 transition-all duration-150 ease-out"
+                            style={{
+                                left: `${rect.left * 100}%`,
+                                top: `${rect.top * 100}%`,
+                                width: `${rect.width * 100}%`,
+                                height: `${rect.height * 100}%`,
+                            }}
+                        >
+                            <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded border border-turquoise/60 bg-lagoon-deep px-2 py-0.5 font-mono text-[10px] text-turquoise">
+                                {zone_says(aimed, drag.carry.from === stack.id)}
+                            </span>
+                        </div>
+                    );
+                })()
+            ) : null}
         </section>
     );
 }
@@ -323,7 +399,7 @@ function folded_away(node: Node, layout: Layout): boolean {
         : folded_away(node.first, layout) && folded_away(node.second, layout);
 }
 
-function NodeView({ node, layout, on_layout, subtitle_for }: Props & { node: Node }) {
+function NodeView({ node, layout, on_layout, subtitle_for, drag }: ViewProps & { node: Node }) {
     const { open_menu } = use_services();
     const frame = useRef<HTMLDivElement>(null);
     const dragging = useRef(false);
@@ -385,7 +461,7 @@ function NodeView({ node, layout, on_layout, subtitle_for }: Props & { node: Nod
     }, []);
 
     if (node.kind === "stack") {
-        return <StackView stack={node} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} />;
+        return <StackView stack={node} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} drag={drag} />;
     }
 
     const first_folded = folded_away(node.first, layout);
@@ -394,10 +470,10 @@ function NodeView({ node, layout, on_layout, subtitle_for }: Props & { node: Nod
     // A split whose half is folded gives the whole space to the other half
     // rather than leaving a gap where the panel used to be.
     if (first_folded && !second_folded) {
-        return <NodeView node={node.second} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} />;
+        return <NodeView node={node.second} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} drag={drag} />;
     }
     if (second_folded && !first_folded) {
-        return <NodeView node={node.first} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} />;
+        return <NodeView node={node.first} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} drag={drag} />;
     }
     if (first_folded && second_folded) {
         return null;
@@ -415,7 +491,7 @@ function NodeView({ node, layout, on_layout, subtitle_for }: Props & { node: Nod
                 className="flex min-h-0 min-w-0"
                 style={row ? { width: first_size } : { height: first_size }}
             >
-                <NodeView node={node.first} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} />
+                <NodeView node={node.first} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} drag={drag} />
             </div>
 
             <div
@@ -462,7 +538,7 @@ function NodeView({ node, layout, on_layout, subtitle_for }: Props & { node: Nod
             ) : null}
 
             <div className="flex min-h-0 min-w-0 flex-1">
-                <NodeView node={node.second} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} />
+                <NodeView node={node.second} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} drag={drag} />
             </div>
         </div>
     );
@@ -474,18 +550,103 @@ export function Workspace({ layout, on_layout, subtitle_for }: Props) {
     const folded = stacks(layout.root).filter((entry) => is_minimised(layout, entry.id));
     const everything_folded = folded.length === stacks(layout.root).length;
 
+    const [carry, set_carry] = useState<Carry | null>(null);
+    const [aim, set_aim] = useState<Aim | null>(null);
+    const latest = useRef({ layout, on_layout, aim });
+    latest.current = { layout, on_layout, aim };
+
+    const take = useCallback((stack_id: string, tab: Tab, label: string, event: React.PointerEvent<HTMLElement>) => {
+        const box = event.currentTarget.getBoundingClientRect();
+        set_carry({
+            instance: tab.instance,
+            panel: tab.panel,
+            label,
+            from: stack_id,
+            x: event.clientX,
+            y: event.clientY,
+            grab_x: event.clientX - box.left,
+            grab_y: event.clientY - box.top,
+            width: box.width,
+            height: box.height,
+        });
+    }, []);
+
+    // While a tab is in the hand: the copy follows the pointer, the stack under
+    // it says where the tab would land, and letting go puts it there. Anything
+    // that ends the gesture without a drop — Escape, a cancelled pointer, the
+    // window losing focus — puts everything back as it was.
+    useEffect(() => {
+        if (!carry) {
+            return;
+        }
+
+        const move = (event: PointerEvent) => {
+            set_carry((held) => (held ? { ...held, x: event.clientX, y: event.clientY } : held));
+            const under = document.elementFromPoint(event.clientX, event.clientY);
+            const holder = under?.closest("[data-stack]") as HTMLElement | null;
+            const stack = holder?.getAttribute("data-stack");
+            if (!holder || !stack) {
+                set_aim(null);
+                return;
+            }
+            const zone = zone_at(event.clientX, event.clientY, holder.getBoundingClientRect());
+            set_aim((held) => (held && held.stack === stack && held.zone === zone ? held : { stack, zone }));
+        };
+
+        const drop = () => {
+            const { layout: now, on_layout: place, aim: at } = latest.current;
+            if (at) {
+                if (at.zone === "center") {
+                    if (at.stack !== carry.from) {
+                        place(move_tab(now, carry.instance, at.stack));
+                    }
+                } else {
+                    place(dock_tab(now, carry.instance, at.stack, at.zone));
+                }
+            }
+            set_carry(null);
+            set_aim(null);
+        };
+
+        const cancel = () => {
+            set_carry(null);
+            set_aim(null);
+        };
+
+        const key = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                cancel();
+            }
+        };
+
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", drop);
+        window.addEventListener("pointercancel", cancel);
+        window.addEventListener("blur", cancel);
+        window.addEventListener("keydown", key);
+        return () => {
+            window.removeEventListener("pointermove", move);
+            window.removeEventListener("pointerup", drop);
+            window.removeEventListener("pointercancel", cancel);
+            window.removeEventListener("blur", cancel);
+            window.removeEventListener("keydown", key);
+        };
+    }, [carry?.instance, carry?.from]);
+
+    const drag: Drag = { carry, aim, take };
+
     return (
         <LayoutGroup>
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${carry ? "select-none" : ""}`}>
             <div className="flex min-h-0 min-w-0 flex-1 p-1.5">
                 {maximised ? (
-                    <StackView stack={maximised} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} />
+                    <StackView stack={maximised} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} drag={drag} />
                 ) : everything_folded ? (
                     <div className="flex flex-1 items-center justify-center font-mono text-[11px] text-shade">
                         every panel is folded down — pick one from the bar
                     </div>
                 ) : (
-                    <NodeView node={layout.root} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} />
+                    <NodeView node={layout.root} layout={layout} on_layout={on_layout} subtitle_for={subtitle_for} drag={drag} />
                 )}
             </div>
 
@@ -536,6 +697,19 @@ export function Workspace({ layout, on_layout, subtitle_for }: Props) {
                         );
                     })}
                 </motion.div>
+            ) : null}
+
+            {carry ? (
+                <div
+                    className="pointer-events-none fixed left-0 top-0 z-50 flex items-center gap-1.5 rounded-md border border-turquoise bg-lagoon-deep px-2.5 py-1 opacity-95 shadow-[0_10px_24px_rgba(0,0,0,0.45)] will-change-transform"
+                    style={{
+                        width: carry.width,
+                        height: carry.height,
+                        transform: `translate3d(${carry.x - carry.grab_x}px, ${carry.y - carry.grab_y}px, 0) rotate(2deg)`,
+                    }}
+                >
+                    <span className="whitespace-nowrap text-[12px] text-linen">{carry.label}</span>
+                </div>
             ) : null}
         </div>
         </LayoutGroup>

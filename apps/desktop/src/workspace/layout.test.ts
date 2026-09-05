@@ -15,8 +15,7 @@ import {
     stacks,
     upgrade_layout,
     visible_panels,
-    type Layout,
-} from "@/workspace/layout";
+    type Layout, dock_tab, type Node, type Split } from "@/workspace/layout";
 
 const known = (panel: string) =>
     ["island", "panes", "board", "preview", "repos", "crew", "skills"].includes(panel);
@@ -261,5 +260,55 @@ describe("folding a panel down to the bar", () => {
 
         expect(stacks(moved.root).some((stack) => stack.id === source.id)).toBe(false);
         expect(moved.minimised).not.toContain(source.id);
+    });
+});
+
+describe("docking a tab beside or below a stack", () => {
+    const parent_of = (node: Node, id: string): Split | null => {
+        if (node.kind !== "split") {
+            return null;
+        }
+        if (node.first.id === id || node.second.id === id) {
+            return node;
+        }
+        return parent_of(node.first, id) ?? parent_of(node.second, id);
+    };
+
+    it("puts the tab in a new stack on the side it was dropped, and leaves nothing behind", () => {
+        const layout = default_layout();
+        const [island, , panes] = stacks(layout.root);
+
+        const moved = dock_tab(layout, island.tabs[0].instance, panes.id, "right");
+
+        const around = parent_of(moved.root, panes.id);
+        expect(around?.direction).toBe("row");
+        expect(around?.first.id).toBe(panes.id);
+        expect(around?.second.kind === "stack" && around.second.tabs[0]?.panel).toBe("island");
+        expect(tabs_of(moved).flat().filter((panel) => panel === "island")).toHaveLength(1);
+        expect(stacks(moved.root).map((stack) => stack.id)).not.toContain(island.id);
+    });
+
+    it("takes the first half for left and top", () => {
+        const layout = default_layout();
+        const [, board, panes] = stacks(layout.root);
+
+        const moved = dock_tab(layout, board.tabs[0].instance, panes.id, "top");
+
+        const around = parent_of(moved.root, panes.id);
+        expect(around?.direction).toBe("column");
+        expect(around?.first.kind === "stack" && around.first.tabs[0]?.panel).toBe("board");
+        expect(around?.second.id).toBe(panes.id);
+    });
+
+    it("splits a stack off its own tab, but not a stack with only that tab", () => {
+        const layout = default_layout();
+        const [, , panes] = stacks(layout.root);
+        expect(dock_tab(layout, panes.tabs[0].instance, panes.id, "right")).toBe(layout);
+
+        const crowded = add_panel(layout, panes.id, "crew");
+        const split = dock_tab(crowded, `crew-${layout.next_id}`, panes.id, "right");
+        expect(stacks(split.root)).toHaveLength(4);
+        expect(tabs_of(split)).toContainEqual(["crew"]);
+        expect(tabs_of(split)).toContainEqual(["panes"]);
     });
 });

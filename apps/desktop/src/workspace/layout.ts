@@ -255,6 +255,54 @@ export function move_tab(layout: Layout, instance: string, into: string): Layout
     return rebuilt(layout, root);
 }
 
+/// Put a tab in a new stack beside or below another, on the side named.
+///
+/// The tab leaves wherever it was, collapsing a stack it was the last of;
+/// the stack it is docked against becomes a split with the tab's new stack on
+/// that side. A tab docked against its own stack splits it, unless it is the
+/// only tab there, when there is nothing to split.
+export function dock_tab(
+    layout: Layout,
+    instance: string,
+    beside: string,
+    side: "left" | "right" | "top" | "bottom",
+): Layout {
+    const source = stacks(layout.root).find((entry) =>
+        entry.tabs.some((tab) => tab.instance === instance),
+    );
+    const tab = source?.tabs.find((entry) => entry.instance === instance);
+
+    if (!source || !tab || (source.id === beside && source.tabs.length === 1)) {
+        return layout;
+    }
+
+    const without = replace(layout.root, source.id, (found) => {
+        if (found.kind !== "stack") {
+            return found;
+        }
+
+        const tabs = found.tabs.filter((entry) => entry.instance !== instance);
+        return tabs.length === 0
+            ? null
+            : { ...found, tabs, active: Math.min(found.active, tabs.length - 1) };
+    });
+
+    const fresh: Stack = { kind: "stack", id: `k${layout.next_id}`, tabs: [tab], active: 0 };
+    const direction = side === "left" || side === "right" ? "row" : "column";
+    const first_side = side === "left" || side === "top";
+
+    const root = replace(without ?? layout.root, beside, (found) => ({
+        kind: "split",
+        id: `s${layout.next_id}`,
+        direction,
+        fraction: 0.5,
+        first: first_side ? fresh : found,
+        second: first_side ? found : fresh,
+    }));
+
+    return { ...rebuilt(layout, root), next_id: layout.next_id + 1 };
+}
+
 export function focus_panel(layout: Layout, panel: PanelId): Layout {
     for (const entry of stacks(layout.root)) {
         const index = entry.tabs.findIndex((tab) => tab.panel === panel);
