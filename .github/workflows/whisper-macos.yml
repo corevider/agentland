@@ -46,12 +46,18 @@ jobs:
       # The Metal shaders are embedded rather than left beside the binary: a
       # tarball that has to keep a .metallib next to the tool is a tarball that
       # half-works the moment anything moves.
+      #
+      # `GGML_NATIVE=OFF` because this is built for other people's machines,
+      # not this runner's. Left on, ggml tunes for the host CPU — which is how
+      # the Intel build died, with the arm64 runner handing `-mcpu=apple-m1` to
+      # an x86 compiler that has never heard of it.
       - name: Build the command-line tool
         working-directory: whisper.cpp
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=${{ matrix.architectures }} \
+            -DGGML_NATIVE=OFF \
             -DBUILD_SHARED_LIBS=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DWHISPER_BUILD_TESTS=OFF \
