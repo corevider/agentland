@@ -217,6 +217,13 @@ pub fn read_back(
     let arrived = folder.join(format!("arrived.{}", extension_for(kind)));
     std::fs::write(&arrived, audio)?;
 
+    // A recording that is already a wav is what the transcriber wants, so it
+    // goes straight there. The window records one on purpose: no encoder, no
+    // decoder, and no process spawned only to fail on a machine with no ffmpeg.
+    if kind.contains("wav") {
+        return read_aloud(&arrived, command);
+    }
+
     // A name of its own: a wav that arrived is already called arrived.wav, and
     // ffmpeg asked to write its own input destroys the recording it was given.
     let wav = folder.join("heard.wav");
@@ -233,7 +240,6 @@ pub fn read_back(
 
     let file = match converted {
         Ok(done) if done.status.success() && wav.exists() => wav,
-        _ if kind.contains("wav") => arrived,
         Ok(done) => anyhow::bail!(
             "cannot turn that recording into audio: {}",
             String::from_utf8_lossy(&done.stderr).trim()
@@ -241,7 +247,12 @@ pub fn read_back(
         Err(error) => anyhow::bail!("ffmpeg is needed to read a recording from a browser: {error}"),
     };
 
-    let spoken = crate::exec::shell_line(&fill_in(command, &file)).output()?;
+    read_aloud(&file, command)
+}
+
+/// Hand one recording to the transcriber and keep what it said.
+fn read_aloud(file: &Path, command: &str) -> anyhow::Result<String> {
+    let spoken = crate::exec::shell_line(&fill_in(command, file)).output()?;
 
     if !spoken.status.success() {
         anyhow::bail!(

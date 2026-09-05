@@ -536,6 +536,15 @@ export function stop_listening(): Promise<{ text: string }> {
     return request<{ text: string }>("/voice/stop", { method: "POST" });
 }
 
+/// Hand the core a recording this window made, and get back what was said.
+export function read_back(audio: Blob): Promise<{ text: string }> {
+    return request<{ text: string }>("/voice/heard", {
+        method: "POST",
+        headers: { "content-type": audio.type || "audio/wav" },
+        body: audio,
+    });
+}
+
 /// What a project is for, in the words of the person who asked.
 ///
 /// Kept by the core rather than in a pane, because a pane traded for a fresh

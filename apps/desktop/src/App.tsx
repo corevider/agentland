@@ -39,12 +39,12 @@ import {
     spawn_default_shell,
     type Agent,
     type SessionInfo,
-    start_listening,
-    stop_listening,
     voice_state,
     write_input,
 } from "@/lib/core";
 import { island_frames } from "@/lib/frames";
+import { can_listen } from "@/lib/listen";
+import { begin_speaking, end_speaking } from "@/lib/speaking";
 import { probe_gpu, type GpuReport } from "@/lib/gpu";
 import { load_settings, save_settings, type Settings } from "@/lib/settings";
 import { detect_surface } from "@/lib/surface";
@@ -185,6 +185,11 @@ export default function App() {
     // Whether anything on this machine can record. Asked once: a recorder is
     // installed by a person, not by the app, so it does not change under us.
     useEffect(() => {
+        if (can_listen()) {
+            set_can_record(true);
+            return;
+        }
+
         voice_state()
             .then((state) => set_can_record(Boolean(state.recorder)))
             .catch(() => undefined);
@@ -902,7 +907,7 @@ export default function App() {
                         }
                         onPointerDown={() => {
                             set_heard(null);
-                            start_listening()
+                            begin_speaking()
                                 .then(() => set_listening(true))
                                 .catch((cause) => set_error(String(cause)));
                         }}
@@ -913,8 +918,8 @@ export default function App() {
 
                             set_listening(false);
                             set_reading(true);
-                            stop_listening()
-                                .then(({ text }) => {
+                            end_speaking()
+                                .then((text) => {
                                     if (!text) {
                                         set_heard("nothing was said");
                                         return;
