@@ -41,6 +41,7 @@ import {
     type SessionInfo,
     start_listening,
     stop_listening,
+    voice_state,
     write_input,
 } from "@/lib/core";
 import { island_frames } from "@/lib/frames";
@@ -139,6 +140,7 @@ export default function App() {
     const [heard, set_heard] = useState<string | null>(null);
     const [busy, set_busy] = useState(false);
     const [error, set_error] = useState<string | null>(null);
+    const [can_record, set_can_record] = useState(true);
     const metrics_ref = useRef(new Map<string, PaneMetrics>());
     const run_ref = useRef<{ id: string; started: number; panes: number; rate: number } | null>(null);
     const frame_ref = useRef({ fps: 0, worst_frame_ms: 0 });
@@ -178,6 +180,14 @@ export default function App() {
         sync();
         const handle = window.setInterval(sync, 3000);
         return () => window.clearInterval(handle);
+    }, []);
+
+    // Whether anything on this machine can record. Asked once: a recorder is
+    // installed by a person, not by the app, so it does not change under us.
+    useEffect(() => {
+        voice_state()
+            .then((state) => set_can_record(Boolean(state.recorder)))
+            .catch(() => undefined);
     }, []);
 
     const set_layout = useCallback((next: Layout) => {
@@ -874,13 +884,22 @@ export default function App() {
                         // Held down, a button is a button and not a paragraph:
                         // without this, holding it starts selecting the label.
                         className={`select-none rounded border px-2 py-[3px] font-mono text-[11px] transition-colors ${
-                            listening
-                                ? "animate-pulse border-coral bg-coral/15 text-coral"
-                                : reading
-                                  ? "animate-pulse border-sun bg-sun/10 text-sun"
-                                  : "border-reef text-shell hover:border-foam"
+                            !can_record
+                                ? "border-reef text-shade"
+                                : listening
+                                  ? "animate-pulse border-coral bg-coral/15 text-coral"
+                                  : reading
+                                    ? "animate-pulse border-sun bg-sun/10 text-sun"
+                                    : "border-reef text-shell hover:border-foam"
                         }`}
-                        title="hold to speak — what you say is typed into the pane you are watching, not sent"
+                        // A button that can only fail should say so before it is
+                        // held, not after.
+                        disabled={!can_record}
+                        title={
+                            can_record
+                                ? "hold to speak — what you say is typed into the pane you are watching, not sent"
+                                : "no recorder on this machine — Settings says what voice needs"
+                        }
                         onPointerDown={() => {
                             set_heard(null);
                             start_listening()

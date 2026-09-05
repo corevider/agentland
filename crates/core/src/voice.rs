@@ -60,6 +60,21 @@ pub fn recorder_argv(tool: &str, into: &Path) -> Vec<String> {
     }
 }
 
+/// What to say when nothing here can record.
+///
+/// The old wording named three tools that only exist on Linux, which on Windows
+/// reads as "install these" and leads nowhere. Naming the platform is the part
+/// that tells somebody whether to go looking at all.
+pub fn nothing_records() -> String {
+    if cfg!(windows) {
+        "voice needs a recorder Agentland can drive, and there is none for Windows yet".to_owned()
+    } else if cfg!(target_os = "macos") {
+        "no recorder here: put ffmpeg on PATH".to_owned()
+    } else {
+        "no recorder here: install pw-record, parec or arecord".to_owned()
+    }
+}
+
 /// The first recorder on this machine, or nothing.
 pub fn pick_recorder(here: impl Fn(&str) -> bool) -> Option<&'static str> {
     RECORDERS.iter().copied().find(|tool| here(tool))
@@ -129,8 +144,7 @@ impl Voice {
             anyhow::bail!("already listening");
         }
 
-        let tool = pick_recorder(on_path)
-            .ok_or_else(|| anyhow::anyhow!("no recorder here: install pw-record, parec or arecord"))?;
+        let tool = pick_recorder(on_path).ok_or_else(|| anyhow::anyhow!("{}", nothing_records()))?;
 
         let folder = self.data_dir.join("voice");
         std::fs::create_dir_all(&folder)?;
@@ -263,6 +277,17 @@ pub fn extension_for(kind: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_is_missing_is_said_in_terms_of_this_machine() {
+        let says = nothing_records();
+        if cfg!(windows) {
+            assert!(says.contains("Windows"), "{says}");
+            assert!(!says.contains("arecord"), "naming Linux tools leads nowhere here: {says}");
+        } else {
+            assert!(!says.contains("Windows"), "{says}");
+        }
+    }
 
     #[test]
     fn each_recorder_is_asked_for_the_same_thing_in_its_own_words() {
