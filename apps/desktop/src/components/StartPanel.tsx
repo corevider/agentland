@@ -7,8 +7,13 @@ import {
     type Begun,
     type Engine,
     type Starter,
+    read_machine,
+    spawn_default_shell,
+    write_input,
+    type Machine,
 } from "@/lib/core";
 import { Spinner, Waiting } from "@/components/Spinner";
+import { recipe_for } from "@/lib/installs";
 import { name_trouble } from "@/lib/naming";
 import { as_url, clone_target, is_clonable, pick_folder } from "@/lib/pick";
 import { use_services } from "@/workspace/registry";
@@ -36,6 +41,27 @@ const WHERE_LABEL: Record<Where, string> = {
 /// executes other people's code.
 export function StartPanel({ active }: { active: boolean }) {
     const { open_session } = use_services();
+    const [machine, set_machine] = useState<Machine | null>(null);
+    useEffect(() => {
+        read_machine()
+            .then(set_machine)
+            .catch(() => undefined);
+    }, []);
+
+    // The install command is typed into a fresh pane and left for the person
+    // to send: they read what is about to run, press Enter, and watch it.
+    const prepare_install = useCallback(
+        (command: string) => {
+            spawn_default_shell()
+                .then(async (created) => {
+                    await new Promise((done) => window.setTimeout(done, 700));
+                    await write_input(created.id, command);
+                    open_session(created.id);
+                })
+                .catch(() => undefined);
+        },
+        [open_session],
+    );
     const [where, set_where] = useState<Where>("new");
     const [path, set_path] = useState("");
     const [url, set_url] = useState("");
@@ -472,8 +498,44 @@ export function StartPanel({ active }: { active: boolean }) {
                                             </>
                                         ) : null}
                                         {starter.installed ? null : (
-                                            <span className="font-mono text-[10px] text-sun">
-                                                needs {starter.missing.join(" and ")} on PATH
+                                            <span className="flex flex-col gap-1">
+                                                <span className="font-mono text-[10px] text-sun">
+                                                    needs {starter.missing.join(" and ")} on PATH
+                                                </span>
+                                                {starter.missing.map((tool) => {
+                                                    const recipe = machine ? recipe_for(tool, machine.os) : null;
+                                                    return (
+                                                        <span
+                                                            key={tool}
+                                                            className="flex flex-wrap items-center gap-2 font-mono text-[10px] text-shade"
+                                                        >
+                                                            <span>
+                                                                {tool}: {recipe?.what ?? "not on this machine"}
+                                                                {recipe ? ` · ${recipe.url}` : ""}
+                                                            </span>
+                                                            {recipe ? (
+                                                                <span
+                                                                    role="button"
+                                                                    tabIndex={0}
+                                                                    className="rounded border border-sun/70 px-1.5 py-[1px] text-sun hover:bg-sun/10"
+                                                                    title={`opens a terminal with "${recipe.command}" typed in — press Enter there to run it`}
+                                                                    onClick={(event) => {
+                                                                        event.stopPropagation();
+                                                                        prepare_install(recipe.command);
+                                                                    }}
+                                                                    onKeyDown={(event) => {
+                                                                        if (event.key === "Enter" || event.key === " ") {
+                                                                            event.stopPropagation();
+                                                                            prepare_install(recipe.command);
+                                                                        }
+                                                                    }}
+                                                                >
+                                                                    install {tool}
+                                                                </span>
+                                                            ) : null}
+                                                        </span>
+                                                    );
+                                                })}
                                             </span>
                                         )}
                                     </button>
