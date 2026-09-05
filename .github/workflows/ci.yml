@@ -39,11 +39,18 @@ jobs:
       - name: Rust tests
         run: cargo test --workspace
 
-      - name: Interface build
+      # The interface has tests of its own and nothing here ever ran them, so
+      # every one of them was green by never being asked. They come before the
+      # build because a broken rule is cheaper to read than a broken bundle.
+      - name: Interface tests
         working-directory: apps/desktop
         run: |
           npm ci
-          npm run build
+          npm test
+
+      - name: Interface build
+        working-directory: apps/desktop
+        run: npm run build
 
   bundle:
     needs: test
