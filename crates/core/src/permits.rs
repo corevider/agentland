@@ -265,6 +265,15 @@ struct Permissions {
 #[derive(Debug, Serialize)]
 struct Settings {
     permissions: Permissions,
+    /// Whether the engine's own "you are in bypass mode, do you accept"
+    /// disclaimer has been answered. Set only for an agent a person put in that
+    /// mode: they said it once in Agentland, at a dialog that already refuses
+    /// to raise anybody without them, and the pane asking again is the same
+    /// question with nobody left to answer it — every agent sat at it until
+    /// somebody noticed by eye.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(rename = "skipDangerousModePermissionPrompt")]
+    skip_dangerous_mode_permission_prompt: bool,
 }
 
 /// What this role may run without asking.
@@ -299,6 +308,11 @@ pub fn denied() -> Vec<&'static str> {
 /// already said yes to. Both are additions to a role's list, never a way around
 /// the deny list: a rule that leaves the machine is refused however it arrived.
 pub fn settings_for(role: &str, extra: &[String]) -> String {
+    settings_in(role, extra, "")
+}
+
+/// The same, told which permission mode the agent is about to run in.
+pub fn settings_in(role: &str, extra: &[String], mode: &str) -> String {
     let mut allow: Vec<String> = allowed_for(role).into_iter().map(str::to_owned).collect();
     let mut folders: Vec<String> = Vec::new();
 
@@ -323,6 +337,7 @@ pub fn settings_for(role: &str, extra: &[String]) -> String {
             deny: never.into_iter().map(str::to_owned).collect(),
             additional_directories: folders,
         },
+        skip_dangerous_mode_permission_prompt: mode == "bypassPermissions",
     };
 
     serde_json::to_string_pretty(&settings).unwrap_or_else(|_| "{}".to_owned())
@@ -443,6 +458,36 @@ pub fn declared_in(worktree: &std::path::Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_agent_a_person_put_in_bypass_is_not_asked_to_accept_it_again() {
+        let written = settings_in("implementer", &[], "bypassPermissions");
+        let read: serde_json::Value = serde_json::from_str(&written).unwrap();
+
+        assert_eq!(read["skipDangerousModePermissionPrompt"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn every_other_mode_is_left_to_ask_whatever_it_asks() {
+        for mode in ["plan", "default", "acceptEdits", ""] {
+            let written = settings_in("implementer", &[], mode);
+            let read: serde_json::Value = serde_json::from_str(&written).unwrap();
+
+            assert!(
+                read.get("skipDangerousModePermissionPrompt").is_none(),
+                "{mode} should carry nothing about the disclaimer: {written}"
+            );
+        }
+    }
+
+    #[test]
+    fn what_a_role_may_run_is_the_same_either_way() {
+        let plain: serde_json::Value = serde_json::from_str(&settings_for("reviewer", &[])).unwrap();
+        let bypassing: serde_json::Value =
+            serde_json::from_str(&settings_in("reviewer", &[], "bypassPermissions")).unwrap();
+
+        assert_eq!(plain["permissions"], bypassing["permissions"]);
+    }
 
     fn allows(role: &str, rule: &str) -> bool {
         allowed_for(role).contains(&rule)

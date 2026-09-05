@@ -519,6 +519,14 @@ impl Crew {
             }
         }
 
+        let mode = agent
+            .permissions
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| permission_for_role(&agent.role))
+            .to_owned();
+
         // What this role may run without stopping to ask. Written into
         // Agentland's own folder and pointed at, rather than into the worktree:
         // the worktree is a checkout of somebody's repository, and a settings
@@ -538,7 +546,11 @@ impl Crew {
             ));
 
             if fs::create_dir_all(&folder).is_ok()
-                && fs::write(&file, crate::permits::settings_for(&agent.role, &declared)).is_ok()
+                && fs::write(
+                    &file,
+                    crate::permits::settings_in(&agent.role, &declared, &mode),
+                )
+                .is_ok()
             {
                 args.push((*flag).to_owned());
                 args.push(file.to_string_lossy().into_owned());
@@ -556,15 +568,8 @@ impl Crew {
         }
 
         if let Some(flag) = engine.permission_flag {
-            let mode = agent
-                .permissions
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| permission_for_role(&agent.role));
-
             args.push(flag.to_owned());
-            args.push(mode.to_owned());
+            args.push(mode.clone());
         }
 
         if let (Some(flag), Some(model)) = (engine.model_flag, agent.model.as_deref()) {
