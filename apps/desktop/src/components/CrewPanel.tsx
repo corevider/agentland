@@ -5,6 +5,7 @@ import {
     shape_agent,
     dismiss_agent,
     format_elapsed,
+    create_worktree,
     hire_agent,
     list_agents,
     list_engines,
@@ -20,6 +21,7 @@ import {
     type SessionInfo,
 } from "@/lib/core";
 import { what_is_held } from "@/lib/leaving";
+import { hiring_targets, target_value, worktree_for, type Target } from "@/lib/hiring";
 
 const ROLES = ["implementer", "reviewer", "tester", "researcher", "ops", "commander"];
 
@@ -47,7 +49,7 @@ interface Props {
 export function CrewPanel({ active, on_open_session }: Props) {
     const [engines, set_engines] = useState<Engine[]>([]);
     const [agents, set_agents] = useState<Agent[]>([]);
-    const [targets, set_targets] = useState<Array<{ repository_id: string; worktree: string }>>([]);
+    const [targets, set_targets] = useState<Target[]>([]);
     const [draft, set_draft] = useState({ name: "", role: ROLES[0], engine_id: "", target: "" });
     const [error, set_error] = useState<string | null>(null);
     const [busy, set_busy] = useState(false);
@@ -66,16 +68,16 @@ export function CrewPanel({ active, on_open_session }: Props) {
         set_agents(crew);
 
         const lists = await Promise.all(repos.map((repo) => list_worktrees(repo.id)));
-        const flat = lists.flat().map((entry) => ({
-            repository_id: entry.repository_id,
-            worktree: entry.name,
-        }));
-        set_targets(flat);
+        const open = hiring_targets(repos, lists.flat());
+        set_targets(open);
 
         set_draft((current) => ({
             ...current,
             engine_id: current.engine_id || available.find((entry) => entry.installed)?.id || "",
-            target: current.target || (flat[0] ? `${flat[0].repository_id}/${flat[0].worktree}` : ""),
+            target:
+                open.some((target) => target_value(target) === current.target) || open.length === 0
+                    ? current.target
+                    : target_value(open[0]),
         }));
     }, []);
 
@@ -162,6 +164,11 @@ export function CrewPanel({ active, on_open_session }: Props) {
                         No agent CLI found on PATH. Install one — Claude Code, Codex, Gemini — and it
                         appears here.
                     </p>
+                ) : targets.length === 0 ? (
+                    <p className="font-mono text-[11px] text-sun">
+                        No project is open yet. Open a folder under Repositories — Agentland starts a
+                        git repository in it if it is not one already — and it can be hired into here.
+                    </p>
                 ) : (
                     <div className="flex flex-wrap items-center gap-2">
                         <input
@@ -198,10 +205,10 @@ export function CrewPanel({ active, on_open_session }: Props) {
                             onChange={(event) => set_draft({ ...draft, target: event.target.value })}
                         >
                             {targets.map((target) => {
-                                const value = `${target.repository_id}/${target.worktree}`;
+                                const value = target_value(target);
                                 return (
                                     <option key={value} value={value}>
-                                        {value}
+                                        {target.label}
                                     </option>
                                 );
                             })}
@@ -211,9 +218,24 @@ export function CrewPanel({ active, on_open_session }: Props) {
                             disabled={busy || !draft.name.trim() || !draft.target}
                             onClick={() =>
                                 run(async () => {
-                                    const [repository_id, worktree] = draft.target.split("/");
+                                    const name = draft.name.trim();
+                                    const [repository_id, chosen] = draft.target.split("/");
+
+                                    // A project with no worktree yet is still somewhere to
+                                    // hire into: the agent's own worktree is cut here, named
+                                    // after them, rather than being a step to find first.
+                                    let worktree = chosen;
+                                    if (!worktree) {
+                                        const wanted = worktree_for(name);
+                                        if (!wanted) {
+                                            throw new Error("name must contain letters or digits");
+                                        }
+                                        const cut = await create_worktree(repository_id, wanted);
+                                        worktree = cut.name;
+                                    }
+
                                     await hire_agent({
-                                        name: draft.name.trim(),
+                                        name,
                                         role: draft.role,
                                         engine_id: draft.engine_id,
                                         repository_id,
