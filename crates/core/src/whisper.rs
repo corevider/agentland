@@ -259,11 +259,12 @@ fn make_runnable(tool: &Path) {
     }
 
     // The tool loads its own shared libraries from beside it, and those arrive
-    // as plain files too.
+    // as plain files too — `.so` on Linux, `.dylib` on a mac.
     if let Some(beside) = tool.parent() {
         for entry in std::fs::read_dir(beside).into_iter().flatten().flatten() {
             let path = entry.path();
-            if path.extension().and_then(|piece| piece.to_str()) != Some("so") {
+            let kind = path.extension().and_then(|piece| piece.to_str());
+            if !matches!(kind, Some("so") | Some("dylib")) {
                 continue;
             }
             if let Ok(held) = std::fs::metadata(&path) {

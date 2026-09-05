@@ -27,11 +27,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
-            arch: arm64
-          - os: macos-13
-            arch: x64
-    runs-on: ${{ matrix.os }}
+          - arch: arm64
+            architectures: arm64
+            native: true
+          # Intel is cross-compiled from the arm64 runner: GitHub retired the
+          # macos-13 image, and a job that waits forever for a runner that is
+          # not coming is worse than a build nobody can smoke-test on the way
+          # out. It is the same source and the same flags.
+          - arch: x64
+            architectures: x86_64
+            native: false
+    runs-on: macos-14
     timeout-minutes: 45
     steps:
       - name: Take whisper.cpp at the pinned tag
@@ -45,6 +51,7 @@ jobs:
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=${{ matrix.architectures }} \
             -DBUILD_SHARED_LIBS=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DWHISPER_BUILD_TESTS=OFF \
@@ -75,7 +82,15 @@ jobs:
           install_name_tool -add_rpath "@loader_path" whisper-cli || true
 
           otool -L whisper-cli
-          ./whisper-cli --help > /dev/null && echo "it runs"
+          file whisper-cli | grep -q "${{ matrix.architectures }}" || {
+            echo "::error::built for the wrong architecture"; exit 1;
+          }
+
+          # Only where it can be: nothing on an arm64 runner can start an
+          # Intel binary, so that one is checked for what it is instead.
+          if [ "${{ matrix.native }}" = "true" ]; then
+            ./whisper-cli --help > /dev/null && echo "it runs"
+          fi
 
       - name: Pack it
         working-directory: whisper.cpp
