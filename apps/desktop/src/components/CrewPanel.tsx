@@ -384,7 +384,7 @@ export function CrewPanel({ active, on_open_session }: Props) {
                         {what_is_held(leaving.holdings).length === 0 ? (
                             <p className="font-mono text-[11px] text-shade">
                                 Nothing in hand — no cards, no pane, nothing uncommitted. Its
-                                worktree stays where it is.
+                                worktree goes with it; the branch it committed to stays.
                             </p>
                         ) : (
                             <div className="flex flex-col gap-1">
@@ -401,7 +401,9 @@ export function CrewPanel({ active, on_open_session }: Props) {
                                 <p className="font-mono text-[10px] text-shade">
                                     Dismissing cannot be undone. Its worktree
                                     {leaving.holdings.worktree ? ` (${leaving.holdings.worktree})` : ""} is
-                                    left on disk, so anything committed there is still reachable.
+                                    removed with it, uncommitted files and all. The branch it
+                                    committed to stays, so anything committed there is still
+                                    reachable.
                                 </p>
                             </div>
                         )}

@@ -121,7 +121,7 @@ fn tools() -> Value {
         },
         {
             "name": "crew_dismiss",
-            "description": "Let an agent go. Allowed only for one holding nothing — no unfinished card, no open pane, nothing uncommitted, no commit that exists on its branch alone. Anything else is refused and belongs to a person, who is shown what would be lost. Its worktree is left on disk either way.",
+            "description": "Let an agent go. Allowed only for one holding nothing — no unfinished card, no open pane, nothing uncommitted, no commit that exists on its branch alone. Anything else is refused and belongs to a person, who is shown what would be lost. Its worktree goes with it when nobody else is standing there; the branch it committed to stays, so the work is still reachable.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "id": { "type": "string" } },

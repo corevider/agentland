@@ -4225,6 +4225,18 @@ struct Holdings {
     empty_handed: bool,
 }
 
+/// Whether an agent's worktree is now empty of people.
+///
+/// Worktrees are shared on purpose: a card pinned to a branch can only go to
+/// somebody standing there, so a reviewer often works where the implementer
+/// does. Taking the folder out from under whoever is left would be the same
+/// mistake as never clearing it at all.
+fn nobody_left_in(crew: &[Agent], repository_id: &str, worktree: &str) -> bool {
+    !crew
+        .iter()
+        .any(|held| held.repository_id == repository_id && held.worktree == worktree)
+}
+
 fn holdings_of(state: &AppState, agent: &crate::crew::Agent) -> Holdings {
     let cards: Vec<HeldCard> = state
         .board
@@ -4377,6 +4389,32 @@ async fn dismiss_agent(
         &project,
         &name,
     );
+
+    // The desk goes with the person. An agent's worktree outlives it otherwise,
+    // and the next hire is offered a folder nobody is in, named after somebody
+    // who left. The branch survives this — `git worktree remove` takes the
+    // folder and leaves the commits on `agent/<name>` — so what was written is
+    // still reachable, and only the empty room is cleared away.
+    //
+    // Forced only when the person was shown what would be lost and went ahead:
+    // that yes is the one that discards uncommitted files, and without it a
+    // dirty worktree is left standing rather than quietly emptied.
+    if let Some(agent) = &agent {
+        if nobody_left_in(&state.crew.list(), &agent.repository_id, &agent.worktree) {
+            match state
+                .repos
+                .remove_worktree(&agent.repository_id, &agent.worktree, ask.anyway)
+            {
+                Ok(()) => note(&state, "worktree.removed", "a person", &project,
+                               &format!("{} left with {}", agent.worktree, name)),
+                Err(error) => {
+                    tracing::warn!(%error, worktree = %agent.worktree, "the worktree stays");
+                    note(&state, "worktree.kept", "a person", &project,
+                         &format!("{} is still there: {error}", agent.worktree));
+                }
+            }
+        }
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -6129,6 +6167,48 @@ impl IntoResponse for ApiError {
             }),
         )
             .into_response()
+    }
+}
+
+#[cfg(test)]
+mod dismissal_tests {
+    use super::nobody_left_in;
+    use crate::crew::{Agent, AgentState};
+
+    fn standing(id: &str, repository_id: &str, worktree: &str) -> Agent {
+        Agent {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            role: "implementer".to_owned(),
+            engine_id: "claude".to_owned(),
+            repository_id: repository_id.to_owned(),
+            worktree: worktree.to_owned(),
+            session_id: None,
+            state: AgentState::Offline,
+            model: None,
+            title: None,
+            colour: None,
+            permissions: None,
+            account: None,
+        }
+    }
+
+    #[test]
+    fn a_worktree_the_last_person_left_is_empty() {
+        assert!(nobody_left_in(&[standing("bo", "atolye", "desk")], "atolye", "ada"));
+        assert!(nobody_left_in(&[], "atolye", "ada"));
+    }
+
+    #[test]
+    fn a_worktree_somebody_else_is_standing_in_is_not() {
+        let crew = [standing("bo", "atolye", "ada"), standing("cy", "atolye", "desk")];
+        assert!(!nobody_left_in(&crew, "atolye", "ada"));
+    }
+
+    #[test]
+    fn the_same_worktree_name_in_another_project_is_another_worktree() {
+        let crew = [standing("bo", "citybidwars", "ada")];
+        assert!(nobody_left_in(&crew, "atolye", "ada"));
     }
 }
 
