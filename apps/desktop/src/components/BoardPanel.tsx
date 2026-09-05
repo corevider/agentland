@@ -1,4 +1,5 @@
 import { use_poll } from "@/lib/poll";
+import type { MenuItem } from "@/components/ContextMenu";
 import { on_a_control, without_text_selection } from "@/lib/controls";
 import { dated } from "@/lib/dated";
 import { use_services } from "@/workspace/registry";
@@ -20,6 +21,7 @@ import {
     assign_task,
     attachment_object_url,
     delete_task,
+    dispatch_task,
     list_agents,
     list_repos,
     list_tasks,
@@ -86,7 +88,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
     /// The card being written or rewritten, and any files that arrived with
     /// the request to write it — a screenshot pasted onto the board opens the
     /// editor with the screenshot already on the card.
-    const [editing, set_editing] = useState<{ task: Task | null; seed: File[] } | null>(null);
+    const [editing, set_editing] = useState<{ task: Task | null; seed: File[]; column?: Column } | null>(null);
     const [review, set_review] = useState<{ task: Task; data: Review } | null>(null);
     /// Where the card being dragged would land: the column, and the card it
     /// would sit above (null meaning the bottom). Drawn, so a drop is aimed
@@ -310,6 +312,100 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
 
     const { open_menu } = use_services();
 
+    const card_items = (task: Task): MenuItem[] => {
+        const crew_here = agents.filter((agent) => agent.repository_id === task.repository_id);
+        return [
+            { label: "Open", run: () => set_opened(task.id) },
+            ...(task.worktree
+                ? [{ label: "Review the work", run: () => void open_review(task) }]
+                : []),
+            {
+                label: "Move to",
+                items: COLUMNS.filter((column) => column !== task.column).map(
+                    (column) => ({
+                        label: column,
+                        run: () => run(() => place_task(task.id, column)),
+                    }),
+                ),
+            },
+            {
+                label: "Hand to",
+                disabled: crew_here.length === 0,
+                hint: crew_here.length === 0 ? "nobody hired here" : undefined,
+                items: crew_here.map((agent) => {
+                    const elsewhere =
+                        task.worktree !== null && agent.worktree !== task.worktree;
+                    return {
+                        label: agent.name,
+                        hint: elsewhere ? `stands in ${agent.worktree}` : agent.role,
+                        disabled: agent.id === task.assignee || elsewhere,
+                        run: () => run(() => assign_task(task.id, agent.id)),
+                    };
+                }),
+            },
+            ...(task.assignee
+                ? [
+                      {
+                          label: `Take back from ${task.assignee}`,
+                          hint: "it returns to the backlog",
+                          run: () => run(() => release_task(task.id)),
+                      },
+                  ]
+                : []),
+            {
+                label: "Delete",
+                danger: true,
+                run: () => run(() => delete_task(task.id)),
+            },
+                                    
+        ];
+    };
+
+    const column_items = (column: Column): MenuItem[] => {
+        const here = tasks.filter((task) => task.column === column);
+        return [
+            {
+                label: `New card in ${column}`,
+                hint: "+",
+                run: () => set_editing({ task: null, seed: [], column }),
+            },
+            ...(column === "backlog" || column === "assigned"
+                ? [
+                      {
+                          label: `Hand every card here to X`,
+                          hint: `${here.length}`,
+                          disabled: here.length === 0,
+                          run: () =>
+                              run(async () => {
+                                  for (const task of here) {
+                                      await dispatch_task(task.id);
+                                  }
+                              }),
+                      },
+                  ]
+                : []),
+            ...(column === "review"
+                ? [
+                      {
+                          label: "Open every review",
+                          disabled: here.length === 0,
+                          run: () => {
+                              const first = here[0];
+                              if (first) {
+                                  void open_review(first);
+                              }
+                          },
+                      },
+                  ]
+                : []),
+        ];
+    };
+
+    const board_items = (): MenuItem[] => [
+        { label: "New card", hint: "+", run: () => set_editing({ task: null, seed: [] }) },
+        { label: "Read the board again", hint: "↻", run: () => run(async () => undefined) },
+    ];
+
     const run = useCallback(
         async (action: () => Promise<unknown>) => {
             set_busy(true);
@@ -386,6 +482,12 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
         <div className="@container flex h-full min-h-0 min-w-0 flex-1">
             <div
                 ref={surface}
+                onContextMenu={(event) => {
+                    if ((event.target as Element).closest("[data-column], [data-card], input, textarea, select")) {
+                        return;
+                    }
+                    open_menu(event, "The board", board_items());
+                }}
                 className={`h-full min-h-0 min-w-0 flex-1 flex-col gap-3 p-2.5 ${
                     aside_open ? "hidden @[820px]:flex" : "flex"
                 }`}
@@ -422,6 +524,12 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                             // of a wide panel empty and pushed "done" off the
                             // edge of a narrow one with room to spare.
                             data-column={column}
+                            onContextMenu={(event) => {
+                                if ((event.target as Element).closest("[data-card]")) {
+                                    return;
+                                }
+                                open_menu(event, `${column} · ${tasks.filter((task) => task.column === column).length}`, column_items(column));
+                            }}
                             className={`flex min-h-0 min-w-[220px] flex-1 flex-col rounded-md border bg-lagoon transition-colors ${
                                 aiming?.column === column && carry
                                     ? "border-turquoise bg-lagoon-deep"
@@ -457,55 +565,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                                         on_assign={(agent_id) => run(() => assign_task(task.id, agent_id))}
                                         on_review={() => void open_review(task)}
                                         on_delete={() => run(() => delete_task(task.id))}
-                                        on_menu={(event) => {
-                                            const crew_here = agents.filter(
-                                                (agent) => agent.repository_id === task.repository_id,
-                                            );
-                                            open_menu(event, `${task.id} · ${task.title}`, [
-                                                { label: "Open", run: () => set_opened(task.id) },
-                                                ...(task.worktree
-                                                    ? [{ label: "Review the work", run: () => void open_review(task) }]
-                                                    : []),
-                                                {
-                                                    label: "Move to",
-                                                    items: COLUMNS.filter((column) => column !== task.column).map(
-                                                        (column) => ({
-                                                            label: column,
-                                                            run: () => run(() => place_task(task.id, column)),
-                                                        }),
-                                                    ),
-                                                },
-                                                {
-                                                    label: "Hand to",
-                                                    disabled: crew_here.length === 0,
-                                                    hint: crew_here.length === 0 ? "nobody hired here" : undefined,
-                                                    items: crew_here.map((agent) => {
-                                                        const elsewhere =
-                                                            task.worktree !== null && agent.worktree !== task.worktree;
-                                                        return {
-                                                            label: agent.name,
-                                                            hint: elsewhere ? `stands in ${agent.worktree}` : agent.role,
-                                                            disabled: agent.id === task.assignee || elsewhere,
-                                                            run: () => run(() => assign_task(task.id, agent.id)),
-                                                        };
-                                                    }),
-                                                },
-                                                ...(task.assignee
-                                                    ? [
-                                                          {
-                                                              label: `Take back from ${task.assignee}`,
-                                                              hint: "it returns to the backlog",
-                                                              run: () => run(() => release_task(task.id)),
-                                                          },
-                                                      ]
-                                                    : []),
-                                                {
-                                                    label: "Delete",
-                                                    danger: true,
-                                                    run: () => run(() => delete_task(task.id)),
-                                                },
-                                            ]);
-                                        }}
+                                        on_menu={(event) => open_menu(event, `${task.id} · ${task.title}`, card_items(task))}
                                     />
                                 )}
                             />
@@ -562,9 +622,14 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                     seed={editing.seed}
                     on_close={() => set_editing(null)}
                     on_saved={(saved) => {
+                        const wanted = editing.column;
                         set_editing(null);
                         set_opened(saved.id);
-                        void refresh();
+                        if (wanted && wanted !== saved.column) {
+                            void run(() => place_task(saved.id, wanted));
+                        } else {
+                            void refresh();
+                        }
                     }}
                 />
             ) : null}
@@ -572,6 +637,12 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
             {!editing && !review && opened && tasks.some((task) => task.id === opened) ? (
                 <CardDetail
                     task={tasks.find((task) => task.id === opened)!}
+                    on_menu={(event) => {
+                        const held = tasks.find((task) => task.id === opened);
+                        if (held) {
+                            open_menu(event, `${held.id} · ${held.title}`, card_items(held));
+                        }
+                    }}
                     on_close={() => set_opened(null)}
                     on_edit={() => {
                         const held = tasks.find((task) => task.id === opened);
@@ -792,6 +863,7 @@ function said(entry: Entry): string {
 /// answer rather than the answer.
 function CardDetail({
     task,
+    on_menu,
     on_close,
     on_edit,
     on_changed,
@@ -799,6 +871,7 @@ function CardDetail({
     on_merge,
 }: {
     task: Task;
+    on_menu?: (event: React.MouseEvent) => void;
     on_close: () => void;
     on_edit: () => void;
     on_changed: () => void;
@@ -815,7 +888,12 @@ function CardDetail({
     );
 
     return (
-        <aside className={ASIDE}>
+        <aside className={ASIDE} onContextMenu={(event) => {
+            if ((event.target as Element).closest("input, textarea, select, button, img")) {
+                return;
+            }
+            on_menu?.(event);
+        }}>
             <header className="flex items-start justify-between gap-2 border-b border-reef px-2 py-1.5">
                 <div className="min-w-0">
                     <div className="text-[12px] text-linen">{task.title}</div>
