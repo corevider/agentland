@@ -94,6 +94,25 @@ pub fn tokio_command(tool: &str) -> tokio::process::Command {
     command
 }
 
+/// A command that runs one written line through a shell.
+///
+/// `sh -c` is not a thing on Windows, so a transcriber set in Settings never
+/// ran there — the failure was the shell missing, not the transcriber. The
+/// flag differs too: cmd takes `/C`, PowerShell takes `-Command`.
+pub fn shell_line(line: &str) -> Command {
+    if cfg!(windows) {
+        let shell = default_shell();
+        let flag = if shell.to_lowercase().contains("cmd") { "/C" } else { "-Command" };
+        let mut command = command(&shell);
+        command.arg(flag).arg(line);
+        return command;
+    }
+
+    let mut command = command("sh");
+    command.arg("-c").arg(line);
+    command
+}
+
 /// The shell a person expects on this machine: what SHELL says, or bash;
 /// PowerShell on Windows, and cmd.exe where there is none.
 pub fn default_shell() -> String {
@@ -166,6 +185,26 @@ fn quiet_tokio(_command: &mut tokio::process::Command) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_written_line_goes_through_a_shell_this_machine_has() {
+        let command = shell_line("whisper -f said.wav");
+        let program = command.get_program().to_string_lossy().to_lowercase();
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        if cfg!(windows) {
+            assert!(!program.contains("/sh"), "there is no sh here: {program}");
+            assert!(args.iter().any(|arg| arg == "/C" || arg == "-Command"), "{args:?}");
+        } else {
+            assert!(program.ends_with("sh"), "{program}");
+            assert!(args.contains(&"-c".to_owned()), "{args:?}");
+        }
+
+        assert!(args.iter().any(|arg| arg.contains("whisper")), "{args:?}");
+    }
 
     #[test]
     fn a_windows_drive_path_loses_the_prefix_a_tool_cannot_read() {

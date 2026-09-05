@@ -186,10 +186,7 @@ impl Voice {
             anyhow::bail!("the recorder wrote nothing");
         }
 
-        let spoken = crate::exec::command("sh")
-            .arg("-c")
-            .arg(fill_in(command, &held.file))
-            .output()?;
+        let spoken = crate::exec::shell_line(&fill_in(command, &held.file)).output()?;
 
         if !spoken.status.success() {
             anyhow::bail!(
@@ -244,10 +241,7 @@ pub fn read_back(
         Err(error) => anyhow::bail!("ffmpeg is needed to read a recording from a browser: {error}"),
     };
 
-    let spoken = crate::exec::command("sh")
-        .arg("-c")
-        .arg(fill_in(command, &file))
-        .output()?;
+    let spoken = crate::exec::shell_line(&fill_in(command, &file)).output()?;
 
     if !spoken.status.success() {
         anyhow::bail!(
