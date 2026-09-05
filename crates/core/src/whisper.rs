@@ -22,6 +22,15 @@ const RELEASE: &str = "v1.9.2";
 const RELEASES: &str = "https://github.com/ggml-org/whisper.cpp/releases/download";
 const MODELS: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
 
+/// Where the macOS build lives, since whisper.cpp does not publish one.
+///
+/// It ships command-line builds for Windows and Linux and an xcframework for
+/// Apple platforms, so a mac had nothing to fetch. `.github/workflows/
+/// whisper-macos.yml` builds one and puts it on a release of its own — a fixed
+/// tag rather than an Agentland one, so this URL does not move every time
+/// Agentland ships and an old copy can still find what it was built against.
+const OURS: &str = "https://github.com/corevider/agentland/releases/download";
+
 /// A model somebody can choose, smallest first.
 ///
 /// `base` is the one that answers in about a second on a laptop and is enough
@@ -63,15 +72,14 @@ pub fn model_named(id: &str) -> Option<Model> {
     MODELS_ON_OFFER.iter().copied().find(|model| model.id == id)
 }
 
-/// The build of whisper.cpp for this machine, or nothing where none is published.
-///
-/// Apple silicon is the gap: whisper.cpp ships an xcframework rather than a
-/// command-line build, so a mac says what to install instead of pretending.
+/// The build of whisper.cpp for this machine, or nothing where none exists.
 pub fn build_for(os: &str, arch: &str) -> Option<&'static str> {
     match (os, arch) {
         ("windows", "x86_64") => Some("whisper-bin-x64.zip"),
         ("linux", "x86_64") => Some("whisper-bin-ubuntu-x64.tar.gz"),
         ("linux", "aarch64") => Some("whisper-bin-ubuntu-arm64.tar.gz"),
+        ("macos", "aarch64") => Some("whisper-bin-macos-arm64.tar.gz"),
+        ("macos", "x86_64") => Some("whisper-bin-macos-x64.tar.gz"),
         _ => None,
     }
 }
@@ -81,6 +89,12 @@ pub fn build_here() -> Option<&'static str> {
 }
 
 pub fn build_url(asset: &str) -> String {
+    // The mac builds are ours because nobody else makes them; everything else
+    // comes from whisper.cpp's own release, under the same version.
+    if asset.contains("macos") {
+        return format!("{OURS}/whisper-{RELEASE}/{asset}");
+    }
+
     format!("{RELEASES}/{RELEASE}/{asset}")
 }
 
@@ -309,9 +323,15 @@ mod tests {
     }
 
     #[test]
+    fn a_mac_is_sent_to_the_build_we_make_for_it() {
+        assert_eq!(build_for("macos", "aarch64"), Some("whisper-bin-macos-arm64.tar.gz"));
+        assert_eq!(build_for("macos", "x86_64"), Some("whisper-bin-macos-x64.tar.gz"));
+    }
+
+    #[test]
     fn a_machine_with_none_says_so_rather_than_guessing_at_one() {
-        assert_eq!(build_for("macos", "aarch64"), None);
         assert_eq!(build_for("windows", "aarch64"), None);
+        assert_eq!(build_for("freebsd", "x86_64"), None);
     }
 
     #[test]
@@ -321,6 +341,30 @@ mod tests {
             "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2/whisper-bin-x64.zip"
         );
         assert!(model_url(&model_named("small").unwrap()).ends_with("/ggml-small.bin"));
+    }
+
+    #[test]
+    fn the_mac_build_comes_from_our_own_release_at_the_same_version() {
+        assert_eq!(
+            build_url("whisper-bin-macos-arm64.tar.gz"),
+            "https://github.com/corevider/agentland/releases/download/whisper-v1.9.2/whisper-bin-macos-arm64.tar.gz"
+        );
+    }
+
+    #[test]
+    fn every_platform_that_is_offered_a_build_can_be_told_where_it_is() {
+        for (os, arch) in [
+            ("windows", "x86_64"),
+            ("linux", "x86_64"),
+            ("linux", "aarch64"),
+            ("macos", "aarch64"),
+            ("macos", "x86_64"),
+        ] {
+            let asset = build_for(os, arch).expect("a build");
+            let url = build_url(asset);
+            assert!(url.starts_with("https://"), "{os}/{arch}: {url}");
+            assert!(url.ends_with(asset), "{os}/{arch}: {url}");
+        }
     }
 
     #[test]

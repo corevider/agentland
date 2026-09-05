@@ -1,0 +1,95 @@
+# The macOS build of whisper.cpp that nobody publishes.
+#
+# whisper.cpp ships command-line builds for Windows and Linux and an
+# xcframework for Apple platforms, so a mac had nothing Agentland could fetch
+# and voice ended there. This builds one and puts it on a release of its own —
+# a fixed tag, not Agentland's, so the download URL does not move every time
+# Agentland ships and an old copy of the app can still find it.
+#
+# Run by hand when the pinned whisper.cpp version in crates/core/src/whisper.rs
+# changes, and never otherwise.
+name: whisper for macos
+
+on:
+  workflow_dispatch:
+    inputs:
+      whisper:
+        description: "The whisper.cpp tag to build"
+        required: true
+        default: "v1.9.2"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            arch: arm64
+          - os: macos-13
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - name: Take whisper.cpp at the pinned tag
+        run: git clone --depth 1 --branch "${{ inputs.whisper }}" https://github.com/ggml-org/whisper.cpp.git
+
+      # The Metal shaders are embedded rather than left beside the binary: a
+      # tarball that has to keep a .metallib next to the tool is a tarball that
+      # half-works the moment anything moves.
+      - name: Build the command-line tool
+        working-directory: whisper.cpp
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_EXAMPLES=ON
+          cmake --build build --config Release --target whisper-cli -j 3
+
+      # The tool and the libraries it loads, flattened into one folder, with
+      # the load paths rewritten to look beside the binary rather than at the
+      # build directory that will not exist on anybody else's machine.
+      - name: Gather what it needs to run
+        working-directory: whisper.cpp
+        run: |
+          out="whisper-bin-macos-${{ matrix.arch }}"
+          mkdir -p "$out"
+          cp build/bin/whisper-cli "$out/"
+          find build -name "*.dylib" -exec cp {} "$out/" \;
+
+          cd "$out"
+          for lib in *.dylib; do
+            install_name_tool -id "@rpath/$lib" "$lib" || true
+            for other in *.dylib; do
+              install_name_tool -change "@rpath/$other" "@loader_path/$other" "$lib" || true
+            done
+          done
+          for other in *.dylib; do
+            install_name_tool -change "@rpath/$other" "@loader_path/$other" whisper-cli || true
+          done
+          install_name_tool -add_rpath "@loader_path" whisper-cli || true
+
+          otool -L whisper-cli
+          ./whisper-cli --help > /dev/null && echo "it runs"
+
+      - name: Pack it
+        working-directory: whisper.cpp
+        run: tar -czf "whisper-bin-macos-${{ matrix.arch }}.tar.gz" "whisper-bin-macos-${{ matrix.arch }}"
+
+      - name: Put it where the app looks for it
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: whisper-${{ inputs.whisper }}
+          name: whisper.cpp ${{ inputs.whisper }} for macOS
+          body: |
+            The macOS command-line build of whisper.cpp ${{ inputs.whisper }},
+            which whisper.cpp itself does not publish. Agentland fetches this
+            when voice is set up on a mac. Built by `.github/workflows/whisper-macos.yml`.
+          files: whisper.cpp/whisper-bin-macos-${{ matrix.arch }}.tar.gz
+          draft: false
+          prerelease: false
