@@ -157,7 +157,8 @@ export function TerminalsPanel({ active }: { active: boolean }) {
             const project_items = (repo: (typeof repos)[number]): MenuItem[] => [
                 {
                     label: `main checkout · ${repo.default_branch}`,
-                    hint: folder_name(repo.primary_path),
+                    hint: repo.missing ? `gone from disk · ${repo.primary_path}` : folder_name(repo.primary_path),
+                    disabled: Boolean(repo.missing),
                     run: () => services.open_shell_in(repo.primary_path),
                 },
                 ...trees
@@ -168,13 +169,15 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                             .map((agent) => agent.name);
                         return {
                             label: `${tree.name} · ${tree.branch}`,
-                            hint: standing.length > 0 ? standing.join(", ") : `:${tree.port}`,
+                            hint: tree.missing ? "gone from disk" : standing.length > 0 ? standing.join(", ") : `:${tree.port}`,
+                            disabled: tree.missing,
                             run: () => services.open_shell_in(tree.path),
                         };
                     }),
                 {
                     label: "New worktree…",
-                    hint: "+",
+                    hint: repo.missing ? "its checkout is gone" : "+",
+                    disabled: Boolean(repo.missing),
                     run: () => {
                         set_naming_error(null);
                         set_naming({ repository_id: repo.id, name: "", x: at.clientX, y: at.clientY });

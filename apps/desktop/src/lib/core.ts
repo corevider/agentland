@@ -191,6 +191,8 @@ export interface Repository {
     default_branch: string;
     remotes: Remote[];
     origin: string | null;
+    /// The checkout is not on disk any more.
+    missing?: boolean;
 }
 
 export interface WorktreeStatus {

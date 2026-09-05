@@ -295,6 +295,14 @@ impl PtyManager {
             pixel_height: 0,
         })?;
 
+        // A folder that is not there is refused rather than fallen back from:
+        // the shell would have opened at the root of the disk and said nothing.
+        if let Some(cwd) = &spec.cwd {
+            if !std::path::Path::new(cwd).is_dir() {
+                anyhow::bail!("{cwd} is not a folder on this machine");
+            }
+        }
+
         let mut command = CommandBuilder::new(&spec.command);
         command.args(&spec.args);
         if let Some(cwd) = &spec.cwd {
@@ -439,4 +447,26 @@ fn spawn_reader(
             let _ = writer.flush();
         }
     });
+}
+
+#[cfg(test)]
+mod spawn_tests {
+    use super::*;
+
+    #[test]
+    fn a_shell_is_not_opened_in_a_folder_that_is_not_there() {
+        let manager = PtyManager::new();
+        let refused = manager
+            .spawn(PtySpawnSpec {
+                command: "sh".into(),
+                args: vec![],
+                cwd: Some("/definitely/not/a/folder/here".into()),
+                cols: 80,
+                rows: 24,
+                env: Default::default(),
+            })
+            .expect_err("a missing folder is not a place to open a shell");
+
+        assert!(refused.to_string().contains("not a folder"), "{refused}");
+    }
 }

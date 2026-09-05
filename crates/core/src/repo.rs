@@ -164,9 +164,14 @@ fn git(args: &[&str], cwd: Option<&Path>) -> Result<String> {
         command.current_dir(dir);
     }
 
-    let output = command
-        .output()
-        .with_context(|| format!("failed to run git {}", args.join(" ")))?;
+    let output = command.output().map_err(|error| {
+        anyhow!(
+            "failed to run git {} in {}: {error}",
+            args.join(" "),
+            cwd.map(|dir| dir.display().to_string())
+                .unwrap_or_else(|| "the current folder".to_owned())
+        )
+    })?;
 
     if !output.status.success() {
         bail!(
@@ -426,6 +431,16 @@ impl RepoRegistry {
             .get(repository_id)
             .cloned()
             .ok_or_else(|| anyhow!("unknown repository: {repository_id}"))?;
+
+        // A checkout that is not there any more cannot grow a worktree, and
+        // git's own words for it are "cannot change to", which does not say
+        // what to do. Measured on a project whose checkout lived in /tmp.
+        if !repository.primary_path.is_dir() {
+            bail!(
+                "the checkout at {} is gone — point the project at it again, or forget it",
+                repository.primary_path.display()
+            );
+        }
 
         let key = format!("{repository_id}/{name}");
         if self.state.lock().worktrees.contains_key(&key) {

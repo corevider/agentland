@@ -2005,8 +2005,28 @@ struct RemoveQuery {
     force: bool,
 }
 
-async fn list_repos(State(state): State<AppState>) -> Json<Vec<Repository>> {
-    Json(state.repos.repositories())
+/// A repository as the window reads it, with whether its checkout is still
+/// on disk: a project registered from /tmp is gone after a reboot, and a
+/// menu that offers its checkout offers a folder that is not there.
+#[derive(Serialize)]
+struct RepositoryReport {
+    #[serde(flatten)]
+    repository: Repository,
+    missing: bool,
+}
+
+async fn list_repos(State(state): State<AppState>) -> Json<Vec<RepositoryReport>> {
+    Json(
+        state
+            .repos
+            .repositories()
+            .into_iter()
+            .map(|repository| RepositoryReport {
+                missing: !repository.primary_path.is_dir(),
+                repository,
+            })
+            .collect(),
+    )
 }
 
 /// The workspace new work belongs to, making one if there is nowhere yet.

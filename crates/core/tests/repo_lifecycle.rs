@@ -138,3 +138,26 @@ fn a_pull_request_refuses_work_that_is_not_committed_yet() {
         "the branch reached the remote"
     );
 }
+
+#[test]
+fn a_checkout_that_is_gone_says_so_instead_of_failing_in_git() {
+    let base = scratch("gone-checkout");
+    let repo_path = base.join("demo");
+    fs::create_dir_all(&repo_path).unwrap();
+    git(&["init", "-q", "-b", "main"], &repo_path);
+    git(&["config", "user.email", "test@example.com"], &repo_path);
+    git(&["config", "user.name", "test"], &repo_path);
+    fs::write(repo_path.join("README.md"), "demo").unwrap();
+    git(&["add", "-A"], &repo_path);
+    git(&["commit", "-qm", "init"], &repo_path);
+
+    let registry = RepoRegistry::new(base.join("data"));
+    registry.register(&repo_path).expect("register");
+    fs::remove_dir_all(&repo_path).unwrap();
+
+    let refused = registry
+        .create_worktree("demo", "work1")
+        .expect_err("no checkout, no worktree");
+
+    assert!(refused.to_string().contains("is gone"), "{refused}");
+}
