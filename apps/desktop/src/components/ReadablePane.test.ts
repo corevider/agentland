@@ -41,7 +41,7 @@ describe("reading a pane instead of watching it", () => {
     });
 
     it("reads a captured first-run screen as sentences", async () => {
-        const lines = await read(readFileSync("../../sessions/pane-6a8eac18-1.log", "utf8"));
+        const lines = await read(readFileSync("src/components/fixtures/first-run-pane.txt", "utf8"));
         const text = lines.join("\n");
 
         expect(text).toContain("Accessing workspace:");
