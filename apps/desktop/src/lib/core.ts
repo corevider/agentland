@@ -1287,6 +1287,11 @@ export function review_worktree(repository_id: string, worktree: string): Promis
     return request<Review>(`/repos/${repository_id}/worktrees/${worktree}/review`);
 }
 
+/// The git of the project's own checkout, rather than of an agent's worktree.
+export function review_project(repository_id: string): Promise<Review> {
+    return request<Review>(`/repos/${repository_id}/review`);
+}
+
 export interface Listing {
     root: string;
     path: string;

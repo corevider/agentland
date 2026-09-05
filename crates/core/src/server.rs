@@ -367,6 +367,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/dispatch/tasks/{id}", post(dispatch_task))
         .route("/repos/{id}/files", get(list_project_files))
         .route("/repos/{id}/file", get(read_project_file))
+        .route("/repos/{id}/review", get(review_project))
         .route("/repos/{id}/worktrees/{name}/review", get(review_worktree))
         .route("/repos/{id}/worktrees/{name}/commit", post(commit_worktree))
         .route("/repos/{id}/worktrees/{name}/pr", post(open_pull_request))
@@ -3098,6 +3099,13 @@ async fn review_worktree(
     Path((id, name)): Path<(String, String)>,
 ) -> Result<Json<Review>, ApiError> {
     Ok(Json(state.repos.review(&id, &name)?))
+}
+
+async fn review_project(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Review>, ApiError> {
+    Ok(Json(state.repos.review_project(&id)?))
 }
 
 #[derive(Deserialize)]

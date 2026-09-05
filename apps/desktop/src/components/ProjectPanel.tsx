@@ -6,6 +6,7 @@ import {
     list_worktrees,
     read_file,
     review_worktree,
+    review_project,
     type FileText,
     type Listing,
     type Repository,
@@ -105,13 +106,10 @@ export function ProjectPanel({ active, repositories, going }: Props) {
             })
             .catch((cause) => set_error(cause instanceof Error ? cause.message : String(cause)));
 
-        if (worktree) {
-            review_worktree(repository_id, worktree)
-                .then(set_review)
-                .catch(() => set_review(null));
-        } else {
-            set_review(null);
-        }
+        const reading = worktree
+            ? review_worktree(repository_id, worktree)
+            : review_project(repository_id);
+        reading.then(set_review).catch(() => set_review(null));
     }, [repository_id, path, worktree]);
 
     useEffect(refresh, [refresh]);
@@ -285,8 +283,8 @@ export function ProjectPanel({ active, repositories, going }: Props) {
                 <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
                     {!worktree ? (
                         <p className="font-mono text-[10px] text-shade">
-                            Pick a worktree above: git here is the difference between an agent's branch and the
-                            project's own.
+                            The project's own checkout. Pick a worktree above to read an agent's branch
+                            against it instead.
                         </p>
                     ) : null}
 

@@ -854,6 +854,44 @@ impl RepoRegistry {
 
     pub fn review(&self, repository_id: &str, worktree_name: &str) -> Result<Review> {
         let (repository, worktree) = self.locate(repository_id, worktree_name)?;
+        self.review_at(&repository, &worktree)
+    }
+
+    /// The project's own checkout, read the way an agent's worktree is read.
+    ///
+    /// A project is a repository, so "no git here" is the wrong thing to show
+    /// for it. Against its own branch there is nothing committed to compare, so
+    /// what this says is what is true there: the branch it is on, what is
+    /// changed and never committed, and what is new and untracked.
+    pub fn review_project(&self, repository_id: &str) -> Result<Review> {
+        let repository = self
+            .state
+            .lock()
+            .repositories
+            .get(repository_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("unknown repository: {repository_id}"))?;
+
+        if !repository.primary_path.is_dir() {
+            bail!(
+                "the checkout at {} is gone — point the project at it again, or forget it",
+                repository.primary_path.display()
+            );
+        }
+
+        let standing = Worktree {
+            name: String::new(),
+            repository_id: repository_id.to_owned(),
+            path: repository.primary_path.clone(),
+            branch: git(&["rev-parse", "--abbrev-ref", "HEAD"], Some(&repository.primary_path))
+                .unwrap_or_else(|_| repository.default_branch.clone()),
+            port: 0,
+        };
+
+        self.review_at(&repository, &standing)
+    }
+
+    fn review_at(&self, repository: &Repository, worktree: &Worktree) -> Result<Review> {
         let base = repository.default_branch.clone();
         let range = format!("{base}...HEAD");
 
@@ -907,7 +945,7 @@ impl RepoRegistry {
 
         Ok(Review {
             base,
-            branch: worktree.branch,
+            branch: worktree.branch.clone(),
             files: files + untracked.len(),
             insertions: insertions + untracked_insertions,
             deletions,
@@ -1369,6 +1407,35 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_project_reads_its_own_git_without_a_worktree() {
+        let dir = a_folder("own-git");
+        fs::write(dir.join("notes.md"), "a sketch\n").unwrap();
+        let registry = a_registry("own-git");
+        let repository = registry.adopt(&dir).unwrap();
+        fs::write(dir.join("later.md"), "written after the commit\n").unwrap();
+
+        let review = registry.review_project(&repository.id).unwrap();
+
+        assert_eq!(review.branch, "main", "the branch the checkout is actually on");
+        assert!(review.uncommitted, "a new file is work in hand");
+        assert_eq!(review.untracked, vec!["later.md".to_owned()]);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_project_whose_checkout_is_gone_says_so_rather_than_reading_nothing() {
+        let dir = a_folder("own-git-gone");
+        let registry = a_registry("own-git-gone");
+        let repository = registry.adopt(&dir).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+
+        let says = registry.review_project(&repository.id).unwrap_err().to_string();
+
+        assert!(says.contains("is gone"), "{says}");
     }
 
     #[test]
