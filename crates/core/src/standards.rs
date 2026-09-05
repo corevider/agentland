@@ -70,6 +70,9 @@ These hold for every agent, in every project, on every turn.
 
 impl Standards {
     pub fn new(data_dir: PathBuf) -> Self {
+        // The path of the rules file is handed to the engine, which reads it
+        // from its own worktree — so it has to mean the same thing there.
+        let data_dir = crate::exec::settled(&data_dir);
         let held: Held = crate::db::load_state(&data_dir, "standards");
         let text = held.text.unwrap_or_else(|| STARTING_POINT.to_owned());
 

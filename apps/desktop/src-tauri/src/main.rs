@@ -543,9 +543,22 @@ fn allowed_hosts(host: &str, port: u16) -> Vec<String> {
     hosts
 }
 
+/// Where everything Agentland keeps lives.
+///
+/// The fallback used to be the relative `data`, which is a different folder
+/// depending on where the app was launched from — and on Windows it was always
+/// the fallback, because the search below knows only `XDG_DATA_HOME` and `HOME`
+/// and Windows has neither. A relative data directory is also a relative path
+/// handed to an engine: the rules file went out as `data/standards/CLAUDE.md`,
+/// the engine resolved it against its own worktree, and starting a commander
+/// died with `Append system prompt file not found`.
+///
+/// So the fallback is beside the executable rather than beside the caller. That
+/// is where an installed Windows copy already keeps it, so nothing moves, and
+/// it no longer depends on how the app was started.
 fn desktop_data_dir() -> std::path::PathBuf {
     if let Ok(configured) = std::env::var("AGENTLAND_DATA_DIR") {
-        return std::path::PathBuf::from(configured);
+        return absolute(std::path::PathBuf::from(configured));
     }
 
     if cfg!(debug_assertions) {
@@ -554,7 +567,24 @@ fn desktop_data_dir() -> std::path::PathBuf {
 
     dirs_next_data_dir()
         .map(|base| base.join("agentland"))
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(|beside| beside.join("data")))
+        })
+        .map(absolute)
         .unwrap_or_else(|| std::path::PathBuf::from("data"))
+}
+
+/// A path that means the same thing wherever it is read from.
+fn absolute(path: std::path::PathBuf) -> std::path::PathBuf {
+    if path.is_absolute() {
+        return path;
+    }
+
+    std::env::current_dir()
+        .map(|here| here.join(&path))
+        .unwrap_or(path)
 }
 
 fn dirs_next_data_dir() -> Option<std::path::PathBuf> {

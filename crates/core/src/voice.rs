@@ -108,7 +108,7 @@ impl Voice {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
             holding: Mutex::new(None),
-            data_dir,
+            data_dir: crate::exec::settled(&data_dir),
         }
     }
 
