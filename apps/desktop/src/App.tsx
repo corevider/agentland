@@ -961,8 +961,16 @@ export default function App() {
             </header>
 
             {error ? (
-                <div className="border-b border-coral bg-lagoon px-4 py-2 font-mono text-xs text-coral">
-                    {error}
+                <div className="flex items-start gap-3 border-b border-coral bg-lagoon px-4 py-2 font-mono text-xs text-coral">
+                    <span className="min-w-0 flex-1 break-words">{error}</span>
+                    <button
+                        className="shrink-0 rounded border border-coral/50 px-1.5 leading-5 hover:bg-coral/10"
+                        title="dismiss"
+                        aria-label="dismiss this error"
+                        onClick={() => set_error(null)}
+                    >
+                        ×
+                    </button>
                 </div>
             ) : null}
 
