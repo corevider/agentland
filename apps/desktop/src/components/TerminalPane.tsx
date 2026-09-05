@@ -58,7 +58,8 @@ interface Props {
     on_close?: (id: string) => void;
     on_zoom?: (id: string) => void;
     zoomed?: boolean;
-    on_branch?: (session: SessionInfo) => void;
+    /// Open another shell: here, in another worktree, or a new one.
+    on_add?: (session: SessionInfo, event: React.MouseEvent) => void;
     on_tear_out?: (session: SessionInfo) => void;
     stats_from?: SessionInfo | null;
     now_from?: number;
@@ -95,7 +96,7 @@ function collapse_to_tail(data: Uint8Array): Uint8Array {
     return result;
 }
 
-export function TerminalPane({ session, crowned, kept = false, focused, on_focus, on_metrics, label, on_close, on_zoom, zoomed, on_branch, on_tear_out, readable = false, on_readable, on_menu, stats_from, now_from, on_pick_up, on_drop_on, wanted = false }: Props) {
+export function TerminalPane({ session, crowned, kept = false, focused, on_focus, on_metrics, label, on_close, on_zoom, zoomed, on_add, on_tear_out, readable = false, on_readable, on_menu, stats_from, now_from, on_pick_up, on_drop_on, wanted = false }: Props) {
     const host_ref = useRef<HTMLDivElement>(null);
     const screen_ref = useRef<Terminal | null>(null);
     const gpu_ref = useRef<WebglAddon | null>(null);
@@ -500,13 +501,13 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
                     </span>
                 ) : null}
 
-                {on_branch && session.cwd ? (
+                {on_add && session.cwd ? (
                     <button
                         className="shrink-0 rounded px-1 font-mono text-[11px] text-shade hover:text-turquoise"
-                        title="open another shell in the same worktree"
+                        title="another shell — here, in another worktree, or a new one"
                         onClick={(event) => {
                             event.stopPropagation();
-                            on_branch(session);
+                            on_add(session, event);
                         }}
                     >
                         +

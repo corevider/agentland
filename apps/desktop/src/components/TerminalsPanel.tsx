@@ -3,11 +3,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AnimatePresence, motion } from "motion/react";
 
+import type { MenuItem } from "@/components/ContextMenu";
 import { TerminalPane } from "@/components/TerminalPane";
 import {
+    create_worktree,
     is_tauri,
+    list_repos,
     list_sessions,
     list_windows,
+    list_worktrees,
     set_window,
     stop_agent,
     type PaneView,
@@ -26,6 +30,7 @@ import {
     tracks_for,
 } from "@/lib/grid";
 import { apply_order, move_onto, order_of, prune_order } from "@/lib/order";
+import { folder_name, standing_of } from "@/lib/shells";
 import { use_services } from "@/workspace/registry";
 
 const SIZES_KEY = "agentland-pane-grid-2";
@@ -109,6 +114,103 @@ export function TerminalsPanel({ active }: { active: boolean }) {
         (id: string) => services.crew.find((agent) => agent.session_id === id)?.name ?? id,
         [services.crew],
     );
+
+    // A shell opens where a person points: here, in another of the project's
+    // worktrees, in its main checkout, or in a worktree made on the spot. The
+    // menu is read from the core when it opens, so it lists what exists now.
+    const [naming, set_naming] = useState<{ repository_id: string; name: string; x: number; y: number } | null>(null);
+    const [naming_error, set_naming_error] = useState<string | null>(null);
+
+    const open_shell_menu = useCallback(
+        async (event: React.MouseEvent, cwd: string | null) => {
+            const at = {
+                clientX: event.clientX,
+                clientY: event.clientY,
+                preventDefault: () => undefined,
+                stopPropagation: () => undefined,
+            } as unknown as React.MouseEvent;
+
+            const repos = (await list_repos()).filter(
+                (repo) => !services.repositories || services.repositories.includes(repo.id),
+            );
+            const trees = (await Promise.all(repos.map((repo) => list_worktrees(repo.id)))).flat();
+
+            const going = services.going;
+            const from =
+                cwd ??
+                (going?.repository_id
+                    ? (trees.find((tree) => tree.repository_id === going.repository_id && tree.name === going.worktree)?.path ??
+                      repos.find((repo) => repo.id === going.repository_id)?.primary_path ??
+                      null)
+                    : null);
+            const here = standing_of(from, repos, trees);
+
+            const items: MenuItem[] = [];
+            if (from) {
+                items.push({
+                    label: `Here · ${here?.worktree ?? (here ? "main checkout" : folder_name(from))}`,
+                    hint: folder_name(from),
+                    run: () => services.open_shell_in(from),
+                });
+            }
+
+            const project_items = (repo: (typeof repos)[number]): MenuItem[] => [
+                {
+                    label: `main checkout · ${repo.default_branch}`,
+                    hint: folder_name(repo.primary_path),
+                    run: () => services.open_shell_in(repo.primary_path),
+                },
+                ...trees
+                    .filter((tree) => tree.repository_id === repo.id)
+                    .map((tree) => {
+                        const standing = services.crew
+                            .filter((agent) => agent.repository_id === repo.id && agent.worktree === tree.name)
+                            .map((agent) => agent.name);
+                        return {
+                            label: `${tree.name} · ${tree.branch}`,
+                            hint: standing.length > 0 ? standing.join(", ") : `:${tree.port}`,
+                            run: () => services.open_shell_in(tree.path),
+                        };
+                    }),
+                {
+                    label: "New worktree…",
+                    hint: "+",
+                    run: () => {
+                        set_naming_error(null);
+                        set_naming({ repository_id: repo.id, name: "", x: at.clientX, y: at.clientY });
+                    },
+                },
+            ];
+
+            if (repos.length === 1) {
+                items.push(...project_items(repos[0]));
+            } else {
+                for (const repo of repos) {
+                    items.push({ label: repo.name, items: project_items(repo) });
+                }
+            }
+
+            if (items.length === 0) {
+                items.push({ label: "No project in this workspace yet", disabled: true });
+            }
+
+            services.open_menu(at, "Another shell", items);
+        },
+        [services],
+    );
+
+    const make_worktree = useCallback(() => {
+        if (!naming || !naming.name.trim()) {
+            return;
+        }
+        const wanted = naming;
+        create_worktree(wanted.repository_id, wanted.name.trim())
+            .then((created) => {
+                set_naming(null);
+                services.open_shell_in(created.path);
+            })
+            .catch((cause) => set_naming_error(cause instanceof Error ? cause.message : String(cause)));
+    }, [naming, services]);
 
     // With no explicit arrangement, the panel shows what it can show properly.
     const room = sizes.wanted_columns === null
@@ -277,6 +379,43 @@ export function TerminalsPanel({ active }: { active: boolean }) {
 
     return (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            {naming ? (
+                <div
+                    className="fixed z-50 flex flex-col gap-1.5 rounded-md border border-reef bg-lagoon-deep p-2 shadow-[0_10px_24px_rgba(0,0,0,0.45)]"
+                    style={{ left: Math.min(naming.x, window.innerWidth - 260), top: Math.min(naming.y, window.innerHeight - 90) }}
+                    onPointerDown={(event) => event.stopPropagation()}
+                >
+                    <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-shade">new worktree</span>
+                    <div className="flex items-center gap-1">
+                        <input
+                            autoFocus
+                            className="w-44 rounded border border-reef bg-lagoon px-2 py-1 font-mono text-[11px] text-linen"
+                            placeholder="a name, e.g. spike"
+                            value={naming.name}
+                            onChange={(event) => set_naming({ ...naming, name: event.target.value })}
+                            onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                    make_worktree();
+                                }
+                                if (event.key === "Escape") {
+                                    set_naming(null);
+                                }
+                            }}
+                        />
+                        <button
+                            className="rounded border border-turquoise px-2 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40"
+                            disabled={!naming.name.trim()}
+                            onClick={make_worktree}
+                        >
+                            open
+                        </button>
+                        <button className="px-1 font-mono text-[11px] text-shade hover:text-linen" onClick={() => set_naming(null)}>
+                            ×
+                        </button>
+                    </div>
+                    {naming_error ? <span className="max-w-[260px] font-mono text-[10px] text-coral">{naming_error}</span> : null}
+                </div>
+            ) : null}
             <div
                 data-chrome
                 className="flex shrink-0 items-center gap-2 border-b border-reef/60 px-2 py-1 font-mono text-[10px] text-shade"
@@ -309,6 +448,13 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                 ) : null}
 
                 <span className="ml-auto flex items-center gap-1">
+                    <button
+                        className="mr-2 rounded border border-reef px-1.5 hover:border-turquoise hover:text-linen"
+                        title="open a shell — in a worktree, the main checkout, or a new worktree"
+                        onClick={(event) => void open_shell_menu(event, null)}
+                    >
+                        + shell
+                    </button>
                     <span className="text-shade">columns</span>
                     <button
                         className={`rounded px-1.5 ${
@@ -419,7 +565,7 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                     on_close={services.close_session}
                     on_zoom={(id) => set_zoomed((held) => (held === id ? null : id))}
                     zoomed={zoomed === session.id}
-                    on_branch={(entry) => entry.cwd && services.open_shell_in(entry.cwd)}
+                    on_add={(entry, event) => void open_shell_menu(event, entry.cwd)}
                     readable={views[session.id]?.readable ?? false}
                     on_readable={(wanted) => {
                         set_window(session.id, { readable: wanted })
