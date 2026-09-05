@@ -448,7 +448,7 @@ pub struct Supervisor {
 impl Supervisor {
     pub fn new(data_dir: PathBuf) -> Self {
         let _ = fs::create_dir_all(&data_dir);
-        let data_dir = fs::canonicalize(&data_dir).unwrap_or(data_dir);
+        let data_dir = crate::exec::settled(&data_dir);
         let state = crate::db::load_state(&data_dir, "supervisor");
 
         Self {

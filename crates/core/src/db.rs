@@ -154,7 +154,7 @@ static SHARED: OnceLock<Mutex<HashMap<PathBuf, Arc<Database>>>> = OnceLock::new(
 
 impl Database {
     pub fn shared(data_dir: &Path) -> Arc<Database> {
-        let key = std::fs::canonicalize(data_dir).unwrap_or_else(|_| data_dir.to_path_buf());
+        let key = crate::exec::settled(data_dir);
         let registry = SHARED.get_or_init(|| Mutex::new(HashMap::new()));
 
         let mut open = registry.lock();

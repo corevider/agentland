@@ -113,6 +113,36 @@ pub fn default_shell() -> String {
         .unwrap_or_else(|| "bash".to_owned())
 }
 
+/// A path a tool can read back, without Windows' extended-length prefix.
+///
+/// `canonicalize` on Windows answers `\\?\C:\...`. Rust's own file calls take
+/// that, and so does a child process's working directory — so it stays invisible
+/// until a path is handed to a tool as an *argument*, where the tool has to
+/// parse it itself. Git does not: cutting a worktree under the data directory
+/// died with `could not create leading directories of '//?/C:/...': Invalid
+/// argument`, and starting a project on Windows failed with it every time.
+///
+/// So a path is made plain at the moment it is settled, not at each of the
+/// places it is later used. A device path that is not a drive keeps its prefix:
+/// it means something there, and shortening it would name a different thing.
+pub fn plain(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy();
+
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => path,
+    }
+}
+
+/// Settle a path and make it plain, leaving it as given when it cannot be read.
+pub fn settled(path: &Path) -> PathBuf {
+    plain(std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))
+}
+
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -136,6 +166,35 @@ fn quiet_tokio(_command: &mut tokio::process::Command) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_windows_drive_path_loses_the_prefix_a_tool_cannot_read() {
+        assert_eq!(
+            plain(PathBuf::from(r"\\?\C:\Users\somebody\data\worktrees\a-project")),
+            PathBuf::from(r"C:\Users\somebody\data\worktrees\a-project")
+        );
+    }
+
+    #[test]
+    fn a_share_comes_back_as_the_share_everybody_writes() {
+        assert_eq!(
+            plain(PathBuf::from(r"\\?\UNC\server\share\project")),
+            PathBuf::from(r"\\server\share\project")
+        );
+    }
+
+    #[test]
+    fn a_device_that_is_not_a_drive_keeps_the_prefix_that_names_it() {
+        let device = PathBuf::from(r"\\?\Volume{b75e2c83-0000-0000-0000-602f00000000}\a");
+        assert_eq!(plain(device.clone()), device);
+    }
+
+    #[test]
+    fn a_path_without_the_prefix_is_left_exactly_as_it_is() {
+        for path in ["/home/somebody/data", r"C:\Users\somebody\data", "data/worktrees"] {
+            assert_eq!(plain(PathBuf::from(path)), PathBuf::from(path));
+        }
+    }
 
     #[test]
     fn a_cmd_shim_runs_through_cmd_exe_on_windows() {

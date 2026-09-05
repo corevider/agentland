@@ -201,7 +201,7 @@ fn slugify(value: &str) -> String {
 impl RepoRegistry {
     pub fn new(data_dir: PathBuf) -> Self {
         let _ = fs::create_dir_all(&data_dir);
-        let data_dir = fs::canonicalize(&data_dir).unwrap_or(data_dir);
+        let data_dir = crate::exec::settled(&data_dir);
         let state = Self::load(&data_dir);
         let ports = SharedPorts::new(state.ports.clone());
 
@@ -219,8 +219,22 @@ impl RepoRegistry {
         }
     }
 
+    /// What was written down last time, with every path made plain.
+    ///
+    /// A worktree recorded by a version that stored Windows' extended-length
+    /// prefix keeps it forever otherwise, and the tools that read those paths
+    /// back out — git, and the engine's own trust file — cannot.
     fn load(data_dir: &Path) -> State {
-        crate::db::load_state(data_dir, "repositories")
+        let mut state: State = crate::db::load_state(data_dir, "repositories");
+
+        for repository in state.repositories.values_mut() {
+            repository.primary_path = crate::exec::plain(repository.primary_path.clone());
+        }
+        for worktree in state.worktrees.values_mut() {
+            worktree.path = crate::exec::plain(worktree.path.clone());
+        }
+
+        state
     }
 
     fn persist(&self, state: &State) {
@@ -687,7 +701,7 @@ fn trust_the_folder(worktree: &Path) {
         return;
     };
 
-    let path = fs::canonicalize(worktree).unwrap_or_else(|_| worktree.to_path_buf());
+    let path = crate::exec::settled(worktree);
     trust_the_folder_in(&file, &path);
 }
 
@@ -1328,6 +1342,33 @@ mod tests {
         assert_eq!(repository.default_branch, "trunk", "nothing was re-initialised");
         let log = git(&["log", "--oneline"], Some(&dir)).unwrap();
         assert_eq!(log.lines().count(), 1, "no extra commit was made");
+    }
+
+    #[test]
+    fn a_worktree_written_down_with_a_windows_prefix_comes_back_without_one() {
+        let dir = a_folder("prefixed-state");
+        let mut state = State::default();
+        state.worktrees.insert(
+            "citybidwars/desk".to_owned(),
+            Worktree {
+                name: "desk".to_owned(),
+                repository_id: "citybidwars".to_owned(),
+                path: PathBuf::from(r"\\?\C:\Users\somebody\data\worktrees\citybidwars\desk"),
+                branch: "agent/desk".to_owned(),
+                port: 4100,
+            },
+        );
+        crate::db::save_state(&dir, "repositories", &state);
+
+        let read = RepoRegistry::load(&dir);
+
+        assert_eq!(
+            read.worktrees["citybidwars/desk"].path,
+            PathBuf::from(r"C:\Users\somebody\data\worktrees\citybidwars\desk"),
+            "git is handed this path as an argument and has to be able to read it"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

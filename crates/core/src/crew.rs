@@ -246,7 +246,7 @@ fn slugify(value: &str) -> String {
 impl Crew {
     pub fn new(manager: Arc<PtyManager>, data_dir: PathBuf) -> Arc<Self> {
         let _ = fs::create_dir_all(&data_dir);
-        let data_dir = fs::canonicalize(&data_dir).unwrap_or(data_dir);
+        let data_dir = crate::exec::settled(&data_dir);
         let state = crate::db::load_state(&data_dir, "crew");
 
         let crew = Arc::new(Self {

@@ -669,7 +669,7 @@ pub async fn scaffold(starter: &Starter, parent: &Path, name: &str) -> Result<Ma
         bail!("{} is not a folder", parent.display());
     }
 
-    let parent = parent.canonicalize()?;
+    let parent = crate::exec::plain(parent.canonicalize()?);
     let project = parent.join(name);
     if project.exists() {
         bail!("{} is already there", project.display());
