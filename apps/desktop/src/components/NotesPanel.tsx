@@ -1,12 +1,15 @@
 import { useCallback, useState } from "react";
 
 import {
+    check_vault,
     forget_note,
     list_notes,
     read_note,
     read_vault,
     write_note,
     type Note,
+    type TroubleKind,
+    type VaultHealth,
     type VaultReport,
 } from "@/lib/core";
 import { use_poll } from "@/lib/poll";
@@ -31,6 +34,7 @@ export function NotesPanel({ active }: { active: boolean }) {
     const [notice, set_notice] = useState<string | null>(null);
     const [deleting, set_deleting] = useState<string | null>(null);
     const [vault, set_vault] = useState<VaultReport | null>(null);
+    const [health, set_health] = useState<VaultHealth | null>(null);
 
     const refresh = useCallback(() => {
         list_notes(query)
@@ -71,6 +75,17 @@ export function NotesPanel({ active }: { active: boolean }) {
                 >
                     search
                 </button>
+                <button
+                    className="rounded-md border border-reef px-2 py-1 font-mono text-[11px] text-shell hover:border-foam"
+                    title="look for links that reach nothing, notes nothing points at, and memories nobody answered"
+                    onClick={() =>
+                        check_vault()
+                            .then(set_health)
+                            .catch((cause) => set_notice(cause instanceof Error ? cause.message : String(cause)))
+                    }
+                >
+                    check
+                </button>
                 <span className="font-mono text-[10px] text-shade">
                     {notes.length} note{notes.length === 1 ? "" : "s"}
                 </span>
@@ -90,6 +105,8 @@ export function NotesPanel({ active }: { active: boolean }) {
                     {notice}
                 </div>
             ) : null}
+
+            {health ? <Health health={health} on_open={show} on_close={() => set_health(null)} /> : null}
 
             <section className="flex flex-col gap-1">
                 {notes.length === 0 ? (
@@ -279,5 +296,64 @@ export function NotesPanel({ active }: { active: boolean }) {
                 </div>
             </section>
         </div>
+    );
+}
+
+/// What the last check found.
+///
+/// Nothing here is repaired by a button. A dead link is fixed by writing the
+/// note somebody meant to write, and two memories both in force are settled by
+/// saying which one is right — decisions, not chores, so the panel names them
+/// and gets out of the way.
+const SAYS: Record<TroubleKind, string> = {
+    overruled: "both still told",
+    dead_link: "link reaches nothing",
+    unanswered: "waiting on you",
+    said_twice: "said twice",
+    adrift: "nothing points at it",
+};
+
+function Health({
+    health,
+    on_open,
+    on_close,
+}: {
+    health: VaultHealth;
+    on_open: (slug: string) => void;
+    on_close: () => void;
+}) {
+    return (
+        <section className="rounded-md border border-reef bg-lagoon-deep px-2 py-1.5">
+            <div className="flex items-baseline justify-between gap-2">
+                <span className="font-mono text-[10px] text-shade">
+                    {health.notes} note{health.notes === 1 ? "" : "s"} · {health.memories} memor
+                    {health.memories === 1 ? "y" : "ies"} · {health.waiting} waiting on you
+                </span>
+                <button className="font-mono text-[10px] text-shade hover:text-shell" onClick={on_close}>
+                    close
+                </button>
+            </div>
+
+            {health.trouble.length === 0 ? (
+                <p className="mt-1 font-mono text-[10px] text-turquoise">
+                    Nothing to fix: every link reaches a note, and nothing is being told twice.
+                </p>
+            ) : (
+                <ul className="mt-1 flex flex-col gap-0.5">
+                    {health.trouble.map((one) => (
+                        <li key={`${one.kind}-${one.slug}-${one.about ?? ""}`}>
+                            <button
+                                className="w-full text-left hover:bg-shallow"
+                                onClick={() => on_open(one.slug)}
+                            >
+                                <span className="font-mono text-[9px] text-coral">{SAYS[one.kind]}</span>
+                                <span className="ml-2 text-[11px] text-linen">{one.slug}</span>
+                                <span className="ml-2 font-mono text-[10px] text-shade">{one.says}</span>
+                            </button>
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </section>
     );
 }

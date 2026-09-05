@@ -366,6 +366,45 @@ pub fn score(note: &Note, query: &str) -> usize {
         .sum()
 }
 
+/// What somebody finds when they open the vault for the first time.
+///
+/// A folder of markdown with no word of explanation in it is a folder somebody
+/// closes again. This is written into the root map when it is first drawn, above
+/// the line Agentland keeps, so it is the first thing read in Obsidian and the
+/// first thing an agent reads from `note_index`. It is an ordinary note body
+/// after that: edit it, and nothing here writes over what you wrote.
+const HOW_THIS_VAULT_WORKS: &str = "\
+This is the crew's vault. It is plain markdown with `[[links]]` between the\n\
+files, so it opens in Obsidian, in a text editor, or in anything else — nothing\n\
+is stored anywhere else, and a file you edit by hand is read back by the crew.\n\
+\n\
+## What is in it\n\
+\n\
+Folders are scopes, and a scope is who a thing is true for: `shared/` is the\n\
+whole crew, `<workspace>/` is one workspace, `<workspace>/<project>/` is one\n\
+project. Every folder has an `index` — its map, listing what is filed there and\n\
+the places below it.\n\
+\n\
+A **note** is a record. An agent goes looking for it, reads it, and quotes it;\n\
+it is never an instruction to obey. Write as many as you like.\n\
+\n\
+A **memory** is one fact the crew is told without looking anything up. Memories\n\
+live in the `memory/` folder of their scope, and an agent working in a project\n\
+is told that project's, its workspace's and the crew's — never another\n\
+project's. They are proposed by agents and reach nobody until a person approves\n\
+one, which is done in Agentland rather than here.\n\
+\n\
+## What is kept up for you\n\
+\n\
+The list below the marked line in every index is redrawn by Agentland; the words\n\
+above it are yours. Backlinks are worked out from the links, so pointing at a\n\
+note is enough. Secrets are masked out of a memory before it is written down.\n\
+\n\
+Nothing here is deleted by an agent: an agent may write and propose, and only a\n\
+person forgets something. Run `note_lint` — the check in the notes panel — to\n\
+find links that reach nothing, notes nothing points at, proposals nobody\n\
+answered, and corrections that left both sides in force.";
+
 /// Where the vault lives.
 ///
 /// A notes folder belongs where a person keeps notes, not buried in an app's
@@ -756,7 +795,11 @@ impl Vault {
                     tags: vec!["index".to_owned()],
                     written_by: "agentland".to_owned(),
                     written_at: now,
-                    body: String::new(),
+                    body: if folder.is_empty() {
+                        HOW_THIS_VAULT_WORKS.trim().to_owned()
+                    } else {
+                        String::new()
+                    },
                     approved: None,
                     retired: false,
                     supersedes: None,
@@ -1095,6 +1138,43 @@ mod scope_tests {
         assert!(again.contains("Start with the port contract."), "the words above the line survive");
         assert!(again.contains("[[Health endpoint]]"), "the list below it is rebuilt");
         assert!(!again.contains("old list"), "and the old list is gone");
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn the_root_map_explains_the_vault_to_whoever_opens_it_first() {
+        let home = std::env::temp_dir().join(format!("agentland-vault-preamble-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let vault = Vault::open_at(home.clone()).expect("a vault");
+
+        vault.write(&Scope::Shared, "How we write notes", "short, linked", vec![], "x", 10).expect("write");
+        vault.reindex(11).expect("reindex");
+
+        let root = vault.get("index").expect("the root map");
+        assert!(root.body.contains("plain markdown"), "what it is: {}", root.body);
+        assert!(root.body.contains("memory/"), "and the difference between a note and a memory");
+        assert!(root.body.contains("note_lint"), "and how to check it");
+
+        let folder = vault.get("shared/index").expect("a folder's map");
+        assert!(
+            !folder.body.contains("plain markdown"),
+            "said once, at the root: {}",
+            folder.body
+        );
+
+        // The words are a person's from the moment they are written: an edit
+        // survives, and a second drawing does not stack another copy under it.
+        let path = home.join("index.md");
+        let held = std::fs::read_to_string(&path).expect("read");
+        let above = held.split(Vault::MAP_MARK).next().unwrap().to_owned();
+        std::fs::write(&path, format!("{above}My own words.\n\n{}\n", Vault::MAP_MARK)).expect("write");
+
+        vault.reindex(12).expect("reindex");
+
+        let again = std::fs::read_to_string(&path).expect("read");
+        assert!(again.contains("My own words."), "the edit survives");
+        assert_eq!(again.matches("plain markdown").count(), 1, "and is not written over: {again}");
 
         let _ = std::fs::remove_dir_all(&home);
     }

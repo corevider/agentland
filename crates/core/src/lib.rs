@@ -16,6 +16,7 @@ pub mod exec;
 pub mod files;
 pub mod gateway;
 pub mod goals;
+pub mod health;
 pub mod journal;
 pub mod mail;
 pub mod memory;

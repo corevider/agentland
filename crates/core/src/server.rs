@@ -361,6 +361,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/devices/{id}", delete(revoke_device))
         .route("/notes", get(list_notes).post(write_note))
         .route("/vault", get(where_the_vault_is).post(redraw_the_maps))
+        .route("/vault/health", get(check_the_vault))
         .route("/notices", get(list_notices).post(mark_notices_seen))
         .route("/notes/{*slug}", get(read_note).delete(forget_note))
         .route("/ui/commands", get(take_ui_commands).post(queue_ui_command))
@@ -4111,6 +4112,16 @@ async fn redraw_the_maps(State(state): State<AppState>) -> Result<Json<VaultRepo
         path: state.vault.root().to_string_lossy().to_string(),
         notes: state.vault.list().len(),
     }))
+}
+
+/// What is wrong with the vault: links that reach nothing, notes nothing points
+/// at, proposals nobody answered, corrections that left both sides in force.
+///
+/// Nothing here is fixed on the way past. A vault is a person's folder, and a
+/// tool that quietly rewrites notes to make its own report come back clean is a
+/// tool nobody can leave running.
+async fn check_the_vault(State(state): State<AppState>) -> Json<crate::health::Health> {
+    Json(crate::health::check(&state.vault.list(), now_secs()))
 }
 
 /// The crew's notes: everything, or what answers a question.

@@ -1813,3 +1813,55 @@ project's goal*, *as a new card*, *to Ada* — and the row below is for saying a
 sending. Tapping an agent opens what it is doing: the card in its hand, why it
 is in the state it is, and the last lines on its screen, read off the pane the
 way the commander's are, then the skills it carries.
+
+
+## The memory loop, closed at both ends
+
+The crew could already be told what it had learned: every agent's opening brief
+carries the six memories that match the work, its project's and its workspace's
+and the crew's, matched on words and on the vectors where an embedder is
+running. What it could not do was learn. `memory_propose` sat in the tool list
+and nothing ever told an agent it was there, so nothing was ever written down —
+and on the rare occasion something was, it went into a panel nobody had a reason
+to open and waited there in silence.
+
+Both ends are shut now. The brief tells every agent, at the bottom where the
+work has already been said, to write down what the crew should not have to work
+out again, in the narrowest scope it is true in, and to pass the old memory's
+slug as `supersedes` when it is correcting one. That instruction lives in the
+brief rather than in the house rules on purpose: the rules are a file a person
+edits to taste and they are saved per machine, so a line added there would never
+reach an install that already has its own. And a proposal from an agent now
+raises the loud kind of notice, which opens the memory panel — only from an
+agent, because somebody proposing one in the panel is already looking at it.
+
+## A vault that says what it is, and a check for what goes wrong in one
+
+Two things were missing for anyone who opens the vault rather than the app.
+
+The first is that a folder of markdown with no word of explanation in it is a
+folder somebody closes again. The root map is written with a preamble now, above
+the line Agentland keeps: what the vault is, that a folder is a scope and who
+each scope is true for, the difference between a note the crew looks up and a
+memory the crew is told, what is kept current for you and what is yours. It is
+an ordinary note body from that moment on — edit it and nothing writes over what
+you wrote.
+
+The second is that a vault of markdown decays the way a garden does. A note is
+renamed and the links to it stop reaching. Two agents write the same fact in
+different words. A correction is approved and the memory it replaced stays in
+force beside it, so the crew is told both sides. None of that announces itself,
+so `note_lint` — *check*, in the notes panel — goes looking: links pointing at
+notes nobody wrote, notes nothing points at but the map they are listed on,
+proposals older than a week that nobody answered, corrections with both sides
+still being told, and pairs of memories in one scope that share seven tenths of
+their words. It is decided by reading the notes, so it costs nothing and says
+the same thing twice running, and it repairs none of it — a dead link is fixed
+by writing the note somebody meant to write, and two memories in force are
+settled by saying which one is right. Those are decisions, not chores.
+
+This is the shape Karpathy's LLM-wiki note describes — raw sources, a wiki the
+model maintains, a schema that governs both — with the middle layer already
+built: `note_index` is its index, the vault is its markdown graph, and the
+scopes are its folders. What was missing was the third operation. Ingest and
+query had tools; lint had none.

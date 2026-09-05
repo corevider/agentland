@@ -1056,6 +1056,26 @@ export function read_vault(): Promise<VaultReport> {
     return request<VaultReport>("/vault");
 }
 
+export type TroubleKind = "overruled" | "dead_link" | "unanswered" | "said_twice" | "adrift";
+
+export interface Trouble {
+    kind: TroubleKind;
+    slug: string;
+    says: string;
+    about: string | null;
+}
+
+export interface VaultHealth {
+    notes: number;
+    memories: number;
+    waiting: number;
+    trouble: Trouble[];
+}
+
+export function check_vault(): Promise<VaultHealth> {
+    return request<VaultHealth>("/vault/health");
+}
+
 export function list_notes(query?: string, limit = 40): Promise<Note[]> {
     const search = new URLSearchParams({ limit: String(limit) });
     if (query && query.trim()) {

@@ -189,6 +189,11 @@ fn tools() -> Value {
             }
         },
         {
+            "name": "note_lint",
+            "description": "Check the vault for the damage that writing notes does over time: links pointing at notes nobody wrote, notes nothing points at, memories proposed and never answered, and corrections that left both the old memory and the new one being told to the crew. Nothing is repaired for you — write the missing note, point the stray one at something, or say which of two memories is right. Worth running before you add a lot to the vault, and after.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
             "name": "crew_hire",
             "description": "Put someone new on the crew for work that is coming: a name, what they are for, which repository and worktree they work in, and the engine they run. You decide the model — leave it out and the role's default stands (commander opus, reviewer and ops sonnet, implementer haiku). The colour is chosen for you from the crew palette unless you name one, so no two agents arrive nearly the same shade. Hire for work you can name; an idle agent is a pane the human has to ignore.",
             "inputSchema": {
@@ -528,6 +533,7 @@ fn call_tool(core: &Core, name: &str, arguments: &Value) -> Result<Value, String
             core.call("GET", &format!("/notes/{}", urlencode(&slug).replace("%2F", "/")), None)
         }
         "note_read" => core.call("GET", &format!("/notes/{}", text("slug")?), None),
+        "note_lint" => core.call("GET", "/vault/health", None),
         "note_search" => {
             let query = text("query")?;
             let limit = arguments
