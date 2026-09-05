@@ -216,16 +216,19 @@ export function RepoPanel({ active }: { active: boolean }) {
                 ) : null}
 
                 {repos.map((repo) => (
-                    <section key={repo.id} className="border border-reef bg-lagoon rounded-lg">
+                    <section key={repo.id} className={`border bg-lagoon rounded-lg ${repo.missing ? "border-coral/70" : "border-reef"}`}>
                         <header className="flex flex-wrap items-baseline justify-between gap-3 border-b border-reef px-2 py-1">
-                            <span className="font-mono text-[13px] text-linen">{repo.name}</span>
+                            <span className="font-mono text-[13px] text-linen">
+                                {repo.name}
+                                {repo.missing ? <span className="ml-2 text-[11px] text-coral">checkout gone</span> : null}
+                            </span>
                             <span className="flex items-baseline gap-2 font-mono text-[11px] text-shell">
                                 {repo.default_branch}
                                 {repo.remotes.length > 0
                                     ? ` · ${repo.remotes.map((remote) => `${remote.name}@${remote.provider}`).join(", ")}`
                                     : " · no remote"}
                                 <button
-                                    className="rounded px-1 text-shade hover:text-coral"
+                                    className={`rounded px-1 hover:text-coral ${repo.missing ? "border border-coral text-coral" : "text-shade"}`}
                                     title="stop tracking this project — the folder is left alone"
                                     disabled={busy}
                                     onClick={() => run(() => forget_repo(repo.id))}
@@ -234,6 +237,13 @@ export function RepoPanel({ active }: { active: boolean }) {
                                 </button>
                             </span>
                         </header>
+
+                        {repo.missing ? (
+                            <p className="border-b border-coral/40 bg-coral/10 px-2 py-1 font-mono text-[11px] text-coral">
+                                Its checkout is not on disk any more: {repo.primary_path}. Nothing can be opened
+                                or cut from it. Add the project again from where it lives now, or forget this one.
+                            </p>
+                        ) : null}
 
                         <div className="flex flex-col gap-2 p-2">
                             {(worktrees[repo.id] ?? []).map((entry) => {
