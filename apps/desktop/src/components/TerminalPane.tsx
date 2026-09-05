@@ -130,7 +130,9 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
         }
     }, 1000, stats_from === undefined || now_from === undefined);
 
-    const shown_stats = stats_from ?? stats;
+    // A record without numbers is not a reading: a session handed over by an
+    // older core before its first poll has none, and the pane waits for them.
+    const shown_stats = stats_from && stats_from.lines !== undefined ? stats_from : stats;
     const shown_now = now_from ?? now;
 
     useEffect(() => {

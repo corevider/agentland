@@ -1892,18 +1892,39 @@ async fn list_sessions(State(state): State<AppState>) -> Json<Vec<SessionReport>
     Json(reports)
 }
 
+/// A session as the window reads it: its record and its numbers together.
+///
+/// Spawning answered with the bare record while the list carried the
+/// numbers, so a pane opened on a fresh session read stats that were not
+/// there and the terminals panel fell over until its next poll. Every
+/// answer about a session now has the same shape.
+fn report_of(state: &AppState, info: SessionInfo) -> Result<SessionReport, ApiError> {
+    let session = state
+        .manager
+        .get(&info.id)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("unknown session: {}", info.id)))?;
+    let stats = stats_with_context(state, &info.id, session.stats());
+    Ok(SessionReport {
+        info,
+        stats,
+        alive: session.alive(),
+    })
+}
+
 async fn spawn_session(
     State(state): State<AppState>,
     Json(spec): Json<PtySpawnSpec>,
-) -> Result<Json<SessionInfo>, ApiError> {
-    Ok(Json(state.manager.spawn(spec)?))
+) -> Result<Json<SessionReport>, ApiError> {
+    let info = state.manager.spawn(spec)?;
+    Ok(Json(report_of(&state, info)?))
 }
 
 async fn spawn_generator(
     State(state): State<AppState>,
     Json(spec): Json<GeneratorSpec>,
-) -> Result<Json<SessionInfo>, ApiError> {
-    Ok(Json(state.manager.spawn_generator(spec)?))
+) -> Result<Json<SessionReport>, ApiError> {
+    let info = state.manager.spawn_generator(spec)?;
+    Ok(Json(report_of(&state, info)?))
 }
 
 #[derive(Deserialize)]
@@ -1930,12 +1951,7 @@ async fn read_stats(
         .get(&id)
         .ok_or_else(|| ApiError(anyhow::anyhow!("unknown session: {id}")))?;
 
-    let stats = stats_with_context(&state, &id, session.stats());
-    Ok(Json(SessionReport {
-        info: session.info(),
-        stats,
-        alive: session.alive(),
-    }))
+    Ok(Json(report_of(&state, session.info())?))
 }
 
 const CONTEXT_TAIL_BYTES: u64 = 8 * 1024;
