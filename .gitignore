@@ -1,4 +1,5 @@
 # What the app writes while it runs
+apps/desktop/src-tauri/binaries/
 bench-results.jsonl
 data/
 sessions/

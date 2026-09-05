@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5273",
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeDevCommand": "npm run sidecar && npm run dev",
+    "beforeBuildCommand": "npm run sidecar && npm run build"
   },
   "app": {
     "withGlobalTauri": true,
@@ -41,7 +41,10 @@
     "linux": {
       "deb": {}
     },
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "externalBin": [
+      "binaries/agentland-mcp"
+    ]
   },
   "plugins": {
     "updater": {

@@ -1865,3 +1865,26 @@ model maintains, a schema that governs both — with the middle layer already
 built: `note_index` is its index, the vault is its markdown graph, and the
 scopes are its folders. What was missing was the third operation. Ingest and
 query had tools; lint had none.
+
+
+## The tool program was never in the box
+
+Every agent talks to Agentland through `agentland-mcp`: the board, the vault,
+memory, delegation, plans, approvals — thirty-three tools, all of them over a
+pipe to that program. Running from source it sits in `target/` beside the app,
+which is why nothing ever noticed that the installers shipped one binary. Opened
+up, the published `.deb` held exactly `usr/bin/agentland-desktop` and nothing
+else.
+
+So an installed Agentland wrote each worktree an `.mcp.json` naming a command
+that was not on the machine. The engine tried to start it, failed, and the agent
+worked on with no tools at all — no `task_list`, no `crew_delegate`, no
+`note_write`, no `memory_propose`. Everything the crew is for, absent, on every
+machine that installed rather than cloned.
+
+It ships as a Tauri sidecar now, built for the target being bundled and installed
+beside the app — which is exactly where the search for it already looked. The
+same pass fixed Windows, where the name was looked up without `.exe` and so
+never matched a file that existed, in a built app or a dev one. Verified by
+unpacking the bundle: `usr/bin/agentland-mcp`, 755, and it answers an
+`initialize` handshake with thirty-three tools.

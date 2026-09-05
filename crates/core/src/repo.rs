@@ -605,6 +605,14 @@ fn diff_untracked(worktree: &Path, file: &str) -> Option<String> {
     }
 }
 
+/// The crew's tool program, by the name it has on this machine.
+///
+/// Windows wants the extension: without it the copy beside the app is looked
+/// for under a name no file has, the search fails, and the agent is handed a
+/// bare command that is not on its PATH.
+#[cfg(windows)]
+const TOOL_NAME: &str = "agentland-mcp.exe";
+#[cfg(not(windows))]
 const TOOL_NAME: &str = "agentland-mcp";
 
 fn built_tool() -> Option<PathBuf> {
