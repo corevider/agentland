@@ -8,6 +8,8 @@ import {
     ignite_commander,
     list_plans,
     list_repos,
+    list_tasks,
+    write_input,
     mark_step,
     ready_steps,
     supervisor_watches,
@@ -16,8 +18,10 @@ import {
     type ReadyStep,
     type Goal,
     type Repository,
+    type Task,
     type Watch,
 } from "@/lib/core";
+import { clear_is_recommended } from "@/lib/commander";
 import { Waiting } from "@/components/Spinner";
 import { use_services } from "@/workspace/registry";
 
@@ -37,22 +41,26 @@ export function CommanderPanel({ active }: { active: boolean }) {
     const [igniting, set_igniting] = useState<string | null>(null);
     const [notice, set_notice] = useState<string | null>(null);
     const [goals, set_goals] = useState<Goal[]>([]);
+    const [tasks, set_tasks] = useState<Task[]>([]);
+    const [clearing, set_clearing] = useState<string | null>(null);
     const [writing, set_writing] = useState<string | null>(null);
     const [draft, set_draft] = useState("");
 
     const refresh = useCallback(async () => {
-        const [held, next, watching, known, wanted] = await Promise.all([
+        const [held, next, watching, known, wanted, cards] = await Promise.all([
             list_plans(),
             ready_steps(),
             supervisor_watches(),
             list_repos(),
             read_goals(),
+            list_tasks(),
         ]);
         set_plans(held);
         set_ready(next);
         set_watches(watching);
         set_repos(known);
         set_goals(wanted);
+        set_tasks(cards);
     }, []);
 
     use_poll(() => {
@@ -168,6 +176,48 @@ export function CommanderPanel({ active }: { active: boolean }) {
                                     open its pane
                                 </button>
                             ) : null}
+
+                            {at_work && held?.session_id
+                                ? (() => {
+                                      const mine = tasks.filter((task) => task.assignee === held.id);
+                                      const recommended = clear_is_recommended({
+                                          has_pane: true,
+                                          running_plans: running.filter((plan) => plan.repository_id === repo.id).length,
+                                          open_cards: mine.filter((task) =>
+                                              task.column === "assigned" || task.column === "working",
+                                          ).length,
+                                          finished_anything:
+                                              mine.some((task) => task.column !== "backlog") ||
+                                              plans.some(
+                                                  (plan) => plan.repository_id === repo.id && plan.state === "done",
+                                              ),
+                                      });
+                                      const session_id = held.session_id;
+                                      return (
+                                          <button
+                                              className={`rounded-md border px-2 py-0.5 font-mono text-[11px] ${
+                                                  recommended
+                                                      ? "border-sun text-sun hover:border-foam"
+                                                      : "border-reef text-shade hover:border-foam hover:text-shell"
+                                              }`}
+                                              disabled={clearing === repo.id}
+                                              title="types /clear into its pane; the next brief carries its identity, the crew and what the project remembers again"
+                                              onClick={() => {
+                                                  set_clearing(repo.id);
+                                                  write_input(session_id, "/clear")
+                                                      .then(() => new Promise((done) => window.setTimeout(done, 300)))
+                                                      .then(() => write_input(session_id, "\r"))
+                                                      .catch((cause) =>
+                                                          set_notice(cause instanceof Error ? cause.message : String(cause)),
+                                                      )
+                                                      .finally(() => set_clearing(null));
+                                              }}
+                                          >
+                                              {clearing === repo.id ? "clearing…" : recommended ? "clear chat · recommended" : "clear chat"}
+                                          </button>
+                                      );
+                                  })()
+                                : null}
                         </div>
 
                         {writing === repo.id ? (
