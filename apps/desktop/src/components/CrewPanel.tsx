@@ -226,7 +226,14 @@ export function CrewPanel({ active, on_open_session }: Props) {
                                     // after them, rather than being a step to find first.
                                     let worktree = chosen;
                                     if (!worktree) {
-                                        const wanted = worktree_for(name);
+                                        const standing = targets
+                                            .filter(
+                                                (target) =>
+                                                    target.repository_id === repository_id &&
+                                                    target.worktree,
+                                            )
+                                            .map((target) => target.worktree);
+                                        const wanted = worktree_for(name, standing);
                                         if (!wanted) {
                                             throw new Error("name must contain letters or digits");
                                         }
