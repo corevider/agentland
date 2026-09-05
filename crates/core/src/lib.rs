@@ -43,6 +43,7 @@ pub mod tls;
 pub mod transcript;
 pub mod vault;
 pub mod voice;
+pub mod whisper;
 
 pub use approvals::{AnswerApproval, Approval, Approvals, RequestApproval};
 pub use auth::{Scope as TokenScope, ScopedToken, TokenStore};

@@ -509,12 +509,44 @@ export function set_standards(text: string): Promise<HouseRules> {
     });
 }
 
-/// Speaking to the crew instead of typing to it. The recorder is whatever is
-/// already on the machine; the transcriber is a command somebody set.
+/// A whisper.cpp model on offer, with what it costs to fetch.
+export interface WhisperModel {
+    id: string;
+    file: string;
+    megabytes: number;
+    says: string;
+}
+
+/// Whisper as it stands on this machine.
+export interface WhisperState {
+    tool?: string;
+    model?: string;
+    ready: boolean;
+    models: WhisperModel[];
+    by_default: string;
+    /// Nothing when this platform has no published build to fetch.
+    build?: string;
+    /// What the download is doing, while it is doing it.
+    fetching?: string;
+}
+
+/// Speaking to the crew instead of typing to it. The recording is made by this
+/// window when it can; the words are read back by whisper, or by a command
+/// somebody named themselves.
 export interface VoiceState {
     recorder?: string;
     transcriber?: string;
     listening: boolean;
+    whisper: WhisperState;
+}
+
+/// Fetch whisper.cpp and a model, and have the transcriber written for them.
+/// It runs on its own — read `voice_state().whisper.fetching` for progress.
+export function fetch_whisper(model?: string): Promise<WhisperState> {
+    return request<WhisperState>("/voice/whisper", {
+        method: "POST",
+        body: JSON.stringify(model ? { model } : {}),
+    });
 }
 
 export function voice_state(): Promise<VoiceState> {

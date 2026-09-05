@@ -106,6 +106,10 @@ struct AppState {
     goals: Arc<crate::goals::Goals>,
     standards: Arc<crate::standards::Standards>,
     voice: Arc<crate::voice::Voice>,
+    /// What the whisper download is doing, while it is doing it. Empty when
+    /// nothing is being fetched — a person watching a 488 MB download needs to
+    /// be told which half of it is in progress.
+    fetching_whisper: Arc<parking_lot::Mutex<Option<String>>>,
     /// Small things a person set: the transcriber command, and whatever else
     /// names a program or a preference rather than a piece of work.
     settings: Arc<parking_lot::Mutex<std::collections::BTreeMap<String, String>>>,
@@ -197,6 +201,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         goals: Arc::new(crate::goals::Goals::new(data_dir.clone())),
         standards: Arc::new(crate::standards::Standards::new(data_dir.clone())),
         voice: Arc::new(crate::voice::Voice::new(data_dir.clone())),
+        fetching_whisper: Arc::new(parking_lot::Mutex::new(None)),
         settings: Arc::new(parking_lot::Mutex::new(crate::db::load_state(
             &data_dir, "settings",
         ))),
@@ -327,6 +332,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/stop", post(stop_everything))
         .route("/commander", get(commander_says))
         .route("/voice", get(read_voice).post(set_transcriber))
+        .route("/voice/whisper", post(fetch_whisper))
         .route("/voice/start", post(start_listening))
         .route("/voice/stop", post(stop_listening))
         .route("/voice/heard", post(heard_elsewhere))
@@ -5052,6 +5058,39 @@ struct VoiceState {
     #[serde(skip_serializing_if = "Option::is_none")]
     transcriber: Option<String>,
     listening: bool,
+    /// Whisper as it stands here: what has been fetched, what can be, and what
+    /// is being fetched right now.
+    whisper: WhisperState,
+}
+
+#[derive(Serialize)]
+struct WhisperState {
+    #[serde(flatten)]
+    standing: crate::whisper::Standing,
+    models: &'static [crate::whisper::Model],
+    by_default: &'static str,
+    /// Nothing when this platform has no published build to fetch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    build: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fetching: Option<String>,
+}
+
+fn whisper_state(state: &AppState) -> WhisperState {
+    let chosen = state
+        .settings
+        .lock()
+        .get("whisper_model")
+        .cloned()
+        .unwrap_or_else(|| crate::whisper::BY_DEFAULT.to_owned());
+
+    WhisperState {
+        standing: crate::whisper::standing(&state.config.data_dir, &chosen),
+        models: crate::whisper::MODELS_ON_OFFER,
+        by_default: crate::whisper::BY_DEFAULT,
+        build: crate::whisper::build_here(),
+        fetching: state.fetching_whisper.lock().clone(),
+    }
 }
 
 fn transcriber_of(state: &AppState) -> Option<String> {
@@ -5070,7 +5109,84 @@ async fn read_voice(State(state): State<AppState>) -> Json<VoiceState> {
         recorder: state.voice.recorder(),
         transcriber: transcriber_of(&state),
         listening: state.voice.listening(),
+        whisper: whisper_state(&state),
     })
+}
+
+#[derive(Deserialize)]
+struct FetchWhisper {
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// Fetch whisper.cpp and a model, and write the transcriber line for them.
+///
+/// It runs on its own rather than holding the request open: the model is
+/// hundreds of megabytes, and a person watching a spinner for four minutes with
+/// no idea which half is running has been told nothing. What it is doing is
+/// read back from `GET /voice`.
+async fn fetch_whisper(
+    State(state): State<AppState>,
+    body: Option<Json<FetchWhisper>>,
+) -> Result<Json<WhisperState>, ApiError> {
+    let Json(body) = body.unwrap_or(Json(FetchWhisper { model: None }));
+    let model = body
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(crate::whisper::BY_DEFAULT)
+        .to_owned();
+
+    if crate::whisper::model_named(&model).is_none() {
+        return Err(anyhow::anyhow!("no model called {model}").into());
+    }
+
+    {
+        let mut held = state.fetching_whisper.lock();
+        if let Some(doing) = held.clone() {
+            return Err(anyhow::anyhow!("already fetching: {doing}").into());
+        }
+        *held = Some("starting".to_owned());
+    }
+
+    state.settings.lock().insert("whisper_model".to_owned(), model.clone());
+    crate::db::save_state(&state.config.data_dir, "settings", &*state.settings.lock());
+
+    let elsewhere = state.clone();
+    tokio::spawn(async move {
+        let told = elsewhere.fetching_whisper.clone();
+        let done = crate::whisper::fetch(&elsewhere.config.data_dir, &model, |says| {
+            *told.lock() = Some(says);
+        })
+        .await;
+
+        match done {
+            Ok(standing) => {
+                if let (Some(tool), Some(file)) = (standing.tool.as_ref(), standing.model.as_ref()) {
+                    let line = crate::whisper::transcriber_line(
+                        std::path::Path::new(tool),
+                        std::path::Path::new(file),
+                    );
+                    elsewhere.settings.lock().insert("transcriber".to_owned(), line);
+                    crate::db::save_state(
+                        &elsewhere.config.data_dir,
+                        "settings",
+                        &*elsewhere.settings.lock(),
+                    );
+                }
+                note(&elsewhere, "voice.whisper", "a person", &model, "whisper is here");
+            }
+            Err(error) => {
+                tracing::warn!(%error, "whisper was not fetched");
+                note(&elsewhere, "voice.whisper", "a person", &model, &format!("{error}"));
+            }
+        }
+
+        *elsewhere.fetching_whisper.lock() = None;
+    });
+
+    Ok(Json(whisper_state(&state)))
 }
 
 #[derive(Deserialize)]
@@ -5094,6 +5210,7 @@ async fn set_transcriber(
         recorder: state.voice.recorder(),
         transcriber: transcriber_of(&state),
         listening: state.voice.listening(),
+        whisper: whisper_state(&state),
     })
 }
 
