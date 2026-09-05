@@ -527,7 +527,7 @@ pub fn crates_version(output: &str, package: &str) -> Option<String> {
 }
 
 async fn run(tool: &str, argv: &[String], cwd: &Path, patience: Duration) -> Result<std::process::Output> {
-    let mut command = tokio::process::Command::new(tool);
+    let mut command = crate::exec::tokio_command(tool);
     command
         .args(argv)
         .current_dir(cwd)

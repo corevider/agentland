@@ -303,7 +303,17 @@ impl PtyManager {
             }
         }
 
-        let mut command = CommandBuilder::new(&spec.command);
+        // Found the way a shell finds it: on Windows the engines from npm are
+        // .cmd shims that only cmd.exe can start. An empty command asks for
+        // the machine's own shell.
+        let program = if spec.command.trim().is_empty() {
+            crate::exec::default_shell()
+        } else {
+            spec.command.clone()
+        };
+        let (launcher, leading) = crate::exec::launch(&program);
+        let mut command = CommandBuilder::new(launcher);
+        command.args(&leading);
         command.args(&spec.args);
         if let Some(cwd) = &spec.cwd {
             command.cwd(cwd);
@@ -328,7 +338,7 @@ impl PtyManager {
         let info = SessionInfo {
             id: id.clone(),
             kind: "pty",
-            command: spec.command.clone(),
+            command: program,
             cols: spec.cols,
             rows: spec.rows,
             cwd: spec.cwd.clone(),

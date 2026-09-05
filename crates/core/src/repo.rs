@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{anyhow, bail, Context, Result};
 use parking_lot::Mutex;
@@ -158,7 +157,7 @@ fn commit_as_somebody(args: &[&str], at: &Path) -> Result<String> {
 }
 
 fn git(args: &[&str], cwd: Option<&Path>) -> Result<String> {
-    let mut command = Command::new("git");
+    let mut command = crate::exec::command("git");
     command.args(args);
     if let Some(dir) = cwd {
         command.current_dir(dir);
@@ -578,7 +577,7 @@ pub struct PullRequest {
 const UNTRACKED_PATCH_LIMIT: usize = 40;
 
 fn diff_untracked(worktree: &Path, file: &str) -> Option<String> {
-    let output = Command::new("git")
+    let output = crate::exec::command("git")
         .args(["diff", "--no-index", "--", "/dev/null", file])
         .current_dir(worktree)
         .output()
@@ -950,7 +949,7 @@ impl RepoRegistry {
     ) -> Result<Option<crate::pulls::PullState>> {
         let (_, worktree) = self.locate(repository_id, worktree_name)?;
 
-        let output = Command::new("gh")
+        let output = crate::exec::command("gh")
             .args([
                 "pr",
                 "view",
@@ -994,7 +993,7 @@ impl RepoRegistry {
             base
         };
 
-        let output = Command::new("git")
+        let output = crate::exec::command("git")
             .args(["merge-tree", "--write-tree", "--name-only", &against, &worktree.branch])
             .current_dir(&worktree.path)
             .output()
@@ -1025,7 +1024,7 @@ impl RepoRegistry {
     pub fn failing_check_log(&self, repository_id: &str, worktree_name: &str) -> Result<Option<String>> {
         let (_, worktree) = self.locate(repository_id, worktree_name)?;
 
-        let listed = Command::new("gh")
+        let listed = crate::exec::command("gh")
             .args([
                 "run",
                 "list",
@@ -1057,7 +1056,7 @@ impl RepoRegistry {
             return Ok(None);
         };
 
-        let log = Command::new("gh")
+        let log = crate::exec::command("gh")
             .args(["run", "view", &run.id.to_string(), "--log-failed"])
             .current_dir(&worktree.path)
             .output()
@@ -1085,7 +1084,7 @@ impl RepoRegistry {
     ) -> Result<()> {
         let (_, worktree) = self.locate(repository_id, worktree_name)?;
 
-        let output = Command::new("gh")
+        let output = crate::exec::command("gh")
             .args(["pr", "review", &worktree.branch, "--comment", "--body", body])
             .current_dir(&worktree.path)
             .output()
@@ -1109,7 +1108,7 @@ impl RepoRegistry {
     pub fn merge_pull_request(&self, repository_id: &str, worktree_name: &str) -> Result<String> {
         let (_, worktree) = self.locate(repository_id, worktree_name)?;
 
-        let output = Command::new("gh")
+        let output = crate::exec::command("gh")
             .args(["pr", "merge", &worktree.branch, "--squash"])
             .current_dir(&worktree.path)
             .output()
@@ -1161,7 +1160,7 @@ impl RepoRegistry {
             Some(&worktree.path),
         )?;
 
-        let gh_available = Command::new("gh")
+        let gh_available = crate::exec::command("gh")
             .arg("--version")
             .output()
             .map(|output| output.status.success())
@@ -1227,7 +1226,7 @@ impl RepoRegistry {
 }
 
 fn git_command(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<String> {
-    let mut command = Command::new(program);
+    let mut command = crate::exec::command(program);
     command.args(args);
     if let Some(dir) = cwd {
         command.current_dir(dir);

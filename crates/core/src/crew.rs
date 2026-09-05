@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Result};
@@ -60,7 +59,7 @@ pub fn engines() -> Vec<Engine> {
     CATALOG
         .iter()
         .map(|(id, name, command, resume_flag, model_flag, permission_flag, mcp_flags, prompt_style)| {
-            let version = Command::new(command)
+            let version = crate::exec::command(command)
                 .arg("--version")
                 .output()
                 .ok()

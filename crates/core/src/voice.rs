@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 
 use parking_lot::Mutex;
 
@@ -137,7 +137,7 @@ impl Voice {
         let file = folder.join("said.wav");
         let _ = std::fs::remove_file(&file);
 
-        let child = Command::new(tool)
+        let child = crate::exec::command(tool)
             .args(recorder_argv(tool, &file))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -172,7 +172,7 @@ impl Voice {
             anyhow::bail!("the recorder wrote nothing");
         }
 
-        let spoken = Command::new("sh")
+        let spoken = crate::exec::command("sh")
             .arg("-c")
             .arg(fill_in(command, &held.file))
             .output()?;
@@ -211,7 +211,7 @@ pub fn read_back(
     let wav = folder.join("heard.wav");
     let _ = std::fs::remove_file(&wav);
 
-    let converted = Command::new("ffmpeg")
+    let converted = crate::exec::command("ffmpeg")
         .args([
             "-loglevel", "error", "-i",
             &arrived.to_string_lossy(),
@@ -230,7 +230,7 @@ pub fn read_back(
         Err(error) => anyhow::bail!("ffmpeg is needed to read a recording from a browser: {error}"),
     };
 
-    let spoken = Command::new("sh")
+    let spoken = crate::exec::command("sh")
         .arg("-c")
         .arg(fill_in(command, &file))
         .output()?;

@@ -276,6 +276,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/ports", get(list_ports))
         .route("/services", get(list_services))
         .route("/engines", get(list_engines))
+        .route("/machine", get(describe_machine))
         .route("/agents", get(list_agents).post(hire_agent))
         .route("/agents/{id}", delete(dismiss_agent).post(shape_agent))
         .route("/agents/{id}/holdings", get(read_holdings))
@@ -2013,6 +2014,21 @@ struct RepositoryReport {
     #[serde(flatten)]
     repository: Repository,
     missing: bool,
+}
+
+/// What this machine is, for the window to shape its offers around: which
+/// install command to suggest, and which shell a fresh pane runs.
+#[derive(Serialize)]
+struct Machine {
+    os: &'static str,
+    shell: String,
+}
+
+async fn describe_machine() -> Json<Machine> {
+    Json(Machine {
+        os: std::env::consts::OS,
+        shell: crate::exec::default_shell(),
+    })
 }
 
 async fn list_repos(State(state): State<AppState>) -> Json<Vec<RepositoryReport>> {

@@ -12,6 +12,7 @@ pub mod db;
 pub mod dispatch;
 pub mod door;
 pub mod embed;
+pub mod exec;
 pub mod files;
 pub mod gateway;
 pub mod goals;

@@ -110,6 +110,22 @@ export function list_sessions(): Promise<SessionInfo[]> {
     return request<SessionInfo[]>("/sessions");
 }
 
+/// What this machine is: its operating system and the shell a pane runs.
+export interface Machine {
+    os: "linux" | "macos" | "windows" | string;
+    shell: string;
+}
+
+export function read_machine(): Promise<Machine> {
+    return request<Machine>("/machine");
+}
+
+/// A pane running the machine's own shell — bash or what SHELL says, PowerShell
+/// on Windows — decided by the core rather than guessed here.
+export function spawn_default_shell(cwd?: string): Promise<SessionInfo> {
+    return spawn_shell("", cwd);
+}
+
 export function spawn_shell(command: string, cwd?: string): Promise<SessionInfo> {
     return request<SessionInfo>("/sessions", {
         method: "POST",

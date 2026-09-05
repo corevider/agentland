@@ -36,7 +36,7 @@ import {
     take_ui_commands,
     report_sample,
     spawn_generator,
-    spawn_shell,
+    spawn_default_shell,
     type Agent,
     type SessionInfo,
     start_listening,
@@ -535,7 +535,7 @@ export default function App() {
         try {
             await clear();
             const created = await Promise.all(
-                Array.from({ length: pane_count }, () => spawn_shell("bash")),
+                Array.from({ length: pane_count }, () => spawn_default_shell()),
             );
             set_sessions(created);
         } catch (cause) {
@@ -742,7 +742,7 @@ export default function App() {
             open_session,
             close_session,
             open_shell_in: (cwd: string) => {
-                spawn_shell("bash", cwd)
+                spawn_default_shell(cwd)
                     .then((created) => {
                         set_sessions((held) => [...held, created]);
                         set_focused_id(created.id);
