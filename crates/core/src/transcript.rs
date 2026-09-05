@@ -21,7 +21,7 @@ pub fn slug_for(worktree: &Path) -> String {
 }
 
 pub fn project_root() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let home = crate::exec::home()?;
     let root = home.join(".claude/projects");
     root.is_dir().then_some(root)
 }

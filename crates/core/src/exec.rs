@@ -94,6 +94,35 @@ pub fn tokio_command(tool: &str) -> tokio::process::Command {
     command
 }
 
+/// Where this person's home is, on any machine.
+///
+/// `HOME` is not set on Windows — the engine itself reads `USERPROFILE` there,
+/// as every Node program does. Looking only at `HOME` meant Agentland could not
+/// find the engine's own files on Windows: the trust answer it writes, so that
+/// nobody is asked whether they trust a folder Agentland made, went nowhere and
+/// every pane asked again.
+pub fn home() -> Option<PathBuf> {
+    home_from(|name| std::env::var_os(name).map(|value| value.to_string_lossy().into_owned()), cfg!(windows))
+}
+
+pub fn home_from(read: impl Fn(&str) -> Option<String>, windows: bool) -> Option<PathBuf> {
+    let held = |name: &str| read(name).filter(|value| !value.trim().is_empty());
+
+    if windows {
+        // In the engine's order, not ours: a trust entry keyed by a different
+        // home than the one it reads is a trust entry it never sees.
+        if let Some(profile) = held("USERPROFILE") {
+            return Some(PathBuf::from(profile));
+        }
+
+        if let (Some(drive), Some(path)) = (held("HOMEDRIVE"), held("HOMEPATH")) {
+            return Some(PathBuf::from(format!("{drive}{path}")));
+        }
+    }
+
+    held("HOME").map(PathBuf::from)
+}
+
 /// A command that runs one written line through a shell.
 ///
 /// `sh -c` is not a thing on Windows, so a transcriber set in Settings never
@@ -185,6 +214,45 @@ fn quiet_tokio(_command: &mut tokio::process::Command) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn env(pairs: Vec<(&'static str, &'static str)>) -> impl Fn(&str) -> Option<String> {
+        move |name| {
+            pairs
+                .iter()
+                .find(|(held, _)| *held == name)
+                .map(|(_, value)| (*value).to_owned())
+        }
+    }
+
+    #[test]
+    fn on_windows_home_is_where_the_engine_looks_for_it() {
+        assert_eq!(
+            home_from(env(vec![("USERPROFILE", r"C:\Users\somebody")]), true),
+            Some(PathBuf::from(r"C:\Users\somebody"))
+        );
+    }
+
+    #[test]
+    fn a_windows_machine_with_home_set_by_something_else_is_not_led_astray() {
+        let both = env(vec![("USERPROFILE", r"C:\Users\somebody"), ("HOME", "/c/msys/home")]);
+        assert_eq!(home_from(both, true), Some(PathBuf::from(r"C:\Users\somebody")));
+    }
+
+    #[test]
+    fn a_domain_home_is_put_back_together_from_its_two_halves() {
+        let split = env(vec![("HOMEDRIVE", "H:"), ("HOMEPATH", r"\somebody")]);
+        assert_eq!(home_from(split, true), Some(PathBuf::from(r"H:\somebody")));
+    }
+
+    #[test]
+    fn everywhere_else_home_is_home() {
+        assert_eq!(
+            home_from(env(vec![("HOME", "/home/somebody")]), false),
+            Some(PathBuf::from("/home/somebody"))
+        );
+        assert_eq!(home_from(env(vec![]), false), None);
+        assert_eq!(home_from(env(vec![("HOME", "  ")]), false), None, "empty is not a home");
+    }
 
     #[test]
     fn a_written_line_goes_through_a_shell_this_machine_has() {

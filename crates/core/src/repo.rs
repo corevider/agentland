@@ -712,7 +712,7 @@ fn claude_config_file() -> Option<PathBuf> {
         return Some(PathBuf::from(dir).join(".claude.json"));
     }
 
-    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude.json"))
+    crate::exec::home().map(|home| home.join(".claude.json"))
 }
 
 /// One flag, on one entry, and everything else in the file as it was. A file

@@ -592,8 +592,12 @@ fn dirs_next_data_dir() -> Option<std::path::PathBuf> {
         .map(std::path::PathBuf::from)
         .filter(|path| path.is_absolute())
         .or_else(|| {
-            std::env::var_os("HOME")
-                .map(std::path::PathBuf::from)
+            // Unix only on purpose: Windows keeps its data beside the
+            // executable, and `.local/share` under a Windows home is a folder
+            // nothing else there would ever look in.
+            (!cfg!(windows))
+                .then(agentland_core::exec::home)
+                .flatten()
                 .map(|home| home.join(".local/share"))
         })
 }

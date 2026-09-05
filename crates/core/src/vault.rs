@@ -447,7 +447,7 @@ impl Vault {
     /// Open the vault where it belongs, bringing any notes from where it used to
     /// live with it.
     pub fn open(data_dir: &Path) -> Result<Self> {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let home = crate::exec::home();
         let wanted = std::env::var("AGENTLAND_VAULT_DIR").ok();
         let root = vault_root(data_dir, home.as_deref(), wanted.as_deref());
 
