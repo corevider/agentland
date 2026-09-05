@@ -225,14 +225,35 @@ export function close_tab(layout: Layout, stack_id: string, instance: string): L
     return rebuilt(layout, root);
 }
 
-export function move_tab(layout: Layout, instance: string, into: string): Layout {
+/// Carry a tab into a stack, at a seat among its tabs or at the end.
+///
+/// Within its own stack this is a reorder: the seat is counted with the tab
+/// still in place, the way a pointer over the strip sees it, so a tab dropped
+/// where it already sits stays put.
+export function move_tab(layout: Layout, instance: string, into: string, at?: number): Layout {
     const source = stacks(layout.root).find((entry) =>
         entry.tabs.some((tab) => tab.instance === instance),
     );
     const tab = source?.tabs.find((entry) => entry.instance === instance);
 
-    if (!source || !tab || source.id === into) {
+    if (!source || !tab) {
         return layout;
+    }
+
+    if (source.id === into) {
+        const from = source.tabs.findIndex((entry) => entry.instance === instance);
+        const seat = Math.min(at ?? source.tabs.length, source.tabs.length);
+        const landing = seat > from ? seat - 1 : seat;
+        if (at === undefined || landing === from) {
+            return layout;
+        }
+
+        const tabs = source.tabs.filter((entry) => entry.instance !== instance);
+        tabs.splice(landing, 0, tab);
+        const root = replace(layout.root, source.id, (found) =>
+            found.kind === "stack" ? { ...found, tabs, active: landing } : found,
+        );
+        return rebuilt(layout, root);
     }
 
     const without = replace(layout.root, source.id, (found) => {
@@ -246,11 +267,16 @@ export function move_tab(layout: Layout, instance: string, into: string): Layout
             : { ...found, tabs, active: Math.min(found.active, tabs.length - 1) };
     });
 
-    const root = replace(without ?? layout.root, into, (found) =>
-        found.kind === "stack"
-            ? { ...found, tabs: [...found.tabs, tab], active: found.tabs.length }
-            : found,
-    );
+    const root = replace(without ?? layout.root, into, (found) => {
+        if (found.kind !== "stack") {
+            return found;
+        }
+
+        const seat = Math.min(at ?? found.tabs.length, found.tabs.length);
+        const tabs = [...found.tabs];
+        tabs.splice(seat, 0, tab);
+        return { ...found, tabs, active: seat };
+    });
 
     return rebuilt(layout, root);
 }

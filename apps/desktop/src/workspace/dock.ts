@@ -61,3 +61,9 @@ export function zone_says(zone: Zone, same_stack: boolean): string {
 
     return zone === "left" || zone === "right" ? "split beside" : "split below";
 }
+
+/// Where in a tab strip a dropped tab would sit: before the first tab whose
+/// middle the pointer has not passed, or after all of them.
+export function seat_in_strip(x: number, centers: number[]): number {
+    return centers.filter((center) => x >= center).length;
+}

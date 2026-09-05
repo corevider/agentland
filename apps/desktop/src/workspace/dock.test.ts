@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { zone_at, zone_rect, zone_says } from "@/workspace/dock";
+import { seat_in_strip, zone_at, zone_rect, zone_says } from "@/workspace/dock";
 
 const box = { left: 100, top: 100, width: 400, height: 400 };
 
@@ -40,5 +40,18 @@ describe("where a dragged tab lands on a stack", () => {
         expect(zone_says("center", true)).toBe("already here");
         expect(zone_says("left", true)).toBe("split beside");
         expect(zone_says("bottom", false)).toBe("split below");
+    });
+});
+
+describe("where in a strip a tab is dropped", () => {
+    it("goes before the tab whose middle the pointer has not reached", () => {
+        expect(seat_in_strip(10, [50, 150, 250])).toBe(0);
+        expect(seat_in_strip(60, [50, 150, 250])).toBe(1);
+        expect(seat_in_strip(200, [50, 150, 250])).toBe(2);
+    });
+
+    it("goes last past every tab, and first in an empty strip", () => {
+        expect(seat_in_strip(900, [50, 150, 250])).toBe(3);
+        expect(seat_in_strip(900, [])).toBe(0);
     });
 });

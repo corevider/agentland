@@ -312,3 +312,31 @@ describe("docking a tab beside or below a stack", () => {
         expect(tabs_of(split)).toContainEqual(["panes"]);
     });
 });
+
+describe("dropping a tab at a seat in a strip", () => {
+    it("lands between the tabs already there and becomes the shown one", () => {
+        const layout = default_layout();
+        const [island, , panes] = stacks(layout.root);
+        const crowded = add_panel(add_panel(layout, panes.id, "crew"), panes.id, "repos");
+
+        const moved = move_tab(crowded, island.tabs[0].instance, panes.id, 1);
+        const holder = stacks(moved.root).find((stack) => stack.id === panes.id);
+
+        expect(holder?.tabs.map((tab) => tab.panel)).toEqual(["panes", "island", "crew", "repos"]);
+        expect(holder?.active).toBe(1);
+    });
+
+    it("reorders within its own strip, counting the seat with the tab still in place", () => {
+        const layout = default_layout();
+        const [, , panes] = stacks(layout.root);
+        const crowded = add_panel(add_panel(layout, panes.id, "crew"), panes.id, "repos");
+        const first = panes.tabs[0].instance;
+
+        const moved = move_tab(crowded, first, panes.id, 3);
+        const holder = stacks(moved.root).find((stack) => stack.id === panes.id);
+        expect(holder?.tabs.map((tab) => tab.panel)).toEqual(["crew", "repos", "panes"]);
+
+        expect(move_tab(crowded, first, panes.id, 0)).toBe(crowded);
+        expect(move_tab(crowded, first, panes.id, 1)).toBe(crowded);
+    });
+});

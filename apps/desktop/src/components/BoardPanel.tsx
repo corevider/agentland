@@ -1,5 +1,5 @@
 import { use_poll } from "@/lib/poll";
-import { on_a_control } from "@/lib/controls";
+import { on_a_control, without_text_selection } from "@/lib/controls";
 import { dated } from "@/lib/dated";
 import { use_services } from "@/workspace/registry";
 
@@ -352,11 +352,13 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
             }
         };
 
+        const release_selection = without_text_selection();
         window.addEventListener("pointermove", moved);
         window.addEventListener("pointerup", released);
         window.addEventListener("pointercancel", released);
 
         return () => {
+            release_selection();
             window.removeEventListener("pointermove", moved);
             window.removeEventListener("pointerup", released);
             window.removeEventListener("pointercancel", released);
@@ -995,6 +997,10 @@ function BoardCard({
                                 if (event.button !== 0 || on_a_control(event.target)) {
                                     return;
                                 }
+
+                                // No default: a press that becomes a drag
+                                // would otherwise start selecting text.
+                                event.preventDefault();
 
                                 const from = { x: event.clientX, y: event.clientY };
                                 const target = event.currentTarget;

@@ -15,3 +15,20 @@ export function on_a_control(target: Pressed | EventTarget | null): boolean {
     const pressed = target as Pressed | null;
     return typeof pressed?.closest === "function" && Boolean(pressed.closest(CONTROLS));
 }
+
+/// Keep the page from selecting text while something is carried across it.
+///
+/// A press that becomes a drag has already started a selection by the time
+/// the drag begins, and every pane the pointer crosses adds to it. The
+/// selection is dropped and the page told not to start another until the
+/// returned function puts things back.
+export function without_text_selection(): () => void {
+    const body = document.body;
+    const before = body.style.userSelect;
+    body.style.userSelect = "none";
+    window.getSelection()?.removeAllRanges();
+
+    return () => {
+        body.style.userSelect = before;
+    };
+}

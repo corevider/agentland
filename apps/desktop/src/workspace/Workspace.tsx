@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 
 import type { MenuItem } from "@/components/ContextMenu";
-import { on_a_control } from "@/lib/controls";
+import { on_a_control, without_text_selection } from "@/lib/controls";
 import { use_sideways_wheel } from "@/lib/wheel";
-import { zone_at, zone_rect, zone_says, type Zone } from "@/workspace/dock";
+import { seat_in_strip, zone_at, zone_rect, zone_says, type Zone } from "@/workspace/dock";
 import { PanelBoundary } from "@/workspace/Panel";
 import { PANELS, panel_entry, use_services } from "@/workspace/registry";
 import {
@@ -51,7 +51,9 @@ interface Carry {
 
 interface Aim {
     stack: string;
-    zone: Zone;
+    zone: Zone | "strip";
+    /// Where in the strip, when the pointer is over one: a seat among its tabs.
+    seat?: number;
 }
 
 interface Drag {
@@ -140,6 +142,8 @@ function panel_choices(run: (panel: string) => void): MenuItem[] {
 
 function StackView({ stack, layout, on_layout, subtitle_for, drag }: ViewProps & { stack: Stack }) {
     const aimed = drag.carry && drag.aim?.stack === stack.id ? drag.aim.zone : null;
+    const seat = aimed === "strip" ? (drag.aim?.seat ?? stack.tabs.length) : null;
+    const seat_mark = <span className="my-1 w-[2px] shrink-0 self-stretch rounded bg-turquoise" />;
     const strip = use_sideways_wheel<HTMLDivElement>();
     const { open_menu } = use_services();
     const active_tab = stack.tabs[stack.active] ?? null;
@@ -224,8 +228,10 @@ function StackView({ stack, layout, on_layout, subtitle_for, drag }: ViewProps &
                     {stack.tabs.map((tab, index) => {
                         const meta = panel_entry(tab.panel);
                         return (
+                            <Fragment key={tab.instance}>
+                            {seat === index ? seat_mark : null}
                             <div
-                                key={tab.instance}
+                                data-tab
                                 // Taken with the pointer, after a few pixels of
                                 // travel, so a click still selects the tab and
                                 // a press on its close button is a close.
@@ -233,6 +239,11 @@ function StackView({ stack, layout, on_layout, subtitle_for, drag }: ViewProps &
                                     if (event.button !== 0 || on_a_control(event.target)) {
                                         return;
                                     }
+
+                                    // No default: a press that turns into a
+                                    // drag would otherwise start selecting
+                                    // text under the pointer as it travels.
+                                    event.preventDefault();
 
                                     const from = { x: event.clientX, y: event.clientY };
                                     const target = event.currentTarget;
@@ -303,8 +314,10 @@ function StackView({ stack, layout, on_layout, subtitle_for, drag }: ViewProps &
                                     ×
                                 </button>
                             </div>
+                            </Fragment>
                         );
                     })}
+                    {seat === stack.tabs.length ? seat_mark : null}
                 </div>
 
                 <div className="flex shrink-0 items-center gap-0.5">
@@ -369,7 +382,7 @@ function StackView({ stack, layout, on_layout, subtitle_for, drag }: ViewProps &
                 </div>
             </PanelBoundary>
 
-            {aimed && drag.carry ? (
+            {aimed && aimed !== "strip" && drag.carry ? (
                 (() => {
                     const rect = zone_rect(aimed);
                     return (
@@ -383,7 +396,7 @@ function StackView({ stack, layout, on_layout, subtitle_for, drag }: ViewProps &
                             }}
                         >
                             <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded border border-turquoise/60 bg-lagoon-deep px-2 py-0.5 font-mono text-[10px] text-turquoise">
-                                {zone_says(aimed, drag.carry.from === stack.id)}
+                                {zone_says(aimed as Zone, drag.carry.from === stack.id)}
                             </span>
                         </div>
                     );
@@ -589,6 +602,23 @@ export function Workspace({ layout, on_layout, subtitle_for }: Props) {
                 set_aim(null);
                 return;
             }
+
+            // Over the strip the tab goes among the tabs, at the seat the
+            // pointer has reached; over the body it goes to one of the five.
+            if (under?.closest("[data-chrome]")) {
+                const centers = [...holder.querySelectorAll<HTMLElement>("[data-chrome] [data-tab]")].map((tab) => {
+                    const box = tab.getBoundingClientRect();
+                    return box.left + box.width / 2;
+                });
+                const seat = seat_in_strip(event.clientX, centers);
+                set_aim((held) =>
+                    held && held.stack === stack && held.zone === "strip" && held.seat === seat
+                        ? held
+                        : { stack, zone: "strip", seat },
+                );
+                return;
+            }
+
             const zone = zone_at(event.clientX, event.clientY, holder.getBoundingClientRect());
             set_aim((held) => (held && held.stack === stack && held.zone === zone ? held : { stack, zone }));
         };
@@ -596,7 +626,9 @@ export function Workspace({ layout, on_layout, subtitle_for }: Props) {
         const drop = () => {
             const { layout: now, on_layout: place, aim: at } = latest.current;
             if (at) {
-                if (at.zone === "center") {
+                if (at.zone === "strip") {
+                    place(move_tab(now, carry.instance, at.stack, at.seat));
+                } else if (at.zone === "center") {
                     if (at.stack !== carry.from) {
                         place(move_tab(now, carry.instance, at.stack));
                     }
@@ -619,12 +651,14 @@ export function Workspace({ layout, on_layout, subtitle_for }: Props) {
             }
         };
 
+        const release_selection = without_text_selection();
         window.addEventListener("pointermove", move);
         window.addEventListener("pointerup", drop);
         window.addEventListener("pointercancel", cancel);
         window.addEventListener("blur", cancel);
         window.addEventListener("keydown", key);
         return () => {
+            release_selection();
             window.removeEventListener("pointermove", move);
             window.removeEventListener("pointerup", drop);
             window.removeEventListener("pointercancel", cancel);
