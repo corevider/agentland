@@ -1,3 +1,16 @@
+/// How an agent is told to write something down.
+///
+/// The crew's memory only grows if somebody proposes to it, and an agent that
+/// is never told the tool is there never reaches for it. This is said in the
+/// brief rather than in the house rules because the rules are a file a person
+/// edits to taste, and this is how the machine works.
+const HOW_TO_WRITE_IT_DOWN: &str = "\n\n\
+    When you learn something the crew should not have to work out again — a port, \
+    a command, a decision that holds — propose it with memory_propose, in the \
+    narrowest scope it is true in. Correcting something the crew already believes? \
+    Pass that memory's slug from memory_list as supersedes. Nothing reaches anyone \
+    until a person approves it.";
+
 pub struct Ingredients<'a> {
     pub identity: Option<String>,
     pub base: &'a str,
@@ -34,6 +47,13 @@ pub fn compose(parts: Ingredients<'_>) -> String {
         for (from, text) in parts.mail {
             brief.push_str(&format!("\n- from {from}: {text}"));
         }
+    }
+
+    // Only where there is already something to say. An agent started with
+    // nothing is told nothing, and a lone instruction about memory would make
+    // that agent's first words a housekeeping note about a tool.
+    if !brief.trim().is_empty() {
+        brief.push_str(HOW_TO_WRITE_IT_DOWN);
     }
 
     brief
@@ -124,7 +144,39 @@ mod tests {
             mail: Vec::new(),
         });
 
-        assert_eq!(spoken(&brief), Some("You are X, the commander of this crew."));
+        let told = spoken(&brief).expect("there is something to say");
+        assert!(told.starts_with("You are X, the commander of this crew."), "{told}");
+    }
+
+    #[test]
+    fn anybody_told_anything_is_told_how_to_write_something_down() {
+        let brief = compose(empty("fix the guard"));
+        let told = spoken(&brief).expect("there is something to say");
+
+        assert!(told.contains("memory_propose"), "{told}");
+        assert!(told.contains("supersedes"), "{told}");
+        assert!(told.contains("until a person approves it"), "{told}");
+    }
+
+    #[test]
+    fn an_agent_told_nothing_is_not_told_about_memory_either() {
+        assert_eq!(spoken(&compose(empty("  \n "))), None);
+    }
+
+    #[test]
+    fn how_to_write_something_down_comes_after_the_work() {
+        let brief = compose(Ingredients {
+            identity: None,
+            base: "fix the guard",
+            learned: vec!["learned".into()],
+            skills: None,
+            mail: vec![("kai".into(), "mail".into())],
+        });
+
+        let mail = brief.find("Messages waiting for you").expect("mail");
+        let memory = brief.find("memory_propose").expect("memory");
+
+        assert!(mail < memory, "{brief}");
     }
 
     #[test]

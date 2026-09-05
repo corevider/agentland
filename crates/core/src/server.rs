@@ -3569,12 +3569,54 @@ async fn list_memories(State(state): State<AppState>) -> Json<Vec<Memory>> {
     Json(state.memories.list())
 }
 
+/// A memory can be a paragraph; a notice is one line in a dropdown.
+fn opening_of(text: &str, most: usize) -> String {
+    let line = text.trim().lines().next().unwrap_or_default().trim();
+
+    if line.chars().count() <= most {
+        return line.to_owned();
+    }
+
+    let kept: String = line.chars().take(most).collect();
+    format!("{}…", kept.trim_end())
+}
+
 async fn propose_memory(
     State(state): State<AppState>,
     Json(request): Json<ProposeMemory>,
 ) -> Result<Json<Memory>, ApiError> {
     let scope = scope_for(&state, &request.scope);
-    Ok(Json(state.memories.propose(request, &scope, now_secs())?))
+    let proposed_by = request.proposed_by.clone();
+    let memory = state.memories.propose(request, &scope, now_secs())?;
+
+    // A proposal is inert until somebody says yes, and nothing on the screen
+    // said one had arrived — an agent could write down the thing that would
+    // have saved the next agent an hour, and it would sit in a panel nobody
+    // had a reason to open. Only for an agent's: somebody proposing one in the
+    // panel is already looking at the panel.
+    if let Some(name) = state
+        .crew
+        .list()
+        .into_iter()
+        .find(|agent| agent.id == proposed_by)
+        .map(|agent| agent.name)
+    {
+        state.notices.push(
+            crate::notices::NewNotice {
+                kind: crate::notices::Kind::Waiting,
+                text: format!(
+                    "{name} wants the crew to remember: {}",
+                    opening_of(&memory.text, 80)
+                ),
+                agent_id: Some(proposed_by),
+                opens: Some("memory".to_owned()),
+                ..Default::default()
+            },
+            now_secs(),
+        );
+    }
+
+    Ok(Json(memory))
 }
 
 #[derive(Deserialize)]
@@ -6537,5 +6579,39 @@ mod leaving_tests {
             holding_says(&holding(0, true, 0, 0)).as_deref(),
             Some("a pane still open")
         );
+    }
+}
+
+#[cfg(test)]
+mod memory_notice_tests {
+    use super::opening_of;
+
+    #[test]
+    fn a_short_memory_reaches_the_bell_whole() {
+        assert_eq!(opening_of("the dev server reads PORT", 80), "the dev server reads PORT");
+    }
+
+    #[test]
+    fn a_memory_written_as_a_paragraph_is_cut_to_its_first_line() {
+        let written = "the dev server reads PORT\n\nand the port is allocated per worktree";
+
+        assert_eq!(opening_of(written, 80), "the dev server reads PORT");
+    }
+
+    #[test]
+    fn a_long_line_is_cut_where_a_dropdown_ends() {
+        let written = "x".repeat(200);
+        let shown = opening_of(&written, 80);
+
+        assert_eq!(shown.chars().count(), 81, "eighty and the mark that says there is more");
+        assert!(shown.ends_with('…'));
+    }
+
+    #[test]
+    fn the_cut_does_not_land_inside_a_character() {
+        let written = "ö".repeat(200);
+        let shown = opening_of(&written, 10);
+
+        assert_eq!(shown, format!("{}…", "ö".repeat(10)));
     }
 }
