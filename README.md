@@ -1986,6 +1986,53 @@ One link is still unverified, and it needs a Codex login rather than more work:
 that a running Codex session actually launches the server it was configured
 with. Everything up to that point is measured.
 
+## Gemini and Cursor, and the gate each keeps
+
+Installing the other two turned the same trick twice: the catalog rows were
+guesses, and the engines had opinions.
+
+**Gemini's `-p` was the wrong prompt.** The catalog handed the brief to `-p`,
+which is the headless mode — answer, print, exit. A crew pane that closes as it
+opens. The positional query is the one that stays interactive, and `--resume
+latest` is what continues.
+
+**Cursor and Gemini both hide their tools behind a gate.** Writing the server
+into the worktree is not enough for either. Gemini suppresses MCP servers in a
+folder it has not been told to trust, and says so in a warning nobody is reading
+— measured, the server configured and listed and `Disabled`. Cursor will not
+load a server nobody approved: `not loaded (needs approval)`, and `list-tools`
+refuses. So Gemini gets `--skip-trust`, and Cursor is answered before its pane
+opens, by name, with `mcp enable agentland`. Not `--approve-mcps` — that would
+also wave through whatever the human keeps in their own `~/.cursor/mcp.json`,
+and a crew pane is no place for somebody's personal connectors.
+
+**Three engines, three files, one server.** `.mcp.json`, `.gemini/settings.json`
+and `.cursor/mcp.json` now go into every worktree, all excluded from git. None of
+the shapes were guessed: each was produced by asking that engine's own `mcp add`
+to write one, then read back. Claude's copy expands `${AGENTLAND_TOKEN}` out of
+the pane's environment; the other two are handed the endpoint file's path,
+because these files live inside somebody's checkout and a token in a checkout is
+one `git add -A` from a remote.
+
+Cursor is the one verified all the way through. In the worktree Agentland made,
+after the approval Agentland gave, `cursor-agent mcp list-tools agentland`
+answers **`Tools for agentland (34)`** — `crew_message`, `crew_delegate`,
+`task_move`, all of it. A Cursor agent is a peer that can report back, not just a
+worker. Gemini stops at its sign-in, the same place Codex does.
+
+**Permissions, for once, line up.** Gemini has four rungs against our four —
+`plan`, `default`, `auto_edit`, `yolo` — so nothing is rounded. Cursor has
+read-only and run-everything and nothing between, so its middle two land on the
+one that asks, the same way round as Codex.
+
+**And Cursor holds one login only.** Nothing in it moves its config home; the
+binary knows one variable and it is not that. `--api-key` exists, but an API key
+is usage-based billing rather than the subscription — the same distinction that
+rules out a gateway. Gemini does move: `GEMINI_CLI_HOME` relocates the whole
+home, measured the same way as Codex's. But Gemini has no status command, so a
+row about a Gemini login is a silence rather than a yes or a no, and the panel
+says which of those it is.
+
 ## Two subscriptions, one crew
 
 A week runs out on a Friday and the crew stops. The obvious answer is a second

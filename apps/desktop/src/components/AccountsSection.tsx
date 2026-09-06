@@ -117,9 +117,11 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
                                 {account.engine_id} · {account.label}
                             </span>
                             <span className="font-mono text-[10px] text-shade">
-                                {account.signed_in
-                                    ? `${account.who ?? "signed in"}${account.plan ? ` · ${account.plan}` : ""}`
-                                    : "the engine says nobody is signed in here"}
+                                {!account.askable
+                                    ? "this engine has no way to say who it is — open its pane to find out"
+                                    : account.signed_in
+                                      ? `${account.who ?? "signed in"}${account.plan ? ` · ${account.plan}` : ""}`
+                                      : "the engine says nobody is signed in here"}
                             </span>
                         </div>
 
@@ -128,7 +130,7 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
                                 className="rounded-lg border border-reef px-2 py-1 font-mono text-[11px] text-shell hover:border-turquoise hover:text-turquoise"
                                 onClick={() => void sign_in(account.engine_id, account.label)}
                             >
-                                {account.signed_in ? "sign in again" : "sign in"}
+                                {account.askable && account.signed_in ? "sign in again" : "sign in"}
                             </button>
                             <button
                                 className="rounded-lg border border-reef px-2 py-1 font-mono text-[11px] text-shell hover:border-coral hover:text-coral"

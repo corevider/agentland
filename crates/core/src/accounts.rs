@@ -25,8 +25,19 @@ pub fn config_home(engine_id: &str) -> Option<&'static str> {
     match engine_id {
         "claude" => Some("CLAUDE_CONFIG_DIR"),
         "codex" => Some("CODEX_HOME"),
+        "gemini" => Some("GEMINI_CLI_HOME"),
         _ => None,
     }
+}
+
+/// Whether this engine can be asked who it is signed in as.
+///
+/// Claude Code and Codex both answer a status command. Gemini has none: it can
+/// be given a folder of its own, and nothing in it will say whose folder it is.
+/// A second Gemini login is therefore offered with that said out loud rather
+/// than with a row that quietly claims to know.
+pub fn can_be_asked(engine_id: &str) -> bool {
+    status_command(engine_id).is_some()
 }
 
 /// How an engine is asked who it is signed in as.
@@ -38,6 +49,8 @@ pub fn status_command(engine_id: &str) -> Option<(&'static str, &'static [&'stat
     match engine_id {
         "claude" => Some(("claude", &["auth", "status", "--json"])),
         "codex" => Some(("codex", &["login", "status"])),
+        // Gemini has no status command. Guessing from the presence of a
+        // credential file would be reading tea leaves in somebody's folder.
         _ => None,
     }
 }
@@ -50,6 +63,9 @@ pub fn login_command(engine_id: &str) -> Option<(&'static str, &'static [&'stati
     match engine_id {
         "claude" => Some(("claude", &["auth", "login"])),
         "codex" => Some(("codex", &["login"])),
+        // Gemini signs in the first time it opens with nowhere to sign in from,
+        // so the pane that does it is just the engine.
+        "gemini" => Some(("gemini", &[])),
         _ => None,
     }
 }
@@ -64,6 +80,19 @@ pub fn login_command(engine_id: &str) -> Option<(&'static str, &'static [&'stati
 fn shared_folder(engine_id: &str) -> Option<&'static str> {
     match engine_id {
         "claude" => Some("projects"),
+        _ => None,
+    }
+}
+
+/// What a login's folder has to contain before the engine will look inside it.
+///
+/// Gemini's home variable names the folder that holds `.gemini`, rather than
+/// `.gemini` itself — measured: a user-scope server added with the variable set
+/// landed in `$GEMINI_CLI_HOME/.gemini/settings.json` and the real home was
+/// never created.
+fn inner_folder(engine_id: &str) -> Option<&'static str> {
+    match engine_id {
+        "gemini" => Some(".gemini"),
         _ => None,
     }
 }
@@ -86,6 +115,9 @@ pub struct Account {
     /// The plan the engine names — `max`, `pro`, an API key. None where it says
     /// nothing.
     pub plan: Option<String>,
+    /// Whether this engine can be asked at all. False means `signed_in` is not
+    /// a no — it is a silence, and the panel says so rather than guessing.
+    pub askable: bool,
 }
 
 /// What an engine's status output says about a login.
@@ -174,6 +206,11 @@ pub fn add(data_dir: &Path, engine_id: &str, label: &str) -> Result<PathBuf> {
 
     let folder = dir(data_dir, engine_id, &slug);
     fs::create_dir_all(&folder)?;
+
+    if let Some(inner) = inner_folder(engine_id) {
+        fs::create_dir_all(folder.join(inner))?;
+    }
+
     share_conversations(data_dir, engine_id, &folder);
 
     Ok(folder)
@@ -262,6 +299,7 @@ pub fn status_of(data_dir: &Path, engine_id: &str, label: &str) -> Account {
         signed_in,
         who,
         plan,
+        askable: can_be_asked(engine_id),
     }
 }
 
@@ -328,6 +366,35 @@ mod tests {
     fn a_subscription_is_a_folder_not_a_base_url() {
         assert_eq!(config_home("claude"), Some("CLAUDE_CONFIG_DIR"));
         assert_eq!(config_home("codex"), Some("CODEX_HOME"));
+    }
+
+    #[test]
+    fn gemini_gets_a_folder_but_cannot_be_asked_whose_it_is() {
+        assert_eq!(config_home("gemini"), Some("GEMINI_CLI_HOME"));
+        assert!(can_hold_accounts("gemini"));
+
+        // It has no status command, so a row about it is a silence rather than
+        // a no, and the panel has to say which.
+        assert!(!can_be_asked("gemini"));
+        assert!(can_be_asked("claude") && can_be_asked("codex"));
+    }
+
+    #[test]
+    fn a_gemini_login_is_given_the_folder_the_engine_looks_inside() {
+        let data = scratch("inner");
+        let folder = add(&data, "gemini", "second").expect("the folder is made");
+
+        // The variable names the folder that holds `.gemini`, not `.gemini`
+        // itself, so the inner one is there before the engine goes looking.
+        assert!(folder.join(".gemini").is_dir(), "{folder:?}");
+
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn cursor_holds_one_login_because_nothing_moves_its_home() {
+        assert_eq!(config_home("cursor-agent"), None);
+        assert!(!can_hold_accounts("cursor-agent"));
     }
 
     #[test]

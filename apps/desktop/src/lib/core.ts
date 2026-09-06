@@ -517,6 +517,9 @@ export interface Account {
     signed_in: boolean;
     who: string | null;
     plan: string | null;
+    /// Whether the engine can be asked at all. False means signed_in is a
+    /// silence rather than a no.
+    askable: boolean;
 }
 
 export interface AccountsReport {

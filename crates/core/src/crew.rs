@@ -72,11 +72,14 @@ const CATALOG: &[Known] = &[
         id: "gemini",
         name: "Gemini CLI",
         command: "gemini",
-        resume: &[],
+        resume: &["--resume", "latest"],
         model_flag: Some("-m"),
-        prompt_style: PromptStyle::Flag("-p"),
-        takes_the_tools: false,
-        resume_carries_a_brief: false,
+        // Not `-p`. That is Gemini's headless mode: it answers the prompt,
+        // prints, and exits — a crew pane that closes the moment it opens. The
+        // positional query is the one that stays.
+        prompt_style: PromptStyle::Positional,
+        takes_the_tools: true,
+        resume_carries_a_brief: true,
     },
     Known {
         id: "opencode",
@@ -122,11 +125,11 @@ const CATALOG: &[Known] = &[
         id: "cursor-agent",
         name: "Cursor Agent",
         command: "cursor-agent",
-        resume: &[],
+        resume: &["--continue"],
         model_flag: Some("--model"),
         prompt_style: PromptStyle::Positional,
-        takes_the_tools: false,
-        resume_carries_a_brief: false,
+        takes_the_tools: true,
+        resume_carries_a_brief: true,
     },
 ];
 
@@ -204,8 +207,40 @@ pub fn tools_for(engine_id: &str, tools: &Path, endpoint: &Path) -> Vec<String> 
                 ),
             ]
         }
+        // Gemini already has the file, in the worktree where it looks. What it
+        // needs is permission to read it: a folder it has not been told to trust
+        // has its MCP servers suppressed, with a warning in a pane nobody is
+        // watching. Measured — the server was configured, listed, and disabled.
+        "gemini" => vec!["--skip-trust".to_owned()],
+        // Cursor has the file too. What it wants beyond that is a person's
+        // answer about the workspace, which is this flag, and a person's answer
+        // about the server itself, which is not a flag at all — see
+        // `approve_the_tools`.
+        "cursor-agent" => vec!["--trust".to_owned()],
         _ => Vec::new(),
     }
+}
+
+/// Say yes, before the pane opens, to the one server Agentland put there.
+///
+/// Cursor will not load a server it has not been approved for, and the asking
+/// happens inside a running agent: measured as `not loaded (needs approval)`,
+/// with `list-tools` refusing outright. `mcp enable` answers for that one server
+/// by name. `--approve-mcps` would have been one flag, and it would also wave
+/// through whatever the human keeps in their own `~/.cursor/mcp.json` — a crew
+/// pane is no place for somebody's personal connectors.
+///
+/// Best effort and quiet. An engine that will not take the answer still starts;
+/// it starts without the crew's tools, which the pane shows plainly.
+fn approve_the_tools(engine_id: &str, worktree: &Path) {
+    if engine_id != "cursor-agent" {
+        return;
+    }
+
+    let _ = crate::exec::command("cursor-agent")
+        .args(["mcp", "enable", "agentland"])
+        .current_dir(worktree)
+        .output();
 }
 
 /// The tool program, read back out of the file written for the engine that
@@ -237,6 +272,23 @@ pub fn permission_args(engine_id: &str, mode: &str) -> Vec<String> {
             "plan" => owned(&["--sandbox", "read-only"]),
             "bypassPermissions" => owned(&["--dangerously-bypass-approvals-and-sandbox"]),
             _ => owned(&["--sandbox", "workspace-write", "--ask-for-approval", "on-request"]),
+        },
+        // Four rungs against four, which happens once. Gemini names them almost
+        // as we do.
+        "gemini" => match mode {
+            "plan" => owned(&["--approval-mode", "plan"]),
+            "acceptEdits" => owned(&["--approval-mode", "auto_edit"]),
+            "bypassPermissions" => owned(&["--approval-mode", "yolo"]),
+            _ => owned(&["--approval-mode", "default"]),
+        },
+        // Cursor has a read-only mode and a run-everything mode, and nothing in
+        // between: there is no way to say "write files freely, ask before you
+        // run something". So the two middle rungs both come out as the one that
+        // asks, the same way round as Codex.
+        "cursor-agent" => match mode {
+            "plan" => owned(&["--mode", "plan"]),
+            "bypassPermissions" => owned(&["--force"]),
+            _ => Vec::new(),
         },
         _ => Vec::new(),
     }
@@ -741,6 +793,7 @@ impl Crew {
         if tools.exists() {
             let endpoint = self.endpoint_file();
             args.extend(tools_for(&agent.engine_id, &tools, &endpoint));
+            approve_the_tools(&agent.engine_id, worktree_path);
         }
 
         let mode = agent
@@ -1043,7 +1096,7 @@ pub fn model_for_role(engine_id: &str, role: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod model_tests {
-    use super::{engine, free_colour, model_for_role, permission_args, tools_for, PALETTE};
+    use super::{engine, free_colour, model_for_role, permission_args, tools_for, PromptStyle, PALETTE};
     use std::path::Path;
 
     #[test]
@@ -1104,7 +1157,67 @@ mod model_tests {
 
     #[test]
     fn an_engine_that_takes_no_tools_is_handed_none() {
-        assert!(tools_for("gemini", Path::new("/w/.mcp.json"), Path::new("/d/e.json")).is_empty());
+        assert!(tools_for("crush", Path::new("/w/.mcp.json"), Path::new("/d/e.json")).is_empty());
+    }
+
+    #[test]
+    fn gemini_is_let_into_the_folder_its_tools_are_in() {
+        // The file is already in the worktree where Gemini looks. What it needs
+        // is permission to read it: an untrusted folder has its MCP servers
+        // suppressed, configured and listed and disabled.
+        assert_eq!(
+            tools_for("gemini", Path::new("/w/.mcp.json"), Path::new("/d/e.json")),
+            vec!["--skip-trust"]
+        );
+    }
+
+    #[test]
+    fn gemini_has_a_rung_for_every_rung_we_have() {
+        assert_eq!(permission_args("gemini", "plan"), vec!["--approval-mode", "plan"]);
+        assert_eq!(permission_args("gemini", "default"), vec!["--approval-mode", "default"]);
+        assert_eq!(
+            permission_args("gemini", "acceptEdits"),
+            vec!["--approval-mode", "auto_edit"]
+        );
+        assert_eq!(
+            permission_args("gemini", "bypassPermissions"),
+            vec!["--approval-mode", "yolo"]
+        );
+    }
+
+    #[test]
+    fn gemini_stays_in_the_pane_rather_than_answering_and_leaving() {
+        let gemini = engine("gemini").expect("gemini is in the catalog");
+
+        // `-p` is Gemini's headless mode: it answers, prints and exits. A crew
+        // pane wants the query that keeps the session.
+        assert!(
+            matches!(gemini.prompt_style, PromptStyle::Positional),
+            "a pane that closes as it opens is not an agent"
+        );
+        assert_eq!(gemini.resume, &["--resume", "latest"]);
+    }
+
+    #[test]
+    fn cursor_asks_about_the_workspace_and_is_answered() {
+        assert_eq!(
+            tools_for("cursor-agent", Path::new("/w/.mcp.json"), Path::new("/d/e.json")),
+            vec!["--trust"]
+        );
+
+        let cursor = engine("cursor-agent").expect("cursor is in the catalog");
+        assert_eq!(cursor.resume, &["--continue"]);
+    }
+
+    #[test]
+    fn cursor_rounds_towards_asking_too() {
+        assert_eq!(permission_args("cursor-agent", "plan"), vec!["--mode", "plan"]);
+        assert_eq!(permission_args("cursor-agent", "bypassPermissions"), vec!["--force"]);
+
+        // No rung between read-only and run-everything, so the middle two are
+        // the one that asks.
+        assert!(permission_args("cursor-agent", "default").is_empty());
+        assert!(permission_args("cursor-agent", "acceptEdits").is_empty());
     }
 
     #[test]

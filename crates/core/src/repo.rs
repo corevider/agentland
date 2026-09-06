@@ -675,11 +675,25 @@ fn mcp_binary(data_dir: &Path) -> String {
         .unwrap_or_else(|| TOOL_NAME.to_owned())
 }
 
+/// The crew's tools, written where each engine looks for them.
+///
+/// Three engines, three files, one server. Claude Code reads `.mcp.json` and is
+/// handed it by flag; Gemini reads `.gemini/settings.json`; Cursor reads
+/// `.cursor/mcp.json`. The shapes were not guessed — each was produced by asking
+/// that engine's own `mcp add` to write one, and then read back.
+///
+/// Claude's copy expands `${AGENTLAND_TOKEN}` out of the pane's environment, so
+/// nothing is written down. The other two are handed the path of Agentland's own
+/// endpoint file instead: these files live inside somebody's checkout, and a
+/// token in a checkout is a token one `git add -A` away from a remote.
 fn write_mcp_config(worktree: &Path, data_dir: &Path) {
-    let config = serde_json::json!({
+    let program = mcp_binary(data_dir);
+    let endpoint = data_dir.join("endpoint.json").to_string_lossy().into_owned();
+
+    let claude = serde_json::json!({
         "mcpServers": {
             "agentland": {
-                "command": mcp_binary(data_dir),
+                "command": program,
                 "args": [],
                 "env": {
                     "AGENTLAND_PORT": "${AGENTLAND_PORT}",
@@ -689,11 +703,40 @@ fn write_mcp_config(worktree: &Path, data_dir: &Path) {
         }
     });
 
-    if let Ok(rendered) = serde_json::to_string_pretty(&config) {
-        let _ = fs::write(worktree.join(".mcp.json"), rendered);
+    // Gemini refuses to load a server from a folder it does not trust, and says
+    // so in a warning nobody reads. `trust` on the server is the engine's own
+    // word for "this one is not the model's to approve" — Agentland wrote it.
+    let elsewhere = serde_json::json!({
+        "mcpServers": {
+            "agentland": {
+                "command": program,
+                "args": ["--endpoint", endpoint],
+                "trust": true
+            }
+        }
+    });
+
+    for (file, config) in [
+        (PathBuf::from(".mcp.json"), &claude),
+        (PathBuf::from(".gemini").join("settings.json"), &elsewhere),
+        (PathBuf::from(".cursor").join("mcp.json"), &elsewhere),
+    ] {
+        let Ok(rendered) = serde_json::to_string_pretty(config) else {
+            continue;
+        };
+
+        let path = worktree.join(&file);
+        if let Some(folder) = path.parent() {
+            if fs::create_dir_all(folder).is_err() {
+                continue;
+            }
+        }
+
+        if fs::write(&path, rendered).is_ok() {
+            exclude_from_git(worktree, &file.to_string_lossy().replace('\\', "/"));
+        }
     }
 
-    exclude_from_git(worktree, ".mcp.json");
     trust_our_own_tools(worktree);
 }
 
