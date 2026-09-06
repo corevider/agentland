@@ -214,10 +214,19 @@ fn tools() -> Value {
                         "type": "string",
                         "enum": ["plan", "default", "acceptEdits"],
                         "description": "how much the new agent may do without asking; leave it out for the role's default. Nobody is hired never asking — that is a raise, and the human decides it."
+                    },
+                    "account": {
+                        "type": "string",
+                        "description": "which login on this engine the agent spends from, from crew_accounts. Leave it out to spend from whoever the machine is signed in as. Spreading the crew across the logins that exist is how a week lasts the week."
                     }
                 },
                 "required": ["name", "engine_id", "repository_id", "worktree"]
             }
+        },
+        {
+            "name": "crew_accounts",
+            "description": "The logins this machine holds, per engine, and whether each is really signed in — read from the engine's own status rather than remembered. Hire onto one by passing its label as account, so two subscriptions on the same engine spend two separate weeks. An engine missing from this list holds one login only.",
+            "inputSchema": { "type": "object", "properties": {} }
         },
         {
             "name": "crew_engines",
@@ -247,6 +256,10 @@ fn tools() -> Value {
                         "type": "string",
                         "enum": ["plan", "default", "acceptEdits", "bypassPermissions"],
                         "description": "how much this agent may do without asking, in order of rope: plan reads, default asks first, acceptEdits writes files and asks before running things, bypassPermissions never asks. Lowering is yours to decide. Raising is not: it is refused and the human is asked instead, and their yes is what applies it. Lower an agent whose step is reading or reviewing rather than leaving it able to write."
+                    },
+                    "account": {
+                        "type": "string",
+                        "description": "the login on this agent's engine it spends from next time it starts, from crew_accounts. A pane already running keeps the account it began with, so this takes effect on the next start. An empty string puts it back to whoever the machine is signed in as."
                     }
                 },
                 "required": ["agent_id"]
@@ -548,6 +561,7 @@ fn call_tool(core: &Core, name: &str, arguments: &Value) -> Result<Value, String
             )
         }
         "crew_engines" => core.call("GET", "/engines", None),
+        "crew_accounts" => core.call("GET", "/accounts", None),
         "crew_hire" => core.call(
             "POST",
             "/agents",
@@ -561,6 +575,7 @@ fn call_tool(core: &Core, name: &str, arguments: &Value) -> Result<Value, String
                 "title": arguments.get("title").and_then(Value::as_str),
                 "colour": arguments.get("colour").and_then(Value::as_str),
                 "permissions": arguments.get("permissions").and_then(Value::as_str),
+                "account": arguments.get("account").and_then(Value::as_str),
             })),
         ),
         "crew_shape" => {
@@ -573,6 +588,7 @@ fn call_tool(core: &Core, name: &str, arguments: &Value) -> Result<Value, String
                     "title": arguments.get("title").and_then(Value::as_str),
                     "colour": arguments.get("colour").and_then(Value::as_str),
                     "permissions": arguments.get("permissions").and_then(Value::as_str),
+                    "account": arguments.get("account").and_then(Value::as_str),
                 })),
             )
         }

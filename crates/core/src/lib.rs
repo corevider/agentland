@@ -1,3 +1,4 @@
+pub mod accounts;
 pub mod approvals;
 pub mod auth;
 pub mod bench;
@@ -46,6 +47,7 @@ pub mod vault;
 pub mod voice;
 pub mod whisper;
 
+pub use accounts::Account;
 pub use approvals::{AnswerApproval, Approval, Approvals, RequestApproval};
 pub use auth::{Scope as TokenScope, ScopedToken, TokenStore};
 pub use bench::GeneratorSpec;

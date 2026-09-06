@@ -1906,7 +1906,7 @@ query had tools; lint had none.
 ## The tool program was never in the box
 
 Every agent talks to Agentland through `agentland-mcp`: the board, the vault,
-memory, delegation, plans, approvals — thirty-three tools, all of them over a
+memory, delegation, plans, approvals — thirty-four tools, all of them over a
 pipe to that program. Running from source it sits in `target/` beside the app,
 which is why nothing ever noticed that the installers shipped one binary. Opened
 up, the published `.deb` held exactly `usr/bin/agentland-desktop` and nothing
@@ -1932,3 +1932,54 @@ committed. So `cargo build` or `cargo test` across the workspace wants
 themselves, and CI has a step for it. The first tag after the change went red on
 exactly that: the machine that wrote it had the file already, so the local run
 was green for a reason that did not travel.
+
+## Two subscriptions, one crew
+
+A week runs out on a Friday and the crew stops. The obvious answer is a second
+plan; the obvious way to use one is a gateway, pointed at with a base URL. That
+answer is wrong. A Max or Pro plan is an OAuth login bound to the provider's own
+endpoint — route an engine somewhere else and it spends API credit, not the
+subscription somebody is already paying for. The subscription cannot be routed.
+It can only be *stood in front of*.
+
+So a second login is a second config folder and nothing else. `CLAUDE_CONFIG_DIR`
+moves Claude Code's whole identity — credentials, settings, the trust it keeps
+about folders, the transcripts. Measured here: a fresh folder answers
+`claude auth status` with `loggedIn: false` while the home one stays signed in as
+`max`, and a pane started in it opens at the first-run theme picker, which the
+machine's real login has not shown in months.
+
+**Nothing here claims a login it has not checked.** An account row says signed in
+only when the engine's own `auth status` says so, asked each time it is read. A
+row that says yes because this app once opened a login pane is a row that lies
+the moment a token expires or somebody signs out in another window.
+
+**An engine we cannot isolate is offered no second account at all.**
+`CLAUDE_CONFIG_DIR` and `CODEX_HOME` are the two we know; a guessed variable is
+silently ignored, and then two rows claiming to be two people share one login and
+one week. The Logins panel lists what the machine can actually hold, which is
+sometimes nothing.
+
+**The logins of one engine share their conversations.** Each account folder's
+`projects` is a symlink to one shared folder, so moving an agent between
+subscriptions and resuming finds the work rather than an empty prompt. Without
+it, a switch is amnesia — which is most of the reason a second subscription would
+not be worth having.
+
+**A running pane keeps the account it started with.** The variable is read once,
+when the process starts, and nothing can move it after. Choosing a different
+login is a fact about the next pane, and the panel says so rather than pretending
+the switch is live.
+
+The quota was already counted per login rather than per engine — `claude/second`
+and `claude` are two weeks, and neither says anything about the other. What is
+new is what happens when one of them ends: with the hand-over turned on, an agent
+whose week is spent is moved to a login that still has one, its pane traded for a
+fresh one, and resumed. It is **off unless somebody turns it on**, because
+carrying on means spending a second subscription this week, and an app that does
+that quietly is an app nobody can budget for.
+
+The commander can see all of it — `crew_accounts` lists the logins and whether
+each is really signed in, and both `crew_hire` and `crew_shape` take an
+`account`. Spreading a crew across the logins that exist is how a week lasts the
+week.

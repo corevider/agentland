@@ -723,6 +723,16 @@ fn claude_config_file() -> Option<PathBuf> {
     crate::exec::home().map(|home| home.join(".claude.json"))
 }
 
+/// Say the same thing, in a config home that is not this machine's default.
+///
+/// A second subscription lives in a folder of its own, with a `.claude.json` of
+/// its own, and the folders Agentland made are trusted in every one of them or
+/// in none.
+pub fn trust_the_folder_for(config_home: &Path, worktree: &Path) {
+    let path = crate::exec::settled(worktree);
+    trust_the_folder_in(&config_home.join(".claude.json"), &path);
+}
+
 /// One flag, on one entry, and everything else in the file as it was. A file
 /// that is there but cannot be read as JSON is left alone: it is somebody
 /// else's, and a guess at it would cost them everything else it holds.

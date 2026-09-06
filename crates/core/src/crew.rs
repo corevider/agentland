@@ -197,6 +197,11 @@ pub struct Shaping {
     pub colour: Option<String>,
     #[serde(default)]
     pub permissions: Option<String>,
+    /// Which login this agent spends from next time it starts. A pane already
+    /// running keeps the account it began with — the variable that decides it is
+    /// fixed when the process starts, and nothing can move it after.
+    #[serde(default)]
+    pub account: Option<String>,
     /// Set by the core when a human has approved this exact raise; never by the
     /// commander, which is why it is not in the tool it calls.
     #[serde(default, skip)]
@@ -344,6 +349,24 @@ impl Crew {
             bail!("name must contain letters or digits");
         }
 
+        // A login this machine does not hold is refused here rather than at the
+        // first pane. Hiring somebody onto an account that is not there looks
+        // like it worked and spends the wrong week.
+        let account = match request.account.as_deref().map(str::trim).filter(|held| !held.is_empty()) {
+            Some(named) => {
+                let label = crate::accounts::slugify(named);
+                if !crate::accounts::dir(&self.data_dir, &request.engine_id, &label).is_dir() {
+                    bail!(
+                        "{} has no login called {label} — add it and sign in with the engine's own flow first",
+                        request.engine_id
+                    );
+                }
+
+                Some(label)
+            }
+            None => None,
+        };
+
         let mut state = self.state.lock();
 
         // The same name in another project is another agent, not a clash. Every
@@ -401,7 +424,7 @@ impl Crew {
             title: request.title,
             colour,
             permissions: request.permissions,
-            account: request.account,
+            account,
         };
 
         state.agents.insert(id, agent.clone());
@@ -459,6 +482,24 @@ impl Crew {
                 }
 
                 agent.permissions = Some(trimmed);
+            }
+        }
+
+        if let Some(account) = wanted.account {
+            let trimmed = account.trim().to_owned();
+
+            if trimmed.is_empty() {
+                agent.account = None;
+            } else {
+                let label = crate::accounts::slugify(&trimmed);
+                if !crate::accounts::dir(&self.data_dir, &agent.engine_id, &label).is_dir() {
+                    bail!(
+                        "{} has no login called {label} — add it and sign in with the engine's own flow first",
+                        agent.engine_id
+                    );
+                }
+
+                agent.account = Some(label);
             }
         }
 
@@ -600,6 +641,22 @@ impl Crew {
         let mut env = BTreeMap::new();
         env.insert("AGENTLAND_AGENT".to_owned(), agent.id.clone());
         env.insert("AGENTLAND_ROLE".to_owned(), agent.role.clone());
+
+        // Which login this pane spends from. The variable is fixed when the
+        // process starts and cannot be changed after: a running pane keeps the
+        // account it began with, and a switch is a fact about the next one.
+        if let Some((variable, folder)) = crate::accounts::env_for(
+            &self.data_dir,
+            &agent.engine_id,
+            agent.account.as_deref(),
+        ) {
+            // The engine asks whether this folder is trusted, and it asks each
+            // login separately — the answer lives in that login's own config.
+            // A second subscription that stops at "do you trust this folder?"
+            // is a second subscription nobody can use.
+            crate::repo::trust_the_folder_for(std::path::Path::new(&folder), worktree_path);
+            env.insert(variable, folder);
+        }
 
         if let Some((port, token)) = self.endpoint.lock().clone() {
             env.insert("AGENTLAND_PORT".to_owned(), port.to_string());

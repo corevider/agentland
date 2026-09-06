@@ -339,6 +339,10 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/voice/said", post(said_elsewhere))
         .route("/repos/{id}/goal", post(set_goal).delete(clear_goal))
         .route("/permits", get(read_permits).delete(forget_permit))
+        .route("/accounts", get(list_accounts).post(add_account))
+        .route("/accounts/failover", post(set_failover))
+        .route("/accounts/{engine_id}/{label}", delete(forget_account))
+        .route("/accounts/{engine_id}/{label}/login", post(sign_in_account))
         .route("/stacks", get(list_starters))
         .route("/repos/{id}/commander", post(ignite))
         .route("/start", post(begin))
@@ -1088,6 +1092,12 @@ fn spawn_supervisor(state: AppState) {
                     // to a single global number: two subscriptions are two
                     // weeks and neither says anything about the other.
                     state.quota.lock().insert(identity_of(&agent), (usage, now));
+
+                    // A week that is gone is the end of the work only when there
+                    // is nowhere else to do it.
+                    if usage.room() == crate::budget::Room::Spent {
+                        hand_over_to_a_stand_in(&state, &agent).await;
+                    }
                 }
 
                 let limit = crate::context::read_rate_limit(&tail);
@@ -4759,6 +4769,217 @@ struct ProjectPermits {
     /// they started and hold them until they are started again, so taking one
     /// back does not reach into a pane that is already open.
     running: Vec<String>,
+}
+
+
+/// Whether a spent account hands its agent to another login of the same engine.
+///
+/// Off unless somebody turned it on. Moving work to a second subscription is
+/// spending money the person did not ask to spend this week, and an app that
+/// does that quietly is an app nobody can budget for.
+const FAILOVER: &str = "accounts_failover";
+
+fn failover_is_on(state: &AppState) -> bool {
+    state.settings.lock().get(FAILOVER).map(String::as_str) == Some("on")
+}
+
+/// Move an agent whose week is gone onto a login that still has one, and start
+/// it again where it left off.
+///
+/// The pane has to be traded rather than talked to: the variable that decides
+/// which login a process spends from is read once, when it starts. Resuming is
+/// what keeps it the same conversation — the logins of one engine share their
+/// transcripts, so `--continue` in the same worktree finds the work rather than
+/// an empty prompt.
+async fn hand_over_to_a_stand_in(state: &AppState, agent: &crate::crew::Agent) {
+    if !failover_is_on(state) {
+        return;
+    }
+
+    let data_dir = state.config.data_dir.clone();
+    let engine = agent.engine_id.clone();
+
+    let spent = |label: &str| {
+        !room_for(state, &crate::budget::identity_of(&engine, Some(label))).may_start_work()
+    };
+
+    let Some(stand_in) = crate::accounts::stand_in(&data_dir, &engine, agent.account.as_deref(), &spent)
+    else {
+        return;
+    };
+
+    let Some(worktree) = state
+        .repos
+        .worktrees()
+        .into_iter()
+        .find(|held| {
+            held.worktree.repository_id == agent.repository_id && held.worktree.name == agent.worktree
+        })
+        .map(|held| held.worktree)
+    else {
+        return;
+    };
+
+    let moved = state.crew.shape(
+        &agent.id,
+        crate::crew::Shaping {
+            account: Some(stand_in.label.clone()),
+            ..Default::default()
+        },
+    );
+
+    if let Err(error) = moved {
+        tracing::warn!(agent = %agent.id, %error, "the stand-in login would not take the agent");
+        return;
+    }
+
+    let _ = state.crew.stop(&agent.id);
+    match state.crew.start(&agent.id, &worktree.path, true, None) {
+        Ok(_) => {
+            let said = format!(
+                "{} ran out of week on {} and carried on as {}",
+                agent.id,
+                agent.account.as_deref().unwrap_or("the default login"),
+                stand_in.label
+            );
+
+            tracing::info!(agent = %agent.id, account = %stand_in.label, "handed to a stand-in login");
+            note(state, "accounts.handed_over", "the supervisor", &agent.id, &said);
+            state.leader_words.lock().push(said);
+        }
+        Err(error) => {
+            tracing::warn!(agent = %agent.id, %error, "the stand-in pane would not start");
+        }
+    }
+}
+
+/// Every login this machine holds, and which engines can hold a second one.
+///
+/// The rows are asked of the engines each time rather than remembered. An
+/// account signed out in another window, or a token that quietly expired, shows
+/// up here as signed out — which is the only way a row about somebody's
+/// subscription is worth reading.
+async fn list_accounts(State(state): State<AppState>) -> Json<AccountsReport> {
+    let data_dir = state.config.data_dir.clone();
+
+    Json(AccountsReport {
+        failover: failover_is_on(&state),
+        accounts: crate::accounts::all(&data_dir),
+        engines: crate::crew::engines()
+            .into_iter()
+            .filter(|engine| engine.installed && crate::accounts::can_hold_accounts(engine.id))
+            .map(|engine| AccountableEngine {
+                id: engine.id.to_owned(),
+                name: engine.name.to_owned(),
+            })
+            .collect(),
+    })
+}
+
+#[derive(Serialize)]
+struct AccountsReport {
+    accounts: Vec<crate::accounts::Account>,
+    engines: Vec<AccountableEngine>,
+    /// Whether a spent week moves an agent to the other login by itself.
+    failover: bool,
+}
+
+#[derive(Deserialize)]
+struct SwitchFailover {
+    on: bool,
+}
+
+/// Turn the hand-over on or off. Off is the shipped answer.
+async fn set_failover(
+    State(state): State<AppState>,
+    Json(wanted): Json<SwitchFailover>,
+) -> Json<AccountsReport> {
+    state
+        .settings
+        .lock()
+        .insert(FAILOVER.to_owned(), if wanted.on { "on" } else { "off" }.to_owned());
+    crate::db::save_state(&state.config.data_dir, "settings", &*state.settings.lock());
+
+    list_accounts(State(state)).await
+}
+
+#[derive(Serialize)]
+struct AccountableEngine {
+    id: String,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct NameAnAccount {
+    engine_id: String,
+    label: String,
+}
+
+/// Make room for a second login. It signs nobody in — that is the engine's own
+/// flow, and it happens in a pane a person can answer.
+async fn add_account(
+    State(state): State<AppState>,
+    Json(request): Json<NameAnAccount>,
+) -> Result<Json<crate::accounts::Account>, ApiError> {
+    let data_dir = state.config.data_dir.clone();
+    crate::accounts::add(&data_dir, &request.engine_id, &request.label)?;
+
+    let account = crate::accounts::status_of(&data_dir, &request.engine_id, &request.label);
+    note(
+        &state,
+        "accounts.added",
+        "a person",
+        &account.label,
+        &format!("{} can hold this login", request.engine_id),
+    );
+
+    Ok(Json(account))
+}
+
+/// Open the engine's own sign-in, in this login's folder.
+///
+/// A pane rather than a captured process: the flow opens a browser and waits for
+/// somebody to come back, and a process nobody can see is a sign-in nobody can
+/// finish.
+async fn sign_in_account(
+    State(state): State<AppState>,
+    Path((engine_id, label)): Path<(String, String)>,
+) -> Result<Json<SessionReport>, ApiError> {
+    let data_dir = state.config.data_dir.clone();
+
+    let (command, args) = crate::accounts::login_command(&engine_id)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("{engine_id} has no sign-in Agentland knows how to open")))?;
+
+    let (variable, folder) = crate::accounts::env_for(&data_dir, &engine_id, Some(&label))
+        .ok_or_else(|| ApiError(anyhow::anyhow!("no account called {label} on {engine_id}")))?;
+
+    let mut env = std::collections::BTreeMap::new();
+    env.insert(variable, folder);
+
+    let info = state.manager.spawn(PtySpawnSpec {
+        command: command.to_owned(),
+        args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+        cwd: None,
+        env,
+        cols: 120,
+        rows: 32,
+    })?;
+
+    Ok(Json(report_of(&state, info)?))
+}
+
+/// Forget a login. The folder goes and the credential in it goes with it, so
+/// agents still pointed at it fall back to whoever this machine is signed in as.
+async fn forget_account(
+    State(state): State<AppState>,
+    Path((engine_id, label)): Path<(String, String)>,
+) -> Result<Json<AccountsReport>, ApiError> {
+    let data_dir = state.config.data_dir.clone();
+    crate::accounts::forget(&data_dir, &engine_id, &label)?;
+
+    note(&state, "accounts.forgotten", "a person", &label, &format!("{engine_id} no longer holds this login"));
+
+    Ok(list_accounts(State(state)).await)
 }
 
 /// What has been said yes to, per project.
