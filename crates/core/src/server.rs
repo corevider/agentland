@@ -259,6 +259,13 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .collect();
     state.memories.take_in_what_was_kept_before(&workspace_of);
 
+    // Every workspace has somebody to command it, including the ones that were
+    // made before there was such a thing. Hired and stopped: nothing here opens
+    // a pane, and a machine with no engine on PATH simply has no chief yet.
+    for workspace in state.workspaces.list() {
+        give_it_a_chief(&state, &workspace);
+    }
+
     // Whoever was working when the app last went down comes back on its own.
     // The endpoint has to be set first, or they would come up without the key
     // their tools authenticate with.
@@ -348,6 +355,8 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/start", post(begin))
         .route("/workspaces", get(list_workspaces).post(create_workspace))
         .route("/workspaces/{id}", delete(remove_workspace).post(set_workspace_repos))
+        .route("/workspaces/{id}/commander", post(command_the_workspace))
+        .route("/workspaces/{id}/goal", post(set_workspace_goal).delete(clear_workspace_goal))
         .route("/workspaces/active", post(activate_workspace))
         .route("/plans", get(list_plans).post(create_plan))
         .route("/plans/{id}", get(read_plan).delete(abandon_plan))
@@ -361,6 +370,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
             get(list_agent_skills).post(install_skill),
         )
         .route("/agents/{id}/skills/{skill_id}", delete(uninstall_skill))
+        .route("/agents/{id}/workspace", get(workspace_of_agent))
         .route("/devices", get(list_devices).post(pair_device))
         .route("/devices/{id}", delete(revoke_device))
         .route("/notes", get(list_notes).post(write_note))
@@ -579,15 +589,36 @@ fn now_secs() -> u64 {
 }
 
 fn identity_for(state: &AppState, agent: &Agent) -> Option<String> {
+    if agent.role == CHIEF {
+        let workspace = agent
+            .workspace_id
+            .as_deref()
+            .and_then(|id| workspace_called(state, id).ok())?;
+
+        return Some(format!(
+            "You are {}, the chief of the {} workspace. You command it through the commanders of \
+             its projects: you do not edit code, you do not hire implementers, and you do not take \
+             a project's goal apart into steps — the commander of that project does that.\n         {}\n         \
+             Your tools are workspace_status, project_goal and project_commander. Start by reading \
+             the workspace with workspace_status.",
+            agent.name,
+            workspace.name,
+            the_ground_under(&projects_under(state, &workspace))
+        ));
+    }
+
     if agent.role != "commander" {
         return None;
     }
 
+    // A chief is not somebody to hand a step to. It is who handed this project
+    // over in the first place, and saying so is how a commander knows there is
+    // somewhere to report back to.
     let crew: Vec<String> = state
         .crew
         .list()
         .into_iter()
-        .filter(|entry| entry.id != agent.id)
+        .filter(|entry| entry.id != agent.id && entry.role != CHIEF)
         .map(|entry| format!("{} ({}, {})", entry.name, entry.role, entry.engine_id))
         .collect();
 
@@ -598,8 +629,20 @@ fn identity_for(state: &AppState, agent: &Agent) -> Option<String> {
         format!("The crew you can hand steps to: {}.", crew.join("; "))
     };
 
+    let above = workspace_holding(state, &agent.repository_id)
+        .and_then(|workspace| {
+            chief_of(state, &workspace.id).map(|chief| (workspace, chief))
+        })
+        .map(|(workspace, chief)| {
+            format!(
+                "\n         {} commands the {} workspace above you — report what this project is doing to it with crew_message.",
+                chief.name, workspace.name
+            )
+        })
+        .unwrap_or_default();
+
     Some(format!(
-        "You are {}, the commander of this crew. You plan and delegate; you do not edit code.\n         {roster}\n         Your tools are plan_create, plan_ready, plan_status, plan_step_done and crew_delegate.          Start by reading the board with task_list.",
+        "You are {}, the commander of this crew. You plan and delegate; you do not edit code.\n         {roster}{above}\n         Your tools are plan_create, plan_ready, plan_status, plan_step_done and crew_delegate.          Start by reading the board with task_list.",
         agent.name
     ))
 }
@@ -648,8 +691,15 @@ async fn compose_brief(state: &AppState, agent: &Agent, base: &str) -> String {
     let vector = embed_text(state, base.to_owned()).await;
 
     // An agent is told what its project remembers, and everything its workspace
-    // and the crew as a whole remember above that.
-    let scope = scope_for(&state, &format!("project:{}", agent.repository_id));
+    // and the crew as a whole remember above that. A chief has no project, so
+    // what it is told is the workspace's and the crew's.
+    let written = match agent.workspace_id.as_deref() {
+        Some(id) => workspace_called(state, id)
+            .map(|workspace| format!("workspace:{}", workspace.name))
+            .unwrap_or_else(|_| "shared".to_owned()),
+        None => format!("project:{}", agent.repository_id),
+    };
+    let scope = scope_for(&state, &written);
 
     let learned = state
         .memories
@@ -691,21 +741,9 @@ async fn compose_brief(state: &AppState, agent: &Agent, base: &str) -> String {
 }
 
 async fn start_agent_with_brief(state: &AppState, agent: &Agent, base: &str) -> Result<(), ApiError> {
-    let worktree = state
-        .repos
-        .worktrees()
-        .into_iter()
-        .find(|entry| {
-            entry.worktree.repository_id == agent.repository_id
-                && entry.worktree.name == agent.worktree
-        })
-        .ok_or_else(|| ApiError(anyhow::anyhow!("{}'s worktree is gone", agent.name)))?
-        .worktree;
-
+    let sits = where_it_sits(state, agent)?;
     let brief = compose_brief(state, agent, base).await;
-    state
-        .crew
-        .start(&agent.id, &worktree.path, false, Some(&brief))?;
+    state.crew.start(&agent.id, &sits, false, Some(&brief))?;
     Ok(())
 }
 
@@ -1240,34 +1278,41 @@ fn spawn_supervisor(state: AppState) {
                 // in its own transcript of ever having been told it, was told
                 // and did not hear: measured after a restart, the brief typed
                 // into the pane and the turn never started.
-                if agent.role == "commander" && !working && !asking {
-                    if let Some(goal) = state.goals.for_project(&agent.repository_id) {
-                        let worktree = state
-                            .repos
-                            .worktrees()
-                            .into_iter()
-                            .find(|held| {
-                                held.worktree.repository_id == agent.repository_id
-                                    && held.worktree.name == agent.worktree
-                            })
-                            .map(|held| held.worktree.path);
+                // A chief is told its workspace's goal the same way, and its
+                // goal is kept under the workspace it commands.
+                let commanding = match agent.role.as_str() {
+                    "commander" => Some(agent.repository_id.clone()),
+                    CHIEF => agent.workspace_id.clone(),
+                    _ => None,
+                };
+
+                if let (Some(commanding), false, false) = (commanding, working, asking) {
+                    if let Some(goal) = state.goals.for_project(&commanding) {
+                        let sits = where_it_sits(&state, &agent).ok();
 
                         let opening: String = goal.text.chars().take(60).collect();
-                        let told = worktree
+                        let told = sits
                             .as_deref()
                             .and_then(|path| crate::transcript::was_told(path, &opening))
                             .unwrap_or(false);
 
                         if !told {
-                            if let Some(path) = worktree {
-                                let repository = state
-                                    .repos
-                                    .repositories()
-                                    .into_iter()
-                                    .find(|held| held.id == agent.repository_id);
+                            if let Some(path) = sits {
+                                let brief = match agent.workspace_id.as_deref() {
+                                    Some(id) => workspace_called(&state, id)
+                                        .ok()
+                                        .map(|workspace| {
+                                            what_the_workspace_is_for(&workspace, Some(&goal))
+                                        }),
+                                    None => state
+                                        .repos
+                                        .repositories()
+                                        .into_iter()
+                                        .find(|held| held.id == commanding)
+                                        .map(|repository| what_it_is_for(&repository, Some(&goal))),
+                                };
 
-                                if let Some(repository) = repository {
-                                    let brief = what_it_is_for(&repository, Some(&goal));
+                                if let Some(brief) = brief {
                                     if let Ok(HandOver::Typed) =
                                         hand_the_work_over(&state, &agent, &path, &brief).await
                                     {
@@ -1275,7 +1320,7 @@ fn spawn_supervisor(state: AppState) {
                                             &state,
                                             "goal.handed",
                                             "the supervisor",
-                                            &agent.repository_id,
+                                            &commanding,
                                             &agent.id,
                                         );
                                         continue;
@@ -2080,6 +2125,7 @@ fn standing_in(state: &AppState, called: &str) -> Result<(Workspace, bool), ApiE
         repository_ids: Vec::new(),
     })?;
 
+    give_it_a_chief(state, &made);
     Ok((made, true))
 }
 
@@ -2628,7 +2674,7 @@ async fn take_the_project_back_on(
     worktree: &std::path::Path,
     said_before_is_fine: bool,
 ) {
-    if agent.role != "commander" {
+    if agent.role != "commander" && agent.role != CHIEF {
         return;
     }
 
@@ -2652,16 +2698,29 @@ async fn take_the_project_back_on(
         return;
     }
 
-    let Some(repository) = state
-        .repos
-        .repositories()
-        .into_iter()
-        .find(|repository| repository.id == agent.repository_id)
-    else {
-        return;
+    // What it commands decides what it is handed back: a chief is given the
+    // workspace again, a commander the project again.
+    let (brief, commanding) = match agent.workspace_id.as_deref() {
+        Some(id) => {
+            let Ok(workspace) = workspace_called(state, id) else {
+                return;
+            };
+            let goal = state.goals.for_project(&workspace.id);
+            (what_the_workspace_is_for(&workspace, goal.as_ref()), workspace.id)
+        }
+        None => {
+            let Some(repository) = state
+                .repos
+                .repositories()
+                .into_iter()
+                .find(|repository| repository.id == agent.repository_id)
+            else {
+                return;
+            };
+            let goal = state.goals.for_project(&repository.id);
+            (what_it_is_for(&repository, goal.as_ref()), repository.id)
+        }
     };
-
-    let brief = what_it_is_for(&repository, state.goals.for_project(&repository.id).as_ref());
 
     // A resumed conversation carries what was already said, so handing the same
     // brief again reads as a stutter — the commander said as much: "if the
@@ -2681,7 +2740,7 @@ async fn take_the_project_back_on(
     match hand_the_work_over(state, agent, worktree, &brief).await {
         Ok(HandOver::Busy) => {}
         Ok(_) => {
-            note(state, "commander.woke", &agent.id, &repository.id, "took the project back on");
+            note(state, "commander.woke", &agent.id, &commanding, "took it back on");
         }
         Err(error) => {
             tracing::warn!(error = %error.0, agent = %agent.id, "cannot hand the project back")
@@ -2697,25 +2756,19 @@ async fn bring_the_crew_back(state: AppState) {
 
     let mut back = Vec::new();
     for agent in interrupted {
-        let Some(worktree) = state
-            .repos
-            .worktrees()
-            .into_iter()
-            .find(|held| {
-                held.worktree.repository_id == agent.repository_id
-                    && held.worktree.name == agent.worktree
-            })
-            .map(|held| held.worktree)
-        else {
-            tracing::warn!(agent = %agent.id, "cannot bring it back: its worktree is gone");
-            continue;
+        let sits = match where_it_sits(&state, &agent) {
+            Ok(path) => path,
+            Err(error) => {
+                tracing::warn!(agent = %agent.id, error = %error.0, "cannot bring it back");
+                continue;
+            }
         };
 
-        match state.crew.start(&agent.id, &worktree.path, true, None) {
+        match state.crew.start(&agent.id, &sits, true, None) {
             Ok(started) => {
                 back.push(agent.name.clone());
                 hand_back_what_it_was_holding(&state, &started).await;
-                take_the_project_back_on(&state, &started, &worktree.path, false).await;
+                take_the_project_back_on(&state, &started, &sits, false).await;
             }
             Err(error) => tracing::warn!(%error, agent = %agent.id, "cannot bring it back"),
         }
@@ -3982,6 +4035,15 @@ async fn list_agents(State(state): State<AppState>) -> Json<Vec<AgentPresence>> 
 /// skill goes on at the moment of hiring rather than being something a person
 /// has to remember. Every path that hires goes through here for that reason.
 fn take_on(state: &AppState, request: HireRequest) -> Result<Agent, ApiError> {
+    // A chief commands a workspace, so it is hired into one — never into a
+    // project's worktree. Hired here it would be a chief of nothing, standing in
+    // one project's checkout with no workspace to read.
+    if request.role == CHIEF {
+        return Err(ApiError(anyhow::anyhow!(
+            "a chief is hired into a workspace, not a project — use the workspace's own commander"
+        )));
+    }
+
     let known = state.repos.worktrees().into_iter().any(|entry| {
         entry.worktree.repository_id == request.repository_id
             && entry.worktree.name == request.worktree
@@ -4025,22 +4087,12 @@ async fn start_agent(
         .find(|entry| entry.id == id)
         .ok_or_else(|| ApiError(anyhow::anyhow!("unknown agent: {id}")))?;
 
-    let worktree = state
-        .repos
-        .worktrees()
-        .into_iter()
-        .find(|entry| {
-            entry.worktree.repository_id == agent.repository_id
-                && entry.worktree.name == agent.worktree
-        })
-        .ok_or_else(|| ApiError(anyhow::anyhow!("agent worktree is gone")))?
-        .worktree;
-
+    let sits = where_it_sits(&state, &agent)?;
     let brief = compose_brief(&state, &agent, "").await;
 
     Ok(Json(state.crew.start(
         &id,
-        &worktree.path,
+        &sits,
         query.resume,
         crate::brief::spoken(&brief),
     )?))
@@ -4535,10 +4587,18 @@ async fn create_workspace(
     State(state): State<AppState>,
     Json(body): Json<CreateWorkspace>,
 ) -> Result<Json<Workspace>, ApiError> {
-    Ok(Json(state.workspaces.create(body)?))
+    // A workspace arrives with somebody to command it. Hired, not started: the
+    // panel offers a chief by name instead of a button that says nobody is here
+    // yet, and nothing spends a turn until a person asks it to.
+    let made = state.workspaces.create(body)?;
+    give_it_a_chief(&state, &made);
+    Ok(Json(made))
 }
 
 const DESK: &str = "desk";
+
+/// The role that commands a workspace, above the commanders of its projects.
+const CHIEF: &str = "chief";
 
 /// The worktree a project's commander sits in.
 ///
@@ -4683,6 +4743,7 @@ async fn ignite(
                     engine_id,
                     repository_id: repository.id.clone(),
                     worktree: desk.name.clone(),
+                    workspace_id: None,
                     model: None,
                     title: None,
                     colour: None,
@@ -4759,6 +4820,420 @@ async fn ignite(
         worktree,
         did,
     }))
+}
+
+/// The folder a workspace's chief sits in.
+///
+/// Not a worktree. A chief commands the projects in a workspace rather than a
+/// branch in one of them, and sitting it in one project's checkout would say it
+/// belongs to that project — the first thing it would read is that project's
+/// code. It gets a folder of Agentland's own instead, with the crew's tools in
+/// it and nothing else.
+fn desk_for_workspace(state: &AppState, workspace: &Workspace) -> Result<PathBuf, ApiError> {
+    let path = state.data_dir.join("desks").join(&workspace.id);
+    std::fs::create_dir_all(&path).map_err(|error| {
+        ApiError(anyhow::anyhow!("cannot make {} a desk: {error}", workspace.name))
+    })?;
+
+    crate::repo::hand_the_tools_to(&path, &state.data_dir);
+    Ok(path)
+}
+
+/// Where an agent's pane opens.
+///
+/// Everybody else opens in the worktree they were hired into. A chief has none
+/// — it was hired into a workspace — so it opens at the desk that workspace
+/// keeps for it.
+fn where_it_sits(state: &AppState, agent: &Agent) -> Result<PathBuf, ApiError> {
+    if let Some(id) = agent.workspace_id.as_deref() {
+        let workspace = workspace_called(state, id)?;
+        return desk_for_workspace(state, &workspace);
+    }
+
+    state
+        .repos
+        .worktrees()
+        .into_iter()
+        .find(|entry| {
+            entry.worktree.repository_id == agent.repository_id
+                && entry.worktree.name == agent.worktree
+        })
+        .map(|entry| entry.worktree.path)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("{}'s worktree is gone", agent.name)))
+}
+
+fn workspace_called(state: &AppState, id: &str) -> Result<Workspace, ApiError> {
+    state
+        .workspaces
+        .list()
+        .into_iter()
+        .find(|held| held.id == id)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("there is no workspace called {id}")))
+}
+
+/// The workspace a project belongs to, where one claims it.
+fn workspace_holding(state: &AppState, repository_id: &str) -> Option<Workspace> {
+    state
+        .workspaces
+        .list()
+        .into_iter()
+        .find(|held| held.repository_ids.iter().any(|id| id == repository_id))
+}
+
+fn chief_of(state: &AppState, workspace_id: &str) -> Option<Agent> {
+    state
+        .crew
+        .list()
+        .into_iter()
+        .find(|agent| agent.role == CHIEF && agent.workspace_id.as_deref() == Some(workspace_id))
+}
+
+fn commander_of(state: &AppState, repository_id: &str) -> Option<Agent> {
+    state
+        .crew
+        .list()
+        .into_iter()
+        .find(|agent| agent.role == "commander" && agent.repository_id == repository_id)
+}
+
+/// What is under a chief: the projects of its workspace, who commands each one,
+/// and what each has been asked for.
+#[derive(Serialize)]
+struct UnderTheChief {
+    repository_id: String,
+    name: String,
+    goal: Option<String>,
+    commander: Option<String>,
+    commander_id: Option<String>,
+    /// Whether that commander has a pane open right now.
+    at_its_desk: bool,
+    /// Cards on the board for this project that are not done yet.
+    open_cards: usize,
+}
+
+fn projects_under(state: &AppState, workspace: &Workspace) -> Vec<UnderTheChief> {
+    let repositories = state.repos.repositories();
+    let cards = state.board.list();
+
+    workspace
+        .repository_ids
+        .iter()
+        .filter_map(|id| repositories.iter().find(|held| &held.id == id))
+        .map(|repository| {
+            let commander = commander_of(state, &repository.id);
+            let at_its_desk = commander
+                .as_ref()
+                .and_then(|held| held.session_id.clone())
+                .is_some_and(|id| state.manager.get(&id).is_some());
+
+            UnderTheChief {
+                repository_id: repository.id.clone(),
+                name: repository.name.clone(),
+                goal: state.goals.for_project(&repository.id).map(|goal| goal.text),
+                commander: commander.as_ref().map(|held| held.name.clone()),
+                commander_id: commander.as_ref().map(|held| held.id.clone()),
+                at_its_desk,
+                open_cards: cards
+                    .iter()
+                    .filter(|task| {
+                        task.repository_id == repository.id
+                            && task.column != crate::board::Column::Done
+                    })
+                    .count(),
+            }
+        })
+        .collect()
+}
+
+/// What a chief is told about the ground under it.
+fn the_ground_under(under: &[UnderTheChief]) -> String {
+    if under.is_empty() {
+        return "There is no project in this workspace yet — say so rather than commanding projects that do not exist."
+            .to_owned();
+    }
+
+    let listed: Vec<String> = under
+        .iter()
+        .map(|project| match &project.commander {
+            Some(name) => format!(
+                "{} (commanded by {name}, {})",
+                project.name,
+                if project.at_its_desk { "at its desk" } else { "stopped" }
+            ),
+            None => format!("{} (no commander yet)", project.name),
+        })
+        .collect();
+
+    format!("The projects under you: {}.", listed.join("; "))
+}
+
+/// What a chief is told when nobody has given the workspace a goal yet.
+fn what_the_workspace_is_for(workspace: &Workspace, goal: Option<&crate::goals::Goal>) -> String {
+    match goal {
+        Some(held) => format!(
+            "You are commanding the {} workspace. What is being asked for, in the words of the \
+             person who asked: \"{}\" Read the workspace first with workspace_status. Then decide \
+             which project carries which part of it: write that project a goal with project_goal, \
+             and hand it to its commander with project_commander. A project whose commander is \
+             stopped is started by handing it the work. When it is done, say so — it stands until \
+             somebody says otherwise, and you will be handed it again every time you come back.",
+            workspace.name, held.text
+        ),
+        None => format!(
+            "You are commanding the {} workspace. Nobody has handed you a goal yet, so start by \
+             reading it with workspace_status: which projects are in it, what each one has already \
+             been asked for, and which of them has a commander at its desk. Then say what each \
+             project should be doing first and which of them can run at once. Wait for a person \
+             before you start anything you have not been asked for.",
+            workspace.name
+        ),
+    }
+}
+
+/// Put a chief in a workspace. Hired, not started — starting is a separate
+/// decision, and the one thing a workspace should never do on its own is spend
+/// somebody's week because they made a workspace.
+fn take_the_workspace_on(
+    state: &AppState,
+    workspace: &Workspace,
+    name: Option<&str>,
+    engine_id: Option<&str>,
+) -> Result<Agent, ApiError> {
+    let engine_id = match engine_id.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(chosen) => chosen.to_owned(),
+        None => crate::start::engine_for_a_commander(&crate::crew::engines()).ok_or_else(|| {
+            ApiError(anyhow::anyhow!(
+                "no coding agent is installed — put one on PATH and start again"
+            ))
+        })?,
+    };
+
+    let ids: Vec<String> = state.crew.list().into_iter().map(|agent| agent.id).collect();
+    let hired = state.crew.hire(HireRequest {
+        name: crate::start::commander_name(name, &ids),
+        role: CHIEF.to_owned(),
+        engine_id,
+        repository_id: String::new(),
+        worktree: String::new(),
+        workspace_id: Some(workspace.id.clone()),
+        model: None,
+        title: None,
+        colour: None,
+        permissions: None,
+        account: None,
+    })?;
+
+    if let Err(error) = state.skills.install(&hired.id, "commanding-a-workspace") {
+        tracing::warn!(%error, "a chief was hired without its brief");
+    }
+
+    note(
+        state,
+        "agent.hired",
+        "a person",
+        &hired.id,
+        &format!("chief of {} on {}", workspace.name, hired.engine_id),
+    );
+
+    Ok(hired)
+}
+
+/// Give a workspace a chief if it has none, and say nothing if it cannot.
+///
+/// Called where a workspace comes into being. A machine with no engine on PATH
+/// still gets its workspace — the chief is what is missing, not the workspace,
+/// and the panel says so with a button rather than an error nobody asked for.
+fn give_it_a_chief(state: &AppState, workspace: &Workspace) {
+    if chief_of(state, &workspace.id).is_some() {
+        return;
+    }
+
+    match take_the_workspace_on(state, workspace, None, None) {
+        Ok(chief) => tracing::info!(chief = %chief.id, workspace = %workspace.id, "hired, and waiting"),
+        Err(error) => tracing::info!(error = %error.0, workspace = %workspace.id, "no chief yet"),
+    }
+}
+
+#[derive(Serialize)]
+struct Commanded {
+    chief: Agent,
+    workspace: Workspace,
+    desk: PathBuf,
+    did: Vec<String>,
+}
+
+/// Put a workspace's chief at its desk and set it going.
+///
+/// The same call whether there is nobody yet, somebody who is not started, or
+/// somebody already at work — the project's ignition reads the same way, and a
+/// person pressing one button should not have to know which of the three they
+/// are in.
+async fn command_the_workspace(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    body: Option<Json<Ignition>>,
+) -> Result<Json<Commanded>, ApiError> {
+    let Json(body) = body.unwrap_or(Json(Ignition {
+        brief: None,
+        engine_id: None,
+        name: None,
+    }));
+
+    let workspace = workspace_called(&state, &id)?;
+    let mut did = Vec::new();
+    let held = chief_of(&state, &workspace.id);
+
+    // Hiring is starting work. Telling a chief that already exists is not, so a
+    // person can still reach the one they have when the week is nearly gone.
+    let room = match &held {
+        Some(chief) => room_for(&state, &identity_of(chief)),
+        None => room_for_engine(&state, "claude"),
+    };
+
+    if held.is_none() && !room.may_start_work() {
+        return Err(ApiError(anyhow::anyhow!(
+            "not hiring anybody right now: {}",
+            room.in_a_line()
+        )));
+    }
+
+    let chief = match held {
+        Some(chief) => chief,
+        None => {
+            let hired = take_the_workspace_on(
+                &state,
+                &workspace,
+                body.name.as_deref(),
+                body.engine_id.as_deref(),
+            )?;
+            did.push(format!("hired {} to command {}", hired.name, workspace.name));
+            hired
+        }
+    };
+
+    let desk = desk_for_workspace(&state, &workspace)?;
+
+    // A brief handed to the ignition is what the person wants doing, so it is
+    // written down as the workspace's goal rather than only typed at a pane.
+    let asked_for = body
+        .brief
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    if let Some(text) = asked_for {
+        if state.goals.set(&workspace.id, text, "a person", now_secs()).is_some() {
+            note(&state, "goal.set", "a person", &workspace.id, text);
+        }
+    }
+
+    let base = asked_for.map(str::to_owned).unwrap_or_else(|| {
+        what_the_workspace_is_for(&workspace, state.goals.for_project(&workspace.id).as_ref())
+    });
+
+    let brief = compose_brief(&state, &chief, &base).await;
+    match hand_the_work_over(&state, &chief, &desk, &brief).await? {
+        HandOver::Busy => {
+            return Err(ApiError(anyhow::anyhow!(
+                "{} is in the middle of a turn — it is already working",
+                chief.name
+            )))
+        }
+        HandOver::Started => {
+            note(&state, "agent.started", "a person", &chief.id, "at its desk");
+            did.push(format!("started {} at its desk", chief.name))
+        }
+        HandOver::Typed => {
+            note(&state, "brief.delivered", "a person", &chief.id, "told it to take the workspace on");
+            did.push(format!("told {} to take it on", chief.name))
+        }
+    }
+
+    let chief = state
+        .crew
+        .list()
+        .into_iter()
+        .find(|agent| agent.id == chief.id)
+        .unwrap_or(chief);
+
+    Ok(Json(Commanded {
+        chief,
+        workspace,
+        desk,
+        did,
+    }))
+}
+
+#[derive(Serialize)]
+struct WorkspaceView {
+    workspace: Workspace,
+    goal: Option<String>,
+    chief: Option<Agent>,
+    projects: Vec<UnderTheChief>,
+}
+
+/// What a chief sees: its workspace, what it was asked for, and every project
+/// under it with its commander, its goal and what is on its board.
+///
+/// Asked by agent id rather than by workspace id because the chief asking is
+/// the one thing it cannot get wrong: an agent that has to name its own
+/// workspace can name somebody else's.
+async fn workspace_of_agent(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<WorkspaceView>, ApiError> {
+    let agent = state
+        .crew
+        .list()
+        .into_iter()
+        .find(|held| held.id == id)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("unknown agent: {id}")))?;
+
+    let workspace = match agent.workspace_id.as_deref() {
+        Some(held) => workspace_called(&state, held)?,
+        None => workspace_holding(&state, &agent.repository_id).ok_or_else(|| {
+            ApiError(anyhow::anyhow!("{} belongs to no workspace", agent.name))
+        })?,
+    };
+
+    Ok(Json(WorkspaceView {
+        goal: state.goals.for_project(&workspace.id).map(|goal| goal.text),
+        chief: chief_of(&state, &workspace.id),
+        projects: projects_under(&state, &workspace),
+        workspace,
+    }))
+}
+
+/// What a workspace is for, in the words of the person who asked for it.
+///
+/// The same store the projects use: one thing being asked for at a time,
+/// whether the thing being asked is a project or the workspace above it.
+async fn set_workspace_goal(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<SetGoal>,
+) -> Result<Json<crate::goals::Goal>, ApiError> {
+    let workspace = workspace_called(&state, &id)?;
+
+    let goal = state
+        .goals
+        .set(&workspace.id, &body.text, "a person", now_secs())
+        .ok_or_else(|| anyhow::anyhow!("a goal is a paragraph: not empty, and not an essay"))?;
+
+    note(&state, "goal.set", "a person", &workspace.id, &goal.text);
+    Ok(Json(goal))
+}
+
+async fn clear_workspace_goal(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    if !state.goals.clear(&id) {
+        return Err(anyhow::anyhow!("{id} has no goal standing").into());
+    }
+
+    note(&state, "goal.cleared", "a person", &id, "");
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Serialize)]
@@ -6143,6 +6618,7 @@ async fn begin(
                     engine_id,
                     repository_id: repository.id.clone(),
                     worktree: desk.name.clone(),
+                    workspace_id: None,
                     model: None,
                     title: None,
                     colour: None,
@@ -6230,6 +6706,16 @@ async fn remove_workspace(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     state.workspaces.remove(&id)?;
+
+    // The chief of a workspace that is gone commands nothing. Left hired, it
+    // would sit in the crew panel answering to a workspace nobody can open.
+    if let Some(chief) = chief_of(&state, &id) {
+        let _ = state.crew.stop(&chief.id);
+        if let Err(error) = state.crew.dismiss(&chief.id) {
+            tracing::warn!(%error, chief = %chief.id, "its workspace is gone and it is still hired");
+        }
+    }
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -6582,6 +7068,7 @@ mod dismissal_tests {
             engine_id: "claude".to_owned(),
             repository_id: repository_id.to_owned(),
             worktree: worktree.to_owned(),
+            workspace_id: None,
             session_id: None,
             state: AgentState::Offline,
             model: None,
@@ -6845,5 +7332,85 @@ mod memory_notice_tests {
         let shown = opening_of(&written, 10);
 
         assert_eq!(shown, format!("{}…", "ö".repeat(10)));
+    }
+}
+
+#[cfg(test)]
+mod chief_tests {
+    use super::{the_ground_under, what_the_workspace_is_for, UnderTheChief};
+    use crate::workspaces::Workspace;
+
+    fn project(name: &str, commander: Option<&str>, at_its_desk: bool) -> UnderTheChief {
+        UnderTheChief {
+            repository_id: name.to_owned(),
+            name: name.to_owned(),
+            goal: None,
+            commander: commander.map(str::to_owned),
+            commander_id: commander.map(str::to_lowercase),
+            at_its_desk,
+            open_cards: 0,
+        }
+    }
+
+    fn workspace() -> Workspace {
+        Workspace {
+            id: "ws1".to_owned(),
+            name: "Atölye".to_owned(),
+            repository_ids: vec!["svc-demo".to_owned()],
+        }
+    }
+
+    #[test]
+    fn a_chief_over_nothing_is_told_there_is_nothing() {
+        let said = the_ground_under(&[]);
+
+        assert!(said.contains("no project in this workspace yet"), "{said}");
+        assert!(
+            said.contains("do not exist"),
+            "and told not to command projects that are not there: {said}"
+        );
+    }
+
+    #[test]
+    fn each_project_is_named_with_who_commands_it_and_whether_it_is_at_work() {
+        let said = the_ground_under(&[
+            project("svc-demo", Some("Ada"), true),
+            project("ccdo", Some("Kai"), false),
+            project("island", None, false),
+        ]);
+
+        assert!(said.contains("svc-demo (commanded by Ada, at its desk)"), "{said}");
+        assert!(said.contains("ccdo (commanded by Kai, stopped)"), "{said}");
+        assert!(said.contains("island (no commander yet)"), "{said}");
+    }
+
+    #[test]
+    fn a_chief_with_no_goal_is_told_to_read_before_it_asks_for_anything() {
+        let said = what_the_workspace_is_for(&workspace(), None);
+
+        assert!(said.contains("Atölye"), "it is told which workspace: {said}");
+        assert!(said.contains("workspace_status"), "and where to start: {said}");
+        assert!(
+            said.contains("Wait for a person"),
+            "and not to start work nobody asked for: {said}"
+        );
+    }
+
+    #[test]
+    fn a_goal_reaches_the_chief_in_the_words_it_was_asked_in() {
+        let goal = crate::goals::Goal {
+            repository_id: "ws1".to_owned(),
+            text: "one login across both products".to_owned(),
+            set_by: "a person".to_owned(),
+            at: 10,
+        };
+
+        let said = what_the_workspace_is_for(&workspace(), Some(&goal));
+
+        assert!(said.contains("one login across both products"), "{said}");
+        assert!(
+            said.contains("project_goal") && said.contains("project_commander"),
+            "and how to hand it out: {said}"
+        );
     }
 }

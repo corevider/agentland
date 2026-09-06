@@ -282,6 +282,7 @@ mod tests {
             engine_id: "claude".to_owned(),
             repository_id: "demo".to_owned(),
             worktree: format!("{id}-tree"),
+            workspace_id: None,
             session_id: None,
             state,
             model: None,

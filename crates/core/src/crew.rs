@@ -382,6 +382,13 @@ pub struct Agent {
     pub engine_id: String,
     pub repository_id: String,
     pub worktree: String,
+    /// The workspace this agent commands, when it commands one rather than a
+    /// project. A chief has no repository and no worktree — it sits at a desk of
+    /// its own and hands each project to the commander of that project — so this
+    /// is what says where it belongs. Everybody else leaves it empty and belongs
+    /// to their project.
+    #[serde(default)]
+    pub workspace_id: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default = "offline")]
@@ -428,8 +435,12 @@ pub struct HireRequest {
     #[serde(default = "default_role")]
     pub role: String,
     pub engine_id: String,
+    #[serde(default)]
     pub repository_id: String,
+    #[serde(default)]
     pub worktree: String,
+    #[serde(default)]
+    pub workspace_id: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
@@ -467,6 +478,20 @@ pub struct Shaping {
 
 fn default_role() -> String {
     "implementer".to_owned()
+}
+
+/// What an agent belongs to: its project, or the workspace it commands.
+///
+/// Two agents are only the same person if they answer to the same name in the
+/// same place, and for a chief that place is a workspace rather than a project.
+/// Without this every workspace's chief was the first one's clash — they all
+/// carry the same empty repository.
+pub fn home_of(repository_id: &str, workspace_id: Option<&str>) -> String {
+    if repository_id.trim().is_empty() {
+        workspace_id.unwrap_or_default().to_owned()
+    } else {
+        repository_id.to_owned()
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -647,6 +672,7 @@ impl Crew {
         };
 
         let mut state = self.state.lock();
+        let home = home_of(&request.repository_id, request.workspace_id.as_deref());
 
         // The same name in another project is another agent, not a clash. Every
         // project has an X commanding it, and a crew where the second one had to
@@ -656,18 +682,14 @@ impl Crew {
             let held = state
                 .agents
                 .get(&wanted)
-                .map(|agent| agent.repository_id.clone())
+                .map(|agent| home_of(&agent.repository_id, agent.workspace_id.as_deref()))
                 .unwrap_or_default();
 
-            if held == request.repository_id {
-                bail!(
-                    "{} already has an agent called {}",
-                    request.repository_id,
-                    request.name
-                );
+            if held == home {
+                bail!("{home} already has an agent called {}", request.name);
             }
 
-            format!("{wanted}-{}", slugify(&request.repository_id))
+            format!("{wanted}-{}", slugify(&home))
         } else {
             wanted
         };
@@ -697,6 +719,7 @@ impl Crew {
             engine_id: request.engine_id,
             repository_id: request.repository_id,
             worktree: request.worktree,
+            workspace_id: request.workspace_id,
             session_id: None,
             state: AgentState::Idle,
             model,
@@ -859,7 +882,7 @@ impl Crew {
             let file = folder.join(format!(
                 "{}-{}.json",
                 slugify(&agent.role),
-                slugify(&agent.repository_id)
+                slugify(&home_of(&agent.repository_id, agent.workspace_id.as_deref()))
             ));
 
             if fs::create_dir_all(&folder).is_ok()
@@ -1075,7 +1098,7 @@ pub const DEFAULT_PERMISSION: &str = "default";
 pub fn permission_for_role(role: &str) -> &'static str {
     match role {
         "reviewer" => "plan",
-        "implementer" | "ops" | "commander" => "acceptEdits",
+        "implementer" | "ops" | "commander" | "chief" => "acceptEdits",
         _ => DEFAULT_PERMISSION,
     }
 }
@@ -1127,7 +1150,7 @@ pub fn model_for_role(engine_id: &str, role: &str) -> Option<&'static str> {
     }
 
     match role {
-        "commander" => Some("opus"),
+        "chief" | "commander" => Some("opus"),
         "reviewer" | "ops" => Some("sonnet"),
         "implementer" => Some("haiku"),
         _ => None,
@@ -1383,6 +1406,7 @@ mod pane_tests {
             engine_id: "claude".into(),
             repository_id: repository.into(),
             worktree: "desk".into(),
+            workspace_id: None,
             model: None,
             title: None,
             colour: None,
@@ -1435,6 +1459,73 @@ mod pane_tests {
         );
     }
 
+    fn a_chief(workspace: &str) -> HireRequest {
+        HireRequest {
+            name: "X".into(),
+            role: "chief".into(),
+            engine_id: "claude".into(),
+            repository_id: String::new(),
+            worktree: String::new(),
+            workspace_id: Some(workspace.to_owned()),
+            model: None,
+            title: None,
+            colour: None,
+            permissions: None,
+            account: None,
+        }
+    }
+
+    #[test]
+    fn every_workspace_gets_its_own_chief() {
+        let dir = scratch("two-workspaces");
+        let manager = Arc::new(crate::pty::PtyManager::with_log_dir(dir.join("sessions")));
+        let crew = Crew::new(manager, dir);
+
+        let Ok(first) = crew.hire(a_chief("ws1")) else {
+            // Hiring needs the engine on PATH, and this is a unit test rather
+            // than a statement about the machine it runs on.
+            return;
+        };
+        let second = crew.hire(a_chief("ws2")).expect("the second workspace's chief");
+
+        assert_eq!(second.name, "X", "the name is the job here too");
+        assert_ne!(first.id, second.id, "two workspaces, two people");
+        assert_eq!(second.id, "x-ws2");
+        assert_eq!(second.repository_id, "", "a chief belongs to no project");
+
+        assert!(
+            crew.hire(a_chief("ws1")).is_err(),
+            "two chiefs in one workspace is a clash, not a crew"
+        );
+    }
+
+    #[test]
+    fn a_chief_and_a_project_commander_are_not_the_same_person() {
+        let dir = scratch("chief-and-commander");
+        let manager = Arc::new(crate::pty::PtyManager::with_log_dir(dir.join("sessions")));
+        let crew = Crew::new(manager, dir);
+
+        let Ok(chief) = crew.hire(a_chief("ws1")) else {
+            return;
+        };
+        let commander = crew.hire(an_x("svc-demo")).expect("the project's own X");
+
+        assert_ne!(chief.id, commander.id);
+        assert_eq!(chief.workspace_id.as_deref(), Some("ws1"));
+        assert_eq!(commander.workspace_id, None, "a commander belongs to its project");
+    }
+
+    #[test]
+    fn commanding_is_worth_the_strongest_model_at_either_height() {
+        assert_eq!(model_for_role("claude", "chief"), Some("opus"));
+        assert_eq!(permission_for_role("chief"), "acceptEdits");
+        assert_ne!(
+            permission_for_role("chief"),
+            "bypassPermissions",
+            "nothing is born never asking"
+        );
+    }
+
     fn crew_with(where_it_lives: &str, agent: Agent) -> Arc<Crew> {
         let dir = scratch(where_it_lives);
         let manager = Arc::new(crate::pty::PtyManager::with_log_dir(dir.join("sessions")));
@@ -1455,6 +1546,7 @@ mod pane_tests {
             engine_id: "claude".to_owned(),
             repository_id: "svc".to_owned(),
             worktree: "ada-tree".to_owned(),
+            workspace_id: None,
             session_id: session.map(str::to_owned),
             state,
             model: None,

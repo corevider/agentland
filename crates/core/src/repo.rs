@@ -668,6 +668,18 @@ fn kept_tool(built: &Path, data_dir: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Hand the crew's tools to a folder that is no checkout of anything.
+///
+/// A chief commands a workspace rather than a branch, so it has no worktree to
+/// sit in and still has to reach the same tools every other agent reaches. Its
+/// desk is a folder Agentland made for it: the three engine configs go in, and
+/// the engines' own trust question is answered here rather than at a pane a
+/// person did not open.
+pub fn hand_the_tools_to(folder: &Path, data_dir: &Path) {
+    write_mcp_config(folder, data_dir);
+    trust_the_folder(folder);
+}
+
 fn mcp_binary(data_dir: &Path) -> String {
     built_tool()
         .and_then(|built| kept_tool(&built, data_dir).or(Some(built)))

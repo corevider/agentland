@@ -290,8 +290,9 @@ pub fn allowed_for(role: &str) -> Vec<&'static str> {
             allowed.extend_from_slice(RECORDING);
         }
         // A commander plans and delegates; it does not edit code, so it reads
-        // and nothing else. Anything it wants run, it hands to somebody.
-        "commander" => {}
+        // and nothing else. Anything it wants run, it hands to somebody. A chief
+        // is further from the code still — it hands out whole projects.
+        "commander" | "chief" => {}
         _ => allowed.extend_from_slice(PROVING),
     }
 
@@ -526,8 +527,15 @@ mod tests {
     }
 
     #[test]
+    fn a_chief_is_further_from_the_code_than_a_commander() {
+        assert!(allows("chief", "Bash(git log:*)"), "it still reads");
+        assert!(!allows("chief", "Bash(npm test:*)"), "it hands whole projects out");
+        assert!(!allows("chief", "Bash(git commit:*)"));
+    }
+
+    #[test]
     fn nothing_that_leaves_the_machine_is_ever_allowed() {
-        for role in ["commander", "implementer", "reviewer", "ops", "gardener", "anything"] {
+        for role in ["chief", "commander", "implementer", "reviewer", "ops", "gardener", "anything"] {
             for forbidden in ["Bash(git push:*)", "Bash(curl:*)", "Bash(npm publish:*)"] {
                 assert!(!allows(role, forbidden), "{role} may {forbidden}");
             }
