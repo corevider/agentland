@@ -1888,3 +1888,11 @@ same pass fixed Windows, where the name was looked up without `.exe` and so
 never matched a file that existed, in a built app or a dev one. Verified by
 unpacking the bundle: `usr/bin/agentland-mcp`, 755, and it answers an
 `initialize` handshake with thirty-three tools.
+
+One consequence to know about: the desktop crate's build script checks that
+everything the bundle ships is on disk, and this program is built rather than
+committed. So `cargo build` or `cargo test` across the workspace wants
+`node scripts/sidecar.mjs` run once first — `tauri build` and `tauri dev` call it
+themselves, and CI has a step for it. The first tag after the change went red on
+exactly that: the machine that wrote it had the file already, so the local run
+was green for a reason that did not travel.

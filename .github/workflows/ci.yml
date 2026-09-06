@@ -36,6 +36,15 @@ jobs:
       - name: Check versions agree
         run: node scripts/check-version.js
 
+      # The desktop crate's build script checks that everything the bundle
+      # ships is on disk, and the crew's tool program is built rather than
+      # committed. Building the app — which `--workspace` does — fails without
+      # it, so it is made here rather than found missing.
+      - name: Build the crew's tool program
+        run: node scripts/sidecar.mjs
+        env:
+          TAURI_ENV_DEBUG: "true"
+
       - name: Rust tests
         run: cargo test --workspace
 
