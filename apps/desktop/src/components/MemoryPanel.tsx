@@ -34,6 +34,10 @@ export function MemoryPanel({ active }: { active: boolean }) {
         project: "",
     });
     const [notice, set_notice] = useState<string | null>(null);
+    // What just happened, when what happened is not an error. Taking a memory
+    // back out moves it to the bottom of a scrolling panel, which from where a
+    // person is looking is indistinguishable from deleting it.
+    const [said, set_said] = useState<string | null>(null);
     const [query, set_query] = useState("");
     const [found, set_found] = useState<Recalled[] | null>(null);
     const [embedder, set_embedder_report] = useState<EmbedderReport | null>(null);
@@ -62,10 +66,16 @@ export function MemoryPanel({ active }: { active: boolean }) {
     }, 5000, active);
 
     const run = useCallback(
-        (action: () => Promise<unknown>) => {
+        (action: () => Promise<unknown>, say?: string) => {
             set_notice(null);
+            set_said(null);
             action()
-                .then(() => refresh())
+                .then(() => {
+                    refresh();
+                    if (say) {
+                        set_said(say);
+                    }
+                })
                 .catch((cause) => set_notice(cause instanceof Error ? cause.message : String(cause)));
         },
         [refresh],
@@ -269,6 +279,12 @@ export function MemoryPanel({ active }: { active: boolean }) {
                 </div>
             ) : null}
 
+            {said ? (
+                <div className="rounded-md border border-reef px-2 py-1 font-mono text-[11px] text-shade">
+                    {said}
+                </div>
+            ) : null}
+
             <section className="shrink-0">
                 <h3 className="mb-1 font-mono text-[9px] uppercase tracking-[0.14em] text-coral">
                     Waiting on you · {waiting.length}
@@ -307,7 +323,12 @@ export function MemoryPanel({ active }: { active: boolean }) {
                             key={memory.id}
                             memory={memory}
                             replaces={memory.supersedes ? by_slug.get(memory.supersedes) ?? null : null}
-                            on_revoke={() => run(() => answer_memory(memory.id, false))}
+                            on_revoke={() =>
+                                run(
+                                    () => answer_memory(memory.id, false),
+                                    "Taken out of the brief. It is still in the vault, at the bottom of this panel under \u201cTaken back out\u201d \u2014 restore puts it back.",
+                                )
+                            }
                             on_forget={() => run(() => forget_memory(memory.id))}
                         />
                     ))}
@@ -339,6 +360,21 @@ export function MemoryPanel({ active }: { active: boolean }) {
     );
 }
 
+/// What a replacement did to the memory it replaces.
+///
+/// Read off the replaced memory, not off this one. Saying "already taken out of
+/// the brief" because *this* one was approved is a guess dressed as a fact:
+/// approving a replacement is what should take the old one out, and when that
+/// did not happen the crew is being told both sides of a correction. The panel
+/// used to report exactly that state as settled.
+export function replacement_says(approved: boolean, replaced_approved: boolean): string {
+    if (!approved) {
+        return "— approving this takes it out";
+    }
+
+    return replaced_approved ? "— still being told to the crew" : "— already taken out of the brief";
+}
+
 function Entry({
     memory,
     replaces,
@@ -356,6 +392,8 @@ function Entry({
 }) {
     const [asking, set_asking] = useState(false);
 
+    const still_told = Boolean(memory.approved && replaces?.approved);
+
     return (
         <article
             className={`rounded-md border bg-lagoon-deep px-2 py-1 ${
@@ -369,9 +407,17 @@ function Entry({
             <div className="text-[12px] text-linen">{memory.text}</div>
 
             {replaces ? (
-                <div className="mt-1 rounded border-l-2 border-sun/70 bg-lagoon px-2 py-1">
-                    <div className="font-mono text-[9px] uppercase tracking-[0.12em] text-sun">
-                        replaces {memory.approved ? "— already taken out of the brief" : "— approving this takes it out"}
+                <div
+                    className={`mt-1 rounded border-l-2 bg-lagoon px-2 py-1 ${
+                        still_told ? "border-coral" : "border-sun/70"
+                    }`}
+                >
+                    <div
+                        className={`font-mono text-[9px] uppercase tracking-[0.12em] ${
+                            still_told ? "text-coral" : "text-sun"
+                        }`}
+                    >
+                        replaces {replacement_says(memory.approved, Boolean(replaces.approved))}
                     </div>
                     <div className="text-[11px] text-shade line-clamp-2">{replaces.text}</div>
                 </div>
