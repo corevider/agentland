@@ -11,6 +11,16 @@
 /// business running a formatter.
 use serde::Serialize;
 
+/// The crew's own tools, which Agentland handed this agent itself.
+///
+/// An agent hired by this app should not stop to ask a person whether it may
+/// call this app. Measured on a chief: it read its brief, reached for
+/// `workspace_status` and sat at "Do you want to proceed?" — a question about a
+/// tool nobody but Agentland wrote, in a folder Agentland made, with nobody at
+/// the pane to answer it. The engine's own "don't ask again" is remembered per
+/// folder, so every fresh desk asked again.
+const OUR_OWN_TOOLS: &[&str] = &["mcp__agentland"];
+
 /// Reading the world. Nothing here changes anything.
 const LOOKING: &[&str] = &[
     "Bash(ls:*)",
@@ -278,7 +288,8 @@ struct Settings {
 
 /// What this role may run without asking.
 pub fn allowed_for(role: &str) -> Vec<&'static str> {
-    let mut allowed: Vec<&'static str> = LOOKING.to_vec();
+    let mut allowed: Vec<&'static str> = OUR_OWN_TOOLS.to_vec();
+    allowed.extend_from_slice(LOOKING);
 
     match role {
         // It cannot edit what it judges, so it has nothing to format and
@@ -524,6 +535,16 @@ mod tests {
         assert!(allows("commander", "Bash(git log:*)"));
         assert!(!allows("commander", "Bash(npm test:*)"), "it hands that to somebody");
         assert!(!allows("commander", "Bash(git commit:*)"), "it does not edit code");
+    }
+
+    #[test]
+    fn the_crews_own_tools_are_never_a_question_for_a_person() {
+        for role in ["chief", "commander", "implementer", "reviewer", "gardener"] {
+            assert!(
+                allows(role, "mcp__agentland"),
+                "{role} had to ask whether it may call the app that hired it",
+            );
+        }
     }
 
     #[test]
