@@ -18,6 +18,12 @@ columns as it is picked up, and ends beside the diff it produced.
 
 ![The board: cards in backlog, review and done across two projects](docs/the-board.png)
 
+A skill is a page of instructions an agent carries. Give one to somebody and it
+joins their opening brief the next time they start. Five come built in; you can
+write your own, and an agent only ever carries what it was given.
+
+![The skills panel: Code review selected, carried by Wren, with the instructions it adds to a brief](docs/the-skills-they-carry.png)
+
 What the crew has learned is one line at a time, and no agent is told any of it
 until a person says yes. An agent proposes; you approve, revoke or forget.
 
@@ -30,7 +36,7 @@ proposals nobody answered, corrections that left both sides in force.
 
 ![The notes panel with the vault check open, naming two notes nothing points at](docs/checking-the-vault.png)
 
-These four are made by `node scripts/shots.mjs`, which stands up a core of its
+These five are made by `node scripts/shots.mjs`, which stands up a core of its
 own on its own port, seeds a crew that exists nowhere else, photographs the built
 interface in a headless browser and takes it all down again. Nobody's real
 repositories, cards or notes are in them, and re-running it after an interface

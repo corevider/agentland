@@ -150,6 +150,16 @@ async function seed(where) {
         }
     }
 
+    // A skill is a page of instructions an agent carries into every brief. A
+    // commander is given one at hiring; the rest are a choice somebody makes.
+    for (const [who, skill] of [
+        [hired[1].id, "test-driven-development"],
+        [hired[2].id, "code-review"],
+        [hired[2].id, "systematic-debugging"],
+    ]) {
+        await ask(`/agents/${who}/skills`, "POST", { skill_id: skill });
+    }
+
     const notes = [
         {
             title: "The port contract",
@@ -263,11 +273,16 @@ class Window {
         throw new Error(`nothing on the screen says "${label}"`);
     }
 
+    /// By what the control says, exactly where that is unambiguous and by what
+    /// it starts with otherwise — a row in a list carries its own subtitle.
     async press(label) {
         return this.evaluate(`
             (() => {
-                const wanted = [...document.querySelectorAll("button")]
-                    .find((button) => button.textContent.trim() === ${JSON.stringify(label)});
+                const said = ${JSON.stringify(label)};
+                const buttons = [...document.querySelectorAll("button")];
+                const wanted =
+                    buttons.find((button) => button.textContent.trim() === said) ??
+                    buttons.find((button) => button.textContent.trim().startsWith(said));
                 if (!wanted) return false;
                 wanted.click();
                 return true;
@@ -407,6 +422,15 @@ try {
     await show("board");
     await window.fit(600);
     await window.shoot("the-board");
+
+    await show("skills");
+    // A skill somebody carries, rather than the first one in the list: the
+    // chips underneath are the point, and they only say anything when one of
+    // them is lit.
+    await window.click("Code review");
+    await rest(800);
+    await window.fit(600);
+    await window.shoot("the-skills-they-carry");
 
     await show("memory");
     await window.fit(600);
