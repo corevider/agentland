@@ -50,8 +50,9 @@ export interface PaneMetrics {
 interface Props {
     session: SessionInfo;
     label?: string;
-    /// The project's commander. Marked because it is the one to talk to: it
-    /// hands the work out and everybody else is working to what it decided.
+    /// A commander: of a project, or of the whole workspace. Marked because it
+    /// is the one to talk to — it hands the work out and everybody else is
+    /// working to what it decided.
     crowned?: boolean;
     /// Somebody's pane: closing it puts it away and the agent keeps running.
     kept?: boolean;
@@ -471,7 +472,7 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
                 {crowned ? (
                     <span
                         className="flex shrink-0 items-center rounded bg-sun px-1.5 py-[2px] text-[13px] leading-none text-lagoon-deep shadow-[0_0_10px_rgba(240,180,60,0.35)]"
-                        title="the commander of this project — it hands the work out"
+                        title="a commander — it hands the work out rather than doing it"
                         aria-label="commander"
                     >
                         ♚

@@ -545,10 +545,12 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                         const held = services.crew.find((agent) => agent.session_id === session.id);
                         return held?.title ?? held?.name;
                     })()}
-                    crowned={
-                        services.crew.find((agent) => agent.session_id === session.id)?.role ===
-                        "commander"
-                    }
+                    crowned={(() => {
+                        const role = services.crew.find(
+                            (agent) => agent.session_id === session.id,
+                        )?.role;
+                        return role === "commander" || role === "chief";
+                    })()}
                     kept={services.crew.some((agent) => agent.session_id === session.id)}
                     focused={
                         active &&
@@ -632,7 +634,7 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                                           },
                                           {
                                               label: `Stop ${held.name}`,
-                                              hint: held.role === "commander" ? "its context is lost" : undefined,
+                                              hint: held.role === "commander" || held.role === "chief" ? "its context is lost" : undefined,
                                               danger: true,
                                               run: () => stop_agent(held.id).then(() => services.close_session(session.id)),
                                           },

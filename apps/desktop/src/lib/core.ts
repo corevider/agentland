@@ -735,6 +735,9 @@ export interface Agent {
     engine_id: string;
     repository_id: string;
     worktree: string;
+    /// The workspace it commands, when it commands one rather than a project.
+    /// Only a chief has this; everybody else belongs to their project.
+    workspace_id: string | null;
     session_id: string | null;
     state: AgentState;
     presence: Presence;
@@ -810,6 +813,36 @@ export function set_workspace_repos(id: string, repository_ids: string[]): Promi
 
 export function remove_workspace(id: string): Promise<void> {
     return request<void>(`/workspaces/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export interface Commanded {
+    chief: Agent;
+    workspace: Workspace;
+    desk: string;
+    did: string[];
+}
+
+/// Put a workspace's chief at its desk and set it going.
+///
+/// The same call whether there is nobody yet, somebody stopped, or somebody
+/// already working — the core decides which of the three it is, the way a
+/// project's own ignition does.
+export function command_the_workspace(id: string, brief?: string): Promise<Commanded> {
+    return request<Commanded>(`/workspaces/${encodeURIComponent(id)}/commander`, {
+        method: "POST",
+        body: JSON.stringify(brief ? { brief } : {}),
+    });
+}
+
+export function set_workspace_goal(id: string, text: string): Promise<Goal> {
+    return request<Goal>(`/workspaces/${encodeURIComponent(id)}/goal`, {
+        method: "POST",
+        body: JSON.stringify({ text }),
+    });
+}
+
+export function clear_workspace_goal(id: string): Promise<void> {
+    return request<void>(`/workspaces/${encodeURIComponent(id)}/goal`, { method: "DELETE" });
 }
 
 export interface MailMessage {

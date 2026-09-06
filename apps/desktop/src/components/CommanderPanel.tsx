@@ -3,12 +3,16 @@ import { useCallback, useEffect, useState } from "react";
 
 import {
     clear_goal,
+    clear_workspace_goal,
+    command_the_workspace,
     read_goals,
     set_goal,
+    set_workspace_goal,
     ignite_commander,
     list_plans,
     list_repos,
     list_tasks,
+    list_workspaces,
     write_input,
     mark_step,
     ready_steps,
@@ -20,8 +24,9 @@ import {
     type Repository,
     type Task,
     type Watch,
+    type Workspace,
 } from "@/lib/core";
-import { clear_is_recommended } from "@/lib/commander";
+import { chief_of, clear_is_recommended, commander_of } from "@/lib/commander";
 import { Waiting } from "@/components/Spinner";
 import { use_services } from "@/workspace/registry";
 
@@ -38,6 +43,7 @@ export function CommanderPanel({ active }: { active: boolean }) {
     const [ready, set_ready] = useState<ReadyStep[]>([]);
     const [watches, set_watches] = useState<Watch[]>([]);
     const [repos, set_repos] = useState<Repository[]>([]);
+    const [workspace, set_workspace] = useState<Workspace | null>(null);
     const [igniting, set_igniting] = useState<string | null>(null);
     const [notice, set_notice] = useState<string | null>(null);
     const [goals, set_goals] = useState<Goal[]>([]);
@@ -47,13 +53,14 @@ export function CommanderPanel({ active }: { active: boolean }) {
     const [draft, set_draft] = useState("");
 
     const refresh = useCallback(async () => {
-        const [held, next, watching, known, wanted, cards] = await Promise.all([
+        const [held, next, watching, known, wanted, cards, workspaces] = await Promise.all([
             list_plans(),
             ready_steps(),
             supervisor_watches(),
             list_repos(),
             read_goals(),
             list_tasks(),
+            list_workspaces(),
         ]);
         set_plans(held);
         set_ready(next);
@@ -61,6 +68,9 @@ export function CommanderPanel({ active }: { active: boolean }) {
         set_repos(known);
         set_goals(wanted);
         set_tasks(cards);
+        set_workspace(
+            workspaces.workspaces.find((entry) => entry.id === workspaces.active) ?? null,
+        );
     }, []);
 
     use_poll(() => {
@@ -71,13 +81,19 @@ export function CommanderPanel({ active }: { active: boolean }) {
     // one project's X while standing in another's, which is the sort of wrong
     // that looks right.
     const mine = repositories ? repos.filter((repo) => repositories.includes(repo.id)) : repos;
-    const commander_of = (repository_id: string) =>
-        crew.find((agent) => agent.role === "commander" && agent.repository_id === repository_id);
+    // The chief commands the workspace, and the commanders below it command a
+    // project each. Both are found by what they command rather than by role
+    // alone: a machine with three workspaces has three chiefs.
+    const chief = chief_of(crew, workspace?.id ?? null);
+    const chief_at_work = Boolean(chief?.session_id);
+    const workspace_goal = workspace
+        ? goals.find((held) => held.repository_id === workspace.id)
+        : undefined;
 
     const save_goal = useCallback(
-        async (repository_id: string) => {
+        async (id: string, of_workspace = false) => {
             try {
-                await set_goal(repository_id, draft);
+                await (of_workspace ? set_workspace_goal(id, draft) : set_goal(id, draft));
                 set_writing(null);
                 set_notice(null);
                 await refresh();
@@ -89,9 +105,9 @@ export function CommanderPanel({ active }: { active: boolean }) {
     );
 
     const drop_goal = useCallback(
-        async (repository_id: string) => {
+        async (id: string, of_workspace = false) => {
             try {
-                await clear_goal(repository_id);
+                await (of_workspace ? clear_workspace_goal(id) : clear_goal(id));
                 set_notice(null);
                 await refresh();
             } catch (cause) {
@@ -99,6 +115,25 @@ export function CommanderPanel({ active }: { active: boolean }) {
             }
         },
         [refresh],
+    );
+
+    const command = useCallback(
+        async (workspace_id: string) => {
+            set_igniting(workspace_id);
+            set_notice(null);
+            try {
+                const done = await command_the_workspace(workspace_id);
+                if (done.chief.session_id) {
+                    open_session(done.chief.session_id);
+                }
+                await refresh();
+            } catch (cause) {
+                set_notice(cause instanceof Error ? cause.message : String(cause));
+            } finally {
+                set_igniting(null);
+            }
+        },
+        [open_session, refresh],
     );
 
     const ignite = useCallback(
@@ -129,6 +164,104 @@ export function CommanderPanel({ active }: { active: boolean }) {
 
     return (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-y-auto p-2.5">
+            {workspace ? (
+                <section className="flex flex-col gap-1 rounded-md border border-reef/70 px-2 py-1.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-turquoise">
+                            Workspace
+                        </span>
+                        <span className="font-mono text-[11px] text-linen">{workspace.name}</span>
+                        <span className="font-mono text-[10px] text-shade">
+                            {chief
+                                ? `${chief.name} · ${chief_at_work ? "at its desk" : "stopped"}`
+                                : "no chief yet"}
+                        </span>
+
+                        {igniting === workspace.id ? (
+                            <Waiting says="starting…" className="font-mono text-[11px] text-turquoise" />
+                        ) : (
+                            <button
+                                className="rounded-md border border-turquoise px-2 py-0.5 font-mono text-[11px] text-turquoise"
+                                onClick={() => command(workspace.id)}
+                                title={
+                                    chief
+                                        ? "hand it the workspace again"
+                                        : "hire a chief here and set it going"
+                                }
+                            >
+                                {chief_at_work ? `tell ${chief?.name}` : `start ${chief?.name ?? "X"}`}
+                            </button>
+                        )}
+
+                        {chief_at_work && chief?.session_id ? (
+                            <button
+                                className="rounded-md border border-reef px-2 py-0.5 font-mono text-[11px] text-shell hover:border-foam"
+                                onClick={() => chief.session_id && open_session(chief.session_id)}
+                            >
+                                open its pane
+                            </button>
+                        ) : null}
+                    </div>
+
+                    {writing === workspace.id ? (
+                        <div className="flex flex-wrap items-center gap-2 pl-1">
+                            <input
+                                className="min-w-0 flex-1 rounded-md border border-reef bg-lagoon px-2 py-1 font-mono text-[11px]"
+                                autoFocus
+                                placeholder="what this whole workspace is for, in your words"
+                                value={draft}
+                                onChange={(event) => set_draft(event.target.value)}
+                                onKeyDown={(event) => {
+                                    if (event.key === "Enter") {
+                                        void save_goal(workspace.id, true);
+                                    }
+                                    if (event.key === "Escape") {
+                                        set_writing(null);
+                                    }
+                                }}
+                            />
+                            <button
+                                className="rounded-md border border-turquoise px-2 py-0.5 font-mono text-[11px] text-turquoise"
+                                onClick={() => void save_goal(workspace.id, true)}
+                            >
+                                set
+                            </button>
+                        </div>
+                    ) : (
+                        <div className="flex flex-wrap items-baseline gap-2 pl-1">
+                            <span className="min-w-0 flex-1 font-mono text-[10px] text-shell">
+                                {workspace_goal
+                                    ? `“${workspace_goal.text}”`
+                                    : "no goal standing — the chief reads the projects and asks"}
+                            </span>
+                            <button
+                                className="shrink-0 font-mono text-[10px] text-shade hover:text-turquoise"
+                                onClick={() => {
+                                    set_draft(workspace_goal?.text ?? "");
+                                    set_writing(workspace.id);
+                                }}
+                            >
+                                {workspace_goal ? "change it" : "set a goal"}
+                            </button>
+                            {workspace_goal ? (
+                                <button
+                                    className="shrink-0 font-mono text-[10px] text-shade hover:text-coral"
+                                    onClick={() => void drop_goal(workspace.id, true)}
+                                    title="it is done, or it was never the thing"
+                                >
+                                    it is done
+                                </button>
+                            ) : null}
+                        </div>
+                    )}
+
+                    <span className="pl-1 font-mono text-[10px] text-shade">
+                        It commands the projects below through their commanders — it writes no code
+                        and hires nobody into them.
+                    </span>
+                </section>
+            ) : null}
+
             <section className="flex flex-col gap-1.5">
                 {mine.length === 0 ? (
                     <span className="font-mono text-[11px] text-shade">
@@ -137,7 +270,7 @@ export function CommanderPanel({ active }: { active: boolean }) {
                 ) : null}
 
                 {mine.map((repo) => {
-                    const held = commander_of(repo.id);
+                    const held = commander_of(crew, repo.id);
                     const at_work = Boolean(held?.session_id);
 
                     const goal = goals.find((held) => held.repository_id === repo.id);

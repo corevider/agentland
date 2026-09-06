@@ -54,6 +54,7 @@ const world: World = {
             engine_id: "claude",
             repository_id: "svc-demo",
             worktree: "ada-tree",
+            workspace_id: null,
             session_id: "pane-1",
             state: "working",
             presence: "working",
@@ -199,5 +200,27 @@ describe("finding home in the paths themselves", () => {
     it("shortens nothing when the paths are elsewhere", () => {
         expect(home_from(["/srv/checkouts/app", "/opt/thing"])).toBe("");
         expect(home_from([])).toBe("");
+    });
+});
+
+describe("a chief in the jumper", () => {
+    const chief = {
+        ...world.agents[0],
+        id: "x",
+        name: "X",
+        role: "chief",
+        repository_id: "",
+        worktree: "",
+        workspace_id: "w2",
+    };
+
+    it("is filed under the workspace it commands, not under no project", () => {
+        const place = places_from({ ...world, agents: [chief] }, "").find(
+            (held) => held.kind === "agent",
+        );
+
+        expect(place?.workspace_id).toBe("w2");
+        expect(place?.detail).toBe("X · chief · Errands");
+        expect(place?.repository_id).toBeNull();
     });
 });

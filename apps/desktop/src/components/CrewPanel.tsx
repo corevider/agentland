@@ -11,6 +11,7 @@ import {
     list_agents,
     list_engines,
     list_repos,
+    list_workspaces,
     list_worktrees,
     read_holdings,
     session_stats,
@@ -21,6 +22,7 @@ import {
     type Engine,
     type Holdings,
     type SessionInfo,
+    type Workspace,
 } from "@/lib/core";
 import { what_is_held } from "@/lib/leaving";
 import { hiring_targets, target_value, worktree_for, type Target } from "@/lib/hiring";
@@ -59,18 +61,21 @@ export function CrewPanel({ active, on_open_session }: Props) {
     const [now, set_now] = useState(() => Math.floor(Date.now() / 1000));
     const [leaving, set_leaving] = useState<{ agent: Agent; holdings: Holdings } | null>(null);
     const [logins, set_logins] = useState<Account[]>([]);
+    const [workspaces, set_workspaces] = useState<Workspace[]>([]);
 
     const refresh = useCallback(async () => {
-        const [available, crew, repos, accounts] = await Promise.all([
+        const [available, crew, repos, accounts, workspaces] = await Promise.all([
             list_engines(),
             list_agents(),
             list_repos(),
             list_accounts().catch(() => ({ accounts: [] as Account[] })),
+            list_workspaces(),
         ]);
 
         set_engines(available);
         set_agents(crew);
         set_logins(accounts.accounts);
+        set_workspaces(workspaces.workspaces);
 
         const lists = await Promise.all(repos.map((repo) => list_worktrees(repo.id)));
         const open = hiring_targets(repos, lists.flat());
@@ -346,7 +351,10 @@ export function CrewPanel({ active, on_open_session }: Props) {
                             </select>
                         ) : null}
                         <span className="text-shell">
-                            {agent.repository_id}/{agent.worktree}
+                            {agent.workspace_id
+                                ? workspaces.find((held) => held.id === agent.workspace_id)?.name ??
+                                  agent.workspace_id
+                                : `${agent.repository_id}/${agent.worktree}`}
                         </span>
                         <span
                             className={PRESENCE_COLOR[agent.presence] ?? PRESENCE_COLOR.idle}

@@ -108,16 +108,26 @@ export function places_from(world: World, home = ""): Place[] {
 
     for (const agent of world.agents) {
         const project = world.repositories.find((repository) => repository.id === agent.repository_id);
+
+        // A chief stands in a workspace rather than in a project's worktree, so
+        // its row says which workspace. Read off the project it does not have,
+        // it read "X · chief ·  · " and belonged nowhere the jumper could show.
+        const workspace = agent.workspace_id
+            ? world.workspaces.find((held) => held.id === agent.workspace_id) ?? null
+            : workspace_holding(world.workspaces, agent.repository_id);
+
         places.push({
             kind: "agent",
             id: `agent:${agent.id}`,
             name: agent.title || agent.name,
             alias: agent.name,
-            detail: `${agent.name} · ${agent.role} · ${project?.name ?? agent.repository_id} · ${agent.worktree}`,
-            workspace_id: workspace_holding(world.workspaces, agent.repository_id)?.id ?? null,
-            workspace_name: workspace_holding(world.workspaces, agent.repository_id)?.name ?? null,
-            repository_id: agent.repository_id,
-            worktree: agent.worktree,
+            detail: agent.workspace_id
+                ? `${agent.name} · ${agent.role} · ${workspace?.name ?? agent.workspace_id}`
+                : `${agent.name} · ${agent.role} · ${project?.name ?? agent.repository_id} · ${agent.worktree}`,
+            workspace_id: workspace?.id ?? null,
+            workspace_name: workspace?.name ?? null,
+            repository_id: agent.repository_id || null,
+            worktree: agent.worktree || null,
             agent_id: agent.id,
         });
     }

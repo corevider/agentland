@@ -62,7 +62,7 @@ export function SoloPane({ session_id }: { session_id: string }) {
                     <TerminalPane
                         session={session}
                         label={label}
-                        crowned={held?.role === "commander"}
+                        crowned={held?.role === "commander" || held?.role === "chief"}
                         focused
                         readable={readable}
                         on_readable={(wanted) => {
