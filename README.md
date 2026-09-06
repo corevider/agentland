@@ -4,7 +4,7 @@ An open-source desktop workspace where a named crew of CLI coding agents works i
 real git worktrees — each agent with its own branch, its own running dev server, and a preview beside
 the diff.
 
-Status: **M7 — approvals reach the phone.** 489 core tests and 282 in the window. M0 passed and Tauri is confirmed by measurement; M1 shipped worktrees, ports and per-worktree dev servers; M2 hires agents and runs their engines; the board now carries a card from assignment to a diff.
+Status: **M7 — approvals reach the phone.** 527 core tests and 286 in the window. M0 passed and Tauri is confirmed by measurement; M1 shipped worktrees, ports and per-worktree dev servers; M2 hires agents and runs their engines; the board now carries a card from assignment to a diff.
 
 ## What it looks like
 
@@ -14,6 +14,13 @@ A crew is not one engine either: the strip at the top is what this machine has,
 and the four hired below are on four different ones.
 
 ![The crew panel: Ada on Claude Code, Kai on Codex, Tor on Cursor Agent and Wren on Gemini, each with a worktree of their own](docs/the-crew.png)
+
+A crew has two heights of commander. Every workspace arrives with a chief — hired
+when the workspace is made, stopped until somebody starts it — and it commands the
+projects in that workspace through the commander of each one: it writes a project's
+goal and hands the project over, and that project's commander takes the goal apart
+into steps for the crew below it. A chief edits nothing, hires nobody into a project
+and sits in a desk of its own rather than in anyone's checkout.
 
 Work is cards. A card carries the project it belongs to, moves through the
 columns as it is picked up, and ends beside the diff it produced.
