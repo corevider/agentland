@@ -509,6 +509,58 @@ export function set_standards(text: string): Promise<HouseRules> {
     });
 }
 
+/// A login on an engine, as the engine itself describes it.
+export interface Account {
+    engine_id: string;
+    label: string;
+    /// What the engine said when asked, not what this app hoped.
+    signed_in: boolean;
+    who: string | null;
+    plan: string | null;
+}
+
+export interface AccountsReport {
+    accounts: Account[];
+    /// The engines on this machine that can hold more than one login.
+    engines: Array<{ id: string; name: string }>;
+    failover: boolean;
+}
+
+export function list_accounts(): Promise<AccountsReport> {
+    return request<AccountsReport>("/accounts");
+}
+
+/// Make room for a second login. Nobody is signed in by this — that is the
+/// engine's own flow, opened in a pane.
+export function add_account(engine_id: string, label: string): Promise<Account> {
+    return request<Account>("/accounts", {
+        method: "POST",
+        body: JSON.stringify({ engine_id, label }),
+    });
+}
+
+export function forget_account(engine_id: string, label: string): Promise<AccountsReport> {
+    return request<AccountsReport>(`/accounts/${encodeURIComponent(engine_id)}/${encodeURIComponent(label)}`, {
+        method: "DELETE",
+    });
+}
+
+/// Open the engine's own sign-in in this login's folder, and return the pane it
+/// runs in.
+export function sign_in_account(engine_id: string, label: string): Promise<{ id: string }> {
+    return request<{ id: string }>(
+        `/accounts/${encodeURIComponent(engine_id)}/${encodeURIComponent(label)}/login`,
+        { method: "POST" },
+    );
+}
+
+export function set_account_failover(on: boolean): Promise<AccountsReport> {
+    return request<AccountsReport>("/accounts/failover", {
+        method: "POST",
+        body: JSON.stringify({ on }),
+    });
+}
+
 /// A whisper.cpp model on offer, with what it costs to fetch.
 export interface WhisperModel {
     id: string;
@@ -686,6 +738,9 @@ export interface Agent {
     colour: string | null;
     /// How much this agent may do without asking; null means its role's default.
     permissions: string | null;
+    /// Which login on its engine it spends from. Null means whoever this machine
+    /// is signed in as.
+    account: string | null;
 }
 
 export interface HireRequest {
@@ -694,6 +749,9 @@ export interface HireRequest {
     engine_id: string;
     repository_id: string;
     worktree: string;
+    /// Which login on the engine this agent spends from. Left out, it spends
+    /// from whoever this machine is signed in as.
+    account?: string;
 }
 
 export interface Skill {
@@ -1103,7 +1161,7 @@ export function forget_note(slug: string): Promise<void> {
 
 export function shape_agent(
     id: string,
-    wanted: { model?: string; title?: string; colour?: string; permissions?: string },
+    wanted: { model?: string; title?: string; colour?: string; permissions?: string; account?: string },
 ): Promise<Agent> {
     return request<Agent>(`/agents/${encodeURIComponent(id)}`, {
         method: "POST",

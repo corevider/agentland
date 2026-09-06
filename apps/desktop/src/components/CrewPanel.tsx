@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
     shape_agent,
     dismiss_agent,
+    list_accounts,
     format_elapsed,
     create_worktree,
     hire_agent,
@@ -15,6 +16,7 @@ import {
     session_stats,
     start_agent,
     stop_agent,
+    type Account,
     type Agent,
     type Engine,
     type Holdings,
@@ -56,16 +58,19 @@ export function CrewPanel({ active, on_open_session }: Props) {
     const [activity, set_activity] = useState<Record<string, SessionInfo>>({});
     const [now, set_now] = useState(() => Math.floor(Date.now() / 1000));
     const [leaving, set_leaving] = useState<{ agent: Agent; holdings: Holdings } | null>(null);
+    const [logins, set_logins] = useState<Account[]>([]);
 
     const refresh = useCallback(async () => {
-        const [available, crew, repos] = await Promise.all([
+        const [available, crew, repos, accounts] = await Promise.all([
             list_engines(),
             list_agents(),
             list_repos(),
+            list_accounts().catch(() => ({ accounts: [] as Account[] })),
         ]);
 
         set_engines(available);
         set_agents(crew);
+        set_logins(accounts.accounts);
 
         const lists = await Promise.all(repos.map((repo) => list_worktrees(repo.id)));
         const open = hiring_targets(repos, lists.flat());
@@ -309,6 +314,28 @@ export function CrewPanel({ active, on_open_session }: Props) {
                             <option value="acceptEdits">acceptEdits · writes, asks to run</option>
                             <option value="bypassPermissions">bypassPermissions · never asks</option>
                         </select>
+                        {logins.filter((login) => login.engine_id === agent.engine_id).length > 0 ? (
+                            <select
+                                className="rounded border border-reef bg-lagoon-deep px-1 py-[1px] font-mono text-[10px] text-shade"
+                                title="which login this agent spends from — it takes effect the next time it starts, because a running pane keeps the account it began with"
+                                value={agent.account ?? ""}
+                                onChange={(event) => {
+                                    shape_agent(agent.id, { account: event.target.value })
+                                        .then(() => refresh())
+                                        .catch((cause) => set_error(String(cause)));
+                                }}
+                            >
+                                <option value="">this machine's login</option>
+                                {logins
+                                    .filter((login) => login.engine_id === agent.engine_id)
+                                    .map((login) => (
+                                        <option key={login.label} value={login.label}>
+                                            {login.label}
+                                            {login.signed_in ? "" : " · signed out"}
+                                        </option>
+                                    ))}
+                            </select>
+                        ) : null}
                         <span className="text-shell">
                             {agent.repository_id}/{agent.worktree}
                         </span>

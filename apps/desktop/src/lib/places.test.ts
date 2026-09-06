@@ -63,6 +63,7 @@ const world: World = {
             title: "Ada · /health",
             colour: "#f0a",
             permissions: null,
+            account: null,
         },
     ],
 };

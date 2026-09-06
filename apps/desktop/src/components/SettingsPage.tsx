@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import { AccountsSection } from "@/components/AccountsSection";
 import { UpdatesSection } from "@/components/UpdatesSection";
 import { PhoneSection } from "@/components/PhoneSection";
 import { StandardsSection } from "@/components/StandardsSection";
@@ -11,10 +12,11 @@ const PANE_CHOICES = [1, 2, 4, 8, 12];
 const RATE_CHOICES = [1_000, 5_000, 10_000, 20_000, 50_000];
 const DURATION_CHOICES = [10_000, 30_000, 60_000];
 
-type SectionId = "updates" | "phone" | "standards" | "voice" | "benchmark" | "terminal" | "diagnostics";
+type SectionId = "updates" | "accounts" | "phone" | "standards" | "voice" | "benchmark" | "terminal" | "diagnostics";
 
 const SECTIONS: Array<{ id: SectionId; label: string; hint: string }> = [
     { id: "updates", label: "Updates", hint: "What version this is, and what is out" },
+    { id: "accounts", label: "Logins", hint: "Which subscription each agent spends from" },
     { id: "phone", label: "Phone", hint: "Point a camera at it and you are in" },
     { id: "standards", label: "House rules", hint: "What every agent is told, every turn" },
     { id: "voice", label: "Voice", hint: "Speaking to the crew instead of typing" },
@@ -119,6 +121,8 @@ export function SettingsPage({
 
                 <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
                     {section === "updates" ? <UpdatesSection /> : null}
+
+                    {section === "accounts" ? <AccountsSection /> : null}
 
                     {section === "phone" ? <PhoneSection /> : null}
 
