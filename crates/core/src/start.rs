@@ -94,6 +94,70 @@ pub fn commander_name(wanted: Option<&str>, taken_ids: &[String]) -> String {
     format!("{base}{MOST_TRIES}")
 }
 
+/// Short names a crew is called by, two to a letter.
+///
+/// A chief is named after the workspace it commands rather than numbered after
+/// the last one hired: "X2, X3, X4" tells a person the order they were made in,
+/// which is the one thing about them nobody needs to know. Sharing the first
+/// letter is enough to make the pairing obvious — Product has Pax, Demos has
+/// Dex — and they stay short because a name is read in a rail two hundred
+/// pixels wide.
+const NAMES: &[&str] = &[
+    "Ada", "Arne", "Bo", "Bex", "Cato", "Cy", "Dag", "Dex", "Edda", "Enzo", "Fen", "Fia", "Gus",
+    "Gil", "Hana", "Hugo", "Ida", "Iris", "Jo", "Juno", "Kai", "Kira", "Lena", "Lux", "Mira",
+    "Moss", "Nell", "Nia", "Odin", "Ona", "Pax", "Pia", "Quill", "Quin", "Rune", "Rex", "Sten",
+    "Sol", "Tor", "Tessa", "Uma", "Ulf", "Vera", "Vidar", "Wren", "Wolf", "Xan", "Xia", "Yara",
+    "Yuri", "Zed", "Zola",
+];
+
+/// The letter a name is looked up by, with the alphabet this app is actually
+/// used in folded onto it: a workspace called "Ölçüm" is an Ö to a person and
+/// an O to the list.
+fn first_letter(name: &str) -> Option<char> {
+    let folded = |character: char| match character {
+        'ç' => 'c',
+        'ğ' => 'g',
+        'ı' | 'î' => 'i',
+        'ö' => 'o',
+        'ş' => 's',
+        'ü' | 'û' => 'u',
+        'â' => 'a',
+        other => other,
+    };
+
+    name.chars()
+        .flat_map(char::to_lowercase)
+        .map(folded)
+        .find(char::is_ascii_alphabetic)
+}
+
+/// What to call the chief of a workspace, when nobody has said.
+///
+/// A suggestion, not a decision: whoever makes the workspace can type any name
+/// they like, and this is what the field offers them. Names already answered to
+/// are skipped, so two workspaces starting with the same letter get two people.
+pub fn name_for_a_chief(workspace: &str, taken_ids: &[String]) -> String {
+    let free = |candidate: &str| !taken_ids.iter().any(|held| held == &slug(candidate));
+
+    if let Some(letter) = first_letter(workspace) {
+        if let Some(name) = NAMES
+            .iter()
+            .filter(|name| name.to_lowercase().starts_with(letter))
+            .find(|name| free(name))
+        {
+            return (*name).to_owned();
+        }
+    }
+
+    // Nothing left under that letter — a name from anywhere beats a number, and
+    // the number is only reached when the whole list is spoken for.
+    NAMES
+        .iter()
+        .find(|name| free(name))
+        .map(|name| (*name).to_owned())
+        .unwrap_or_else(|| commander_name(None, taken_ids))
+}
+
 /// The engine a new project's commander runs on when nobody has said which.
 ///
 /// A commander is worth nothing without `plan_create`, and an engine only has
@@ -160,6 +224,31 @@ mod tests {
             worktree_name("fix the guard", &[taken[0].clone(), second]),
             "fix-the-guard-3"
         );
+    }
+
+    #[test]
+    fn a_chief_is_named_after_the_workspace_rather_than_numbered() {
+        assert_eq!(name_for_a_chief("Product", &[]), "Pax");
+        assert_eq!(name_for_a_chief("Demos", &[]), "Dag");
+        assert_eq!(name_for_a_chief("atölye", &[]), "Ada", "the alphabet it is used in counts");
+        assert_eq!(name_for_a_chief("Ölçüm", &[]), "Odin");
+    }
+
+    #[test]
+    fn two_workspaces_under_one_letter_are_two_people() {
+        let first = name_for_a_chief("Product", &[]);
+        let second = name_for_a_chief("Platform", &[slug(&first)]);
+
+        assert_ne!(first, second);
+        assert!(second.to_lowercase().starts_with('p'), "{second}");
+    }
+
+    #[test]
+    fn a_workspace_with_no_letter_in_its_name_still_gets_somebody() {
+        let name = name_for_a_chief("42", &[]);
+
+        assert!(!name.is_empty());
+        assert!(NAMES.contains(&name.as_str()), "{name}");
     }
 
     #[test]

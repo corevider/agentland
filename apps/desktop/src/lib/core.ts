@@ -790,11 +790,23 @@ export function list_workspaces(): Promise<WorkspaceList> {
     return request<WorkspaceList>("/workspaces");
 }
 
-export function create_workspace(name: string, repository_ids: string[]): Promise<Workspace> {
+export function create_workspace(
+    name: string,
+    repository_ids: string[],
+    chief?: string,
+): Promise<Workspace> {
     return request<Workspace>("/workspaces", {
         method: "POST",
-        body: JSON.stringify({ name, repository_ids }),
+        body: JSON.stringify({ name, repository_ids, ...(chief ? { chief } : {}) }),
     });
+}
+
+/// What the chief of a workspace by this name would be called.
+///
+/// Asked of the core rather than worked out here: the names it picks from and
+/// the crew already answering to some of them both live there.
+export function suggest_a_chief(name: string): Promise<{ chief: string }> {
+    return request<{ chief: string }>(`/workspaces/suggest?name=${encodeURIComponent(name)}`);
 }
 
 export function activate_workspace(id: string | null): Promise<Workspace | null> {
@@ -827,10 +839,17 @@ export interface Commanded {
 /// The same call whether there is nobody yet, somebody stopped, or somebody
 /// already working — the core decides which of the three it is, the way a
 /// project's own ignition does.
-export function command_the_workspace(id: string, brief?: string): Promise<Commanded> {
+export function command_the_workspace(
+    id: string,
+    brief?: string,
+    name?: string,
+): Promise<Commanded> {
     return request<Commanded>(`/workspaces/${encodeURIComponent(id)}/commander`, {
         method: "POST",
-        body: JSON.stringify(brief ? { brief } : {}),
+        body: JSON.stringify({
+            ...(brief ? { brief } : {}),
+            ...(name ? { name } : {}),
+        }),
     });
 }
 

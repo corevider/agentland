@@ -29,6 +29,10 @@ pub struct CreateWorkspace {
     pub name: String,
     #[serde(default)]
     pub repository_ids: Vec<String>,
+    /// What to call the chief this workspace arrives with. Left out, one is
+    /// suggested from the workspace's own name.
+    #[serde(default)]
+    pub chief: Option<String>,
 }
 
 pub struct Workspaces {
@@ -203,6 +207,7 @@ mod tests {
             .create(CreateWorkspace {
                 name: "Product".into(),
                 repository_ids: vec!["agentland".into()],
+                chief: None,
             })
             .expect("create");
 
@@ -212,6 +217,7 @@ mod tests {
             .create(CreateWorkspace {
                 name: "Infra".into(),
                 repository_ids: vec![],
+                chief: None,
             })
             .expect("create a second");
 
@@ -229,6 +235,7 @@ mod tests {
             .create(CreateWorkspace {
                 name: "   ".into(),
                 repository_ids: vec![],
+                chief: None,
             })
             .expect_err("should refuse");
         assert!(error.to_string().contains("needs a name"));
@@ -241,6 +248,7 @@ mod tests {
             .create(CreateWorkspace {
                 name: "Product".into(),
                 repository_ids: vec!["agentland".into()],
+                chief: None,
             })
             .expect("create");
 
@@ -256,12 +264,14 @@ mod tests {
             .create(CreateWorkspace {
                 name: "Product".into(),
                 repository_ids: vec![],
+                chief: None,
             })
             .expect("create");
         let second = store
             .create(CreateWorkspace {
                 name: "Infra".into(),
                 repository_ids: vec![],
+                chief: None,
             })
             .expect("create a second");
 
@@ -286,6 +296,7 @@ mod tests {
             .create(CreateWorkspace {
                 name: "Product".into(),
                 repository_ids: vec!["agentland".into(), "ccdo".into()],
+                chief: None,
             })
             .expect("create");
 
@@ -302,6 +313,7 @@ mod tests {
             .create(CreateWorkspace {
                 name: "Product".into(),
                 repository_ids: vec!["a".into()],
+                chief: None,
             })
             .expect("create");
 
@@ -319,6 +331,7 @@ mod tests {
             .create(CreateWorkspace {
                 name: "test".to_owned(),
                 repository_ids: Vec::new(),
+                chief: None,
             })
             .unwrap();
 

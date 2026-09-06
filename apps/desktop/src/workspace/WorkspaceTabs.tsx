@@ -7,6 +7,7 @@ import {
     list_workspaces,
     remove_workspace,
     set_workspace_repos,
+    suggest_a_chief,
     type Repository,
     type Workspace,
 } from "@/lib/core";
@@ -28,6 +29,8 @@ export function WorkspaceTabs({ turn, active, on_active, on_switched, counts }: 
     const [editing, set_editing] = useState<string | null>(null);
     const [drafting, set_drafting] = useState(false);
     const [name, set_name] = useState("");
+    const [chief, set_chief] = useState("");
+    const [suggested, set_suggested] = useState("");
     const [error, set_error] = useState<string | null>(null);
 
     // The App hands over a fresh on_active on every render, and answering it
@@ -72,15 +75,38 @@ export function WorkspaceTabs({ turn, active, on_active, on_switched, counts }: 
             return;
         }
 
-        create_workspace(trimmed, [])
+        // An empty field means the name it offered. The suggestion is not
+        // written into the field, so a person who types nothing is agreeing to
+        // what they can already read rather than to something invisible.
+        create_workspace(trimmed, [], chief.trim() || suggested)
             .then((created) => {
                 set_name("");
+                set_chief("");
                 set_drafting(false);
                 set_editing(created.id);
                 return activate_workspace(created.id).then(() => refresh());
             })
             .catch((cause) => set_error(cause instanceof Error ? cause.message : String(cause)));
-    }, [name, refresh]);
+    }, [chief, name, suggested, refresh]);
+
+    // What this workspace's chief would be called, asked as the name is typed.
+    // The core picks it: the list of names and the crew already answering to
+    // some of them are both its business, not the panel's.
+    useEffect(() => {
+        const wanted = name.trim();
+        if (!wanted) {
+            set_suggested("");
+            return;
+        }
+
+        const handle = window.setTimeout(() => {
+            suggest_a_chief(wanted)
+                .then((held) => set_suggested(held.chief))
+                .catch(() => undefined);
+        }, 250);
+
+        return () => window.clearTimeout(handle);
+    }, [name]);
 
     const toggle_repo = useCallback(
         (workspace: Workspace, repository_id: string) => {
@@ -131,25 +157,51 @@ export function WorkspaceTabs({ turn, active, on_active, on_switched, counts }: 
             ) : null}
 
             {drafting || workspaces.length === 0 ? (
-                <input
-                    // Focus follows the person who asked for the box. On a first
-                    // run it appears on its own, and taking the cursor then would
-                    // steal it from whatever they had come to do.
-                    autoFocus={drafting}
-                    className="w-28 rounded border border-reef bg-lagoon-deep px-1.5 py-[2px] text-[12px]"
-                    placeholder="name"
-                    value={name}
-                    onChange={(event) => set_name(event.target.value)}
-                    onBlur={() => set_drafting(false)}
-                    onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                            create();
-                        }
-                        if (event.key === "Escape") {
+                <div
+                    className="flex items-center gap-1"
+                    // Closing on blur belongs to the pair of fields, not to
+                    // either one: moving from the workspace's name to its
+                    // chief's used to shut the form on the way.
+                    onBlur={(event) => {
+                        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
                             set_drafting(false);
                         }
                     }}
-                />
+                >
+                    <input
+                        // Focus follows the person who asked for the box. On a
+                        // first run it appears on its own, and taking the cursor
+                        // then would steal it from whatever they had come to do.
+                        autoFocus={drafting}
+                        className="w-28 rounded border border-reef bg-lagoon-deep px-1.5 py-[2px] text-[12px]"
+                        placeholder="name"
+                        value={name}
+                        onChange={(event) => set_name(event.target.value)}
+                        onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                                create();
+                            }
+                            if (event.key === "Escape") {
+                                set_drafting(false);
+                            }
+                        }}
+                    />
+                    <input
+                        className="w-24 rounded border border-reef bg-lagoon-deep px-1.5 py-[2px] text-[12px]"
+                        placeholder={suggested ? `chief · ${suggested}` : "chief"}
+                        title="who commands this workspace — leave it be to take the name offered"
+                        value={chief}
+                        onChange={(event) => set_chief(event.target.value)}
+                        onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                                create();
+                            }
+                            if (event.key === "Escape") {
+                                set_drafting(false);
+                            }
+                        }}
+                    />
+                </div>
             ) : (
                 <button
                     className="rounded px-1.5 py-[3px] font-mono text-[12px] text-shade hover:text-linen"

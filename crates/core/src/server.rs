@@ -358,6 +358,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/workspaces/{id}/commander", post(command_the_workspace))
         .route("/workspaces/{id}/goal", post(set_workspace_goal).delete(clear_workspace_goal))
         .route("/workspaces/active", post(activate_workspace))
+        .route("/workspaces/suggest", get(suggest_a_chief))
         .route("/plans", get(list_plans).post(create_plan))
         .route("/plans/{id}", get(read_plan).delete(abandon_plan))
         .route("/plans/{id}/steps/{step}", post(mark_step))
@@ -2123,6 +2124,7 @@ fn standing_in(state: &AppState, called: &str) -> Result<(Workspace, bool), ApiE
     let made = state.workspaces.create(CreateWorkspace {
         name: called.to_owned(),
         repository_ids: Vec::new(),
+        chief: None,
     })?;
 
     give_it_a_chief(state, &made);
@@ -4590,8 +4592,9 @@ async fn create_workspace(
     // A workspace arrives with somebody to command it. Hired, not started: the
     // panel offers a chief by name instead of a button that says nobody is here
     // yet, and nothing spends a turn until a person asks it to.
+    let wanted = body.chief.clone();
     let made = state.workspaces.create(body)?;
-    give_it_a_chief(&state, &made);
+    give_it_a_chief_called(&state, &made, wanted.as_deref());
     Ok(Json(made))
 }
 
@@ -5009,8 +5012,14 @@ fn take_the_workspace_on(
     };
 
     let ids: Vec<String> = state.crew.list().into_iter().map(|agent| agent.id).collect();
+    let wanted = name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| crate::start::name_for_a_chief(&workspace.name, &ids));
+
     let hired = state.crew.hire(HireRequest {
-        name: crate::start::commander_name(name, &ids),
+        name: wanted,
         role: CHIEF.to_owned(),
         engine_id,
         repository_id: String::new(),
@@ -5044,11 +5053,15 @@ fn take_the_workspace_on(
 /// still gets its workspace — the chief is what is missing, not the workspace,
 /// and the panel says so with a button rather than an error nobody asked for.
 fn give_it_a_chief(state: &AppState, workspace: &Workspace) {
+    give_it_a_chief_called(state, workspace, None);
+}
+
+fn give_it_a_chief_called(state: &AppState, workspace: &Workspace, name: Option<&str>) {
     if chief_of(state, &workspace.id).is_some() {
         return;
     }
 
-    match take_the_workspace_on(state, workspace, None, None) {
+    match take_the_workspace_on(state, workspace, name, None) {
         Ok(chief) => tracing::info!(chief = %chief.id, workspace = %workspace.id, "hired, and waiting"),
         Err(error) => tracing::info!(error = %error.0, workspace = %workspace.id, "no chief yet"),
     }
@@ -5162,6 +5175,32 @@ async fn command_the_workspace(
         desk,
         did,
     }))
+}
+
+#[derive(Deserialize)]
+struct Suggesting {
+    #[serde(default)]
+    name: String,
+}
+
+#[derive(Serialize)]
+struct Suggestion {
+    chief: String,
+}
+
+/// What to call the chief of a workspace that does not exist yet.
+///
+/// The panel that makes a workspace offers this in the field before anything is
+/// made, so a person sees the name they are about to get and can type another.
+async fn suggest_a_chief(
+    State(state): State<AppState>,
+    Query(ask): Query<Suggesting>,
+) -> Json<Suggestion> {
+    let ids: Vec<String> = state.crew.list().into_iter().map(|agent| agent.id).collect();
+
+    Json(Suggestion {
+        chief: crate::start::name_for_a_chief(&ask.name, &ids),
+    })
 }
 
 #[derive(Serialize)]
@@ -6533,7 +6572,9 @@ async fn begin(
             let made = state.workspaces.create(CreateWorkspace {
                 name: name.to_owned(),
                 repository_ids: Vec::new(),
+                chief: None,
             })?;
+            give_it_a_chief(&state, &made);
             did.push(format!("made the {} workspace", made.name));
             made
         }

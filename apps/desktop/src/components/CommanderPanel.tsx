@@ -16,6 +16,7 @@ import {
     write_input,
     mark_step,
     ready_steps,
+    suggest_a_chief,
     supervisor_watches,
     type Plan,
     type PlanStep,
@@ -44,6 +45,8 @@ export function CommanderPanel({ active }: { active: boolean }) {
     const [watches, set_watches] = useState<Watch[]>([]);
     const [repos, set_repos] = useState<Repository[]>([]);
     const [workspace, set_workspace] = useState<Workspace | null>(null);
+    const [naming, set_naming] = useState("");
+    const [suggested, set_suggested] = useState("");
     const [igniting, set_igniting] = useState<string | null>(null);
     const [notice, set_notice] = useState<string | null>(null);
     const [goals, set_goals] = useState<Goal[]>([]);
@@ -85,6 +88,18 @@ export function CommanderPanel({ active }: { active: boolean }) {
     // project each. Both are found by what they command rather than by role
     // alone: a machine with three workspaces has three chiefs.
     const chief = chief_of(crew, workspace?.id ?? null);
+
+    // What a chief here would be called, for the field that offers it. Only
+    // asked while there is nobody: a workspace that has one is not naming one.
+    useEffect(() => {
+        if (!workspace || chief) {
+            return;
+        }
+
+        suggest_a_chief(workspace.name)
+            .then((held) => set_suggested(held.chief))
+            .catch(() => undefined);
+    }, [workspace, chief]);
     const chief_at_work = Boolean(chief?.session_id);
     const workspace_goal = workspace
         ? goals.find((held) => held.repository_id === workspace.id)
@@ -118,11 +133,11 @@ export function CommanderPanel({ active }: { active: boolean }) {
     );
 
     const command = useCallback(
-        async (workspace_id: string) => {
+        async (workspace_id: string, name?: string) => {
             set_igniting(workspace_id);
             set_notice(null);
             try {
-                const done = await command_the_workspace(workspace_id);
+                const done = await command_the_workspace(workspace_id, undefined, name);
                 if (done.chief.session_id) {
                     open_session(done.chief.session_id);
                 }
@@ -177,19 +192,38 @@ export function CommanderPanel({ active }: { active: boolean }) {
                                 : "no chief yet"}
                         </span>
 
+                        {!chief ? (
+                            <input
+                                className="w-28 rounded-md border border-reef bg-lagoon px-2 py-0.5 font-mono text-[11px]"
+                                placeholder={suggested ? `chief · ${suggested}` : "chief"}
+                                title="who commands this workspace — leave it be to take the name offered"
+                                value={naming}
+                                onChange={(event) => set_naming(event.target.value)}
+                                onKeyDown={(event) => {
+                                    if (event.key === "Enter") {
+                                        void command(workspace.id, naming.trim() || suggested);
+                                    }
+                                }}
+                            />
+                        ) : null}
+
                         {igniting === workspace.id ? (
                             <Waiting says="starting…" className="font-mono text-[11px] text-turquoise" />
                         ) : (
                             <button
                                 className="rounded-md border border-turquoise px-2 py-0.5 font-mono text-[11px] text-turquoise"
-                                onClick={() => command(workspace.id)}
+                                onClick={() =>
+                                    command(workspace.id, chief ? undefined : naming.trim() || suggested)
+                                }
                                 title={
                                     chief
                                         ? "hand it the workspace again"
                                         : "hire a chief here and set it going"
                                 }
                             >
-                                {chief_at_work ? `tell ${chief?.name}` : `start ${chief?.name ?? "X"}`}
+                                {chief_at_work
+                                    ? `tell ${chief?.name}`
+                                    : `start ${chief?.name ?? (naming.trim() || suggested || "a chief")}`}
                             </button>
                         )}
 
