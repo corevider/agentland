@@ -321,14 +321,19 @@ pub fn list(data_dir: &Path, engine_id: &str) -> Vec<Account> {
         .collect()
 }
 
-/// Every login this machine holds, across the engines that can hold more than
-/// one.
+/// The engines that can be given a folder of their own.
+///
+/// Named rather than discovered, so listing the logins somebody holds costs a
+/// folder read instead of asking every engine on the machine what version it is.
+pub const CAN_HOLD: &[&str] = &["claude", "codex", "gemini"];
+
+/// Every login this machine holds.
+///
+/// Including logins on an engine that is not installed right now. A folder with
+/// a credential in it does not stop existing because its engine was uninstalled
+/// this morning, and a row that vanishes is a row nobody can forget on purpose.
 pub fn all(data_dir: &Path) -> Vec<Account> {
-    crate::crew::engines()
-        .into_iter()
-        .filter(|engine| engine.installed && can_hold_accounts(engine.id))
-        .flat_map(|engine| list(data_dir, engine.id))
-        .collect()
+    CAN_HOLD.iter().flat_map(|engine| list(data_dir, engine)).collect()
 }
 
 /// Another login on the same engine that could take this work on.
@@ -366,6 +371,20 @@ mod tests {
     fn a_subscription_is_a_folder_not_a_base_url() {
         assert_eq!(config_home("claude"), Some("CLAUDE_CONFIG_DIR"));
         assert_eq!(config_home("codex"), Some("CODEX_HOME"));
+    }
+
+    #[test]
+    fn the_named_engines_are_exactly_the_ones_with_a_folder_variable() {
+        for engine in CAN_HOLD {
+            assert!(can_hold_accounts(engine), "{engine} is named but has no variable");
+        }
+
+        for engine in ["cursor-agent", "crush", "goose", "opencode", "qwen"] {
+            assert!(
+                !CAN_HOLD.contains(&engine),
+                "{engine} has no variable and must not be named"
+            );
+        }
     }
 
     #[test]

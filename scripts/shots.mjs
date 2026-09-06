@@ -102,7 +102,7 @@ async function seed(where) {
 
     for (const [repo, trees] of [
         [first.id, ["ada-desk", "kai-desk"]],
-        [second.id, ["sandbar"]],
+        [second.id, ["sandbar", "reef"]],
     ]) {
         for (const name of trees) {
             await ask(`/repos/${repo}/worktrees`, "POST", { name });
@@ -119,12 +119,33 @@ async function seed(where) {
         { name: "Ada", role: "commander", worktree: "ada-desk", repository_id: first.id },
         { name: "Kai", role: "builder", worktree: "kai-desk", repository_id: first.id },
         { name: "Wren", role: "builder", worktree: "sandbar", repository_id: second.id },
+        { name: "Tor", role: "reviewer", worktree: "reef", repository_id: second.id },
     ];
 
+    // A crew is not one engine. Spread across whatever this machine actually
+    // has, the commander on the one that carries the crew's tools, so the
+    // picture shows a mixed crew where there is one and an honest single-engine
+    // one where there is not. Hiring onto an engine that is not on PATH is
+    // refused by the core, which is why this is read rather than assumed.
+    const available = (await ask("/engines")).filter((engine) => engine.installed);
+    const commanding = available.filter((engine) => engine.takes_the_tools);
+    const spread = [...commanding, ...available.filter((engine) => !engine.takes_the_tools)];
+
     const hired = [];
-    for (const one of crew) {
-        hired.push(await ask("/agents", "POST", { ...one, engine_id: "claude", model: "opus" }));
+    for (const [index, one] of crew.entries()) {
+        const engine = spread[index % spread.length] ?? available[0];
+        hired.push(
+            await ask("/agents", "POST", {
+                ...one,
+                engine_id: engine.id,
+                // A model alias belongs to the engine that knows it, so only the
+                // one whose words these are gets told.
+                model: engine.id === "claude" ? "opus" : undefined,
+            }),
+        );
     }
+
+    say(`hired across ${new Set(hired.map((one) => one.engine_id)).size} engine(s)`);
 
     // Nobody is handed a card here. Handing one over is what starts an agent,
     // and starting an agent starts a real engine on whoever runs this — a

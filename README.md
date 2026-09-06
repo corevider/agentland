@@ -10,8 +10,10 @@ Status: **M7 — approvals reach the phone.** 489 core tests and 282 in the wind
 
 A crew is named, given an engine and a worktree each, and hired. Nobody is
 running here — starting an agent is a decision, not a side effect of hiring one.
+A crew is not one engine either: the strip at the top is what this machine has,
+and the four hired below are on four different ones.
 
-![The crew panel: Ada, Kai and Wren, each with an engine, a model and a worktree of their own](docs/the-crew.png)
+![The crew panel: Ada on Claude Code, Kai on Codex, Tor on Cursor Agent and Wren on Gemini, each with a worktree of their own](docs/the-crew.png)
 
 Work is cards. A card carries the project it belongs to, moves through the
 columns as it is picked up, and ends beside the diff it produced.
@@ -2032,6 +2034,30 @@ rules out a gateway. Gemini does move: `GEMINI_CLI_HOME` relocates the whole
 home, measured the same way as Codex's. But Gemini has no status command, so a
 row about a Gemini login is a silence rather than a yes or a no, and the panel
 says which of those it is.
+
+### The panel that lied about the engines it had
+
+Taking that picture caught a bug the code review would not have. The crew panel
+photographed itself reading **"No agent CLI found on PATH. Install one"** over a
+crew running on four of them.
+
+Nothing was broken; it was slow. Asking an engine its version costs what that
+engine costs to start — `gemini --version` is 2.2 seconds on this machine — and
+eight of them were asked one after another, on every refresh of the panel. The
+logins panel then asked all eight again for its own reasons, so opening the crew
+took five and a half seconds to stop saying something false.
+
+They are asked all at once now, and the answer is kept for five seconds: long
+enough that a panel does not pay for it twice, short enough that an engine
+installed while the app runs still turns up on its own. Listing logins asks
+nobody — the engines that can hold one are named, so it reads folders instead.
+`/accounts` went from 5.6 seconds to two milliseconds, `/engines` from 2.8 to
+2.5 cold and two milliseconds warm, and the test suite from 14.5 seconds to 6.8.
+
+One thing changed shape while fixing it: a login on an engine that is not
+installed right now is still listed. A folder with a credential in it does not
+stop existing because its engine was uninstalled this morning, and a row that
+vanishes is a row nobody can forget on purpose.
 
 ## Two subscriptions, one crew
 

@@ -140,36 +140,76 @@ pub enum PromptStyle {
     None,
 }
 
+/// What each engine last said its version was, and when it said it.
+///
+/// Asking is not free. `gemini --version` takes 2.2 seconds on this machine and
+/// `cursor-agent --version` 0.65, so eight questions asked one after another
+/// cost three seconds — every time a panel refreshed. The crew panel photographed
+/// itself mid-answer and rendered "No agent CLI found on PATH" over a crew
+/// running on four of them.
+///
+/// So they are asked all at once, and the answer is kept for a few seconds. Long
+/// enough that a panel opening does not pay for it twice; short enough that an
+/// engine installed while the app is running still turns up on its own.
+static PROBED: Mutex<Option<(std::time::Instant, Vec<(bool, Option<String>)>)>> = Mutex::new(None);
+
+const PROBE_LASTS: std::time::Duration = std::time::Duration::from_secs(5);
+
+fn probe() -> Vec<(bool, Option<String>)> {
+    if let Some((asked, held)) = PROBED.lock().as_ref() {
+        if asked.elapsed() < PROBE_LASTS {
+            return held.clone();
+        }
+    }
+
+    let fresh: Vec<(bool, Option<String>)> = std::thread::scope(|scope| {
+        let asking: Vec<_> = CATALOG
+            .iter()
+            .map(|known| scope.spawn(|| version_of(known.command)))
+            .collect();
+
+        asking
+            .into_iter()
+            .map(|handle| handle.join().unwrap_or(None))
+            .map(|version| (version.is_some(), version))
+            .collect()
+    });
+
+    *PROBED.lock() = Some((std::time::Instant::now(), fresh.clone()));
+    fresh
+}
+
+fn version_of(command: &str) -> Option<String> {
+    crate::exec::command(command)
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_owned()
+        })
+}
+
 pub fn engines() -> Vec<Engine> {
     CATALOG
         .iter()
-        .map(|known| {
-            let version = crate::exec::command(known.command)
-                .arg("--version")
-                .output()
-                .ok()
-                .filter(|output| output.status.success())
-                .map(|output| {
-                    String::from_utf8_lossy(&output.stdout)
-                        .lines()
-                        .next()
-                        .unwrap_or_default()
-                        .trim()
-                        .to_owned()
-                });
-
-            Engine {
-                id: known.id,
-                name: known.name,
-                command: known.command,
-                resume: known.resume,
-                model_flag: known.model_flag,
-                prompt_style: known.prompt_style,
-                takes_the_tools: known.takes_the_tools,
-                resume_carries_a_brief: known.resume_carries_a_brief,
-                installed: version.is_some(),
-                version,
-            }
+        .zip(probe())
+        .map(|(known, (installed, version))| Engine {
+            id: known.id,
+            name: known.name,
+            command: known.command,
+            resume: known.resume,
+            model_flag: known.model_flag,
+            prompt_style: known.prompt_style,
+            takes_the_tools: known.takes_the_tools,
+            resume_carries_a_brief: known.resume_carries_a_brief,
+            installed,
+            version,
         })
         .collect()
 }
