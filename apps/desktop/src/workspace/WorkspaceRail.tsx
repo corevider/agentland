@@ -9,6 +9,7 @@ import {
     type Repository,
     type Workspace,
 } from "@/lib/core";
+import { chief_of } from "@/lib/commander";
 import { PRESENCE_COLOR } from "@/island/geometry";
 import type { PanelId } from "@/workspace/layout";
 import { PANELS } from "@/workspace/registry";
@@ -87,6 +88,15 @@ export function WorkspaceRail({
         const handle = window.setInterval(() => refresh().catch(() => undefined), 4000);
         return () => window.clearInterval(handle);
     }, [refresh]);
+
+    // The chief stands beside the workspace rather than in any project, so it is
+    // named under the workspace's own name instead of disappearing: grouped by
+    // project it fell into a bucket keyed by the empty string, which nothing
+    // draws.
+    const chief = useMemo(
+        () => chief_of(agents, active_workspace),
+        [agents, active_workspace],
+    );
 
     const by_repo = useMemo(() => {
         const grouped = new Map<string, Agent[]>();
@@ -211,6 +221,18 @@ export function WorkspaceRail({
                         </button>
                     );
                 })}
+
+                {chief ? (
+                    <button
+                        onClick={() => on_open_agent(chief)}
+                        title={`${chief.name} commands this workspace — ${chief.reason}`}
+                        className="mt-1 flex w-full items-center gap-2 rounded py-[2px] pl-2 pr-2 text-left text-[12px] text-shell hover:bg-lagoon-deep/60 hover:text-linen"
+                    >
+                        <Dot presence={chief.presence} />
+                        <span className="truncate">{chief.name}</span>
+                        <span className="ml-auto truncate font-mono text-[10px] text-shade">chief</span>
+                    </button>
+                ) : null}
 
                 <h2 className="px-1 pb-0.5 pt-3 font-mono text-[9px] uppercase tracking-[0.16em] text-shade">
                     Projects
