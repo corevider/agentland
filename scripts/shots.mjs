@@ -204,6 +204,18 @@ async function seed(where) {
         }
     }
 
+    // Two logins on one engine, so the panel has something to be about. They
+    // are folders and nothing else: nobody is signed into them, and the panel
+    // says so because the engine says so. Signing one in would mean putting a
+    // real person's credential in a temporary directory to make a picture look
+    // better, which is the opposite of what this panel is for.
+    const held = await ask("/accounts");
+    for (const engine of held.engines.slice(0, 1)) {
+        for (const label of ["weekday", "spare"]) {
+            await ask("/accounts", "POST", { engine_id: engine.id, label });
+        }
+    }
+
     await ask("/notes", "POST", {
         title: "A note nothing points at",
         body: "Left here on purpose, so the check in the notes panel has something honest to say.",
@@ -288,6 +300,28 @@ class Window {
                 return true;
             })()
         `);
+    }
+
+    /// By what a control is called where it has no words of its own — the gear
+    /// in the header is an icon, and an icon says nothing to a search by text.
+    async click_labelled(label, tries = 20) {
+        for (let attempt = 0; attempt < tries; attempt += 1) {
+            const pressed = await this.evaluate(`
+                (() => {
+                    const wanted = document.querySelector('[aria-label=' + ${JSON.stringify(JSON.stringify(label))} + ']');
+                    if (!wanted) return false;
+                    wanted.click();
+                    return true;
+                })()
+            `);
+
+            if (pressed) {
+                return;
+            }
+            await rest(500);
+        }
+
+        throw new Error(`nothing on the screen is labelled "${label}"`);
     }
 
     /// Give the window the height this view actually fills, so the picture is
@@ -435,6 +469,17 @@ try {
     await show("memory");
     await window.fit(600);
     await window.shoot("what-the-crew-remembers");
+
+    // Settings is a page over the window rather than a panel in it, so it is
+    // opened the way a person opens it: the gear, then the section.
+    await window.click_labelled("Settings");
+    await rest(800);
+    await window.click("Logins");
+    await rest(1200);
+    await window.fit(620);
+    await window.shoot("the-logins-they-hold");
+    await window.click("close");
+    await rest(800);
 
     await show("notes");
     await window.click("check");

@@ -36,7 +36,13 @@ proposals nobody answered, corrections that left both sides in force.
 
 ![The notes panel with the vault check open, naming two notes nothing points at](docs/checking-the-vault.png)
 
-These five are made by `node scripts/shots.mjs`, which stands up a core of its
+A login is a folder an engine signs into. The panel lists what this machine
+actually holds and what each engine says about it — signed in only where the
+engine's own status command says so, never because a login pane was once opened.
+
+![The logins panel: two Claude logins, neither signed in, and the hand-over switch](docs/the-logins-they-hold.png)
+
+These six are made by `node scripts/shots.mjs`, which stands up a core of its
 own on its own port, seeds a crew that exists nowhere else, photographs the built
 interface in a headless browser and takes it all down again. Nobody's real
 repositories, cards or notes are in them, and re-running it after an interface
