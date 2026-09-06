@@ -12,6 +12,10 @@ const BUILTIN: &[(&str, &str)] = &[
         include_str!("../../../skills/commanding-a-crew/SKILL.md"),
     ),
     (
+        "commanding-a-workspace",
+        include_str!("../../../skills/commanding-a-workspace/SKILL.md"),
+    ),
+    (
         "systematic-debugging",
         include_str!("../../../skills/systematic-debugging/SKILL.md"),
     ),

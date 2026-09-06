@@ -308,6 +308,35 @@ fn tools() -> Value {
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
+            "name": "workspace_status",
+            "description": "Read the workspace you command: what it was asked for, and every project in it with its goal, its commander, whether that commander is at its desk, and how many cards it still has open. This is the chief's first call — it says which projects exist before you decide what any of them should be doing.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "project_goal",
+            "description": "Write down what one project in your workspace is for. It replaces whatever stood before it — one project, one thing being asked for at a time — and it survives the pane: the project's commander is handed it again every time it comes back. Say the outcome, not the steps; taking it apart is that commander's work.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "repository_id": { "type": "string" },
+                    "text": { "type": "string", "description": "the outcome being asked for, in a paragraph" }
+                },
+                "required": ["repository_id", "text"]
+            }
+        },
+        {
+            "name": "project_commander",
+            "description": "Hand a project to its commander. Hires one if the project has none, starts it if it is stopped, and tells it what you want either way — one call for all three. Use it after project_goal; the brief you pass is what the commander is told now, and the goal is what it is told every time it comes back.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "repository_id": { "type": "string" },
+                    "brief": { "type": "string", "description": "what you are asking of it now" }
+                },
+                "required": ["repository_id"]
+            }
+        },
+        {
             "name": "repo_worktrees",
             "description": "List a repository's worktrees with branch, allocated port and uncommitted count.",
             "inputSchema": {
@@ -621,6 +650,24 @@ fn call_tool(core: &Core, name: &str, arguments: &Value) -> Result<Value, String
             None,
         ),
         "repo_list" => core.call("GET", "/repos", None),
+        "workspace_status" => {
+            // Which workspace is not the caller's to name: the pane knows who it
+            // is, and an agent that has to name its own workspace can name
+            // somebody else's.
+            let who = std::env::var("AGENTLAND_AGENT")
+                .map_err(|_| "this pane does not know which agent it is".to_owned())?;
+            core.call("GET", &format!("/agents/{}/workspace", urlencode(&who)), None)
+        }
+        "project_goal" => core.call(
+            "POST",
+            &format!("/repos/{}/goal", urlencode(&text("repository_id")?)),
+            Some(json!({ "text": text("text")? })),
+        ),
+        "project_commander" => core.call(
+            "POST",
+            &format!("/repos/{}/commander", urlencode(&text("repository_id")?)),
+            Some(json!({ "brief": arguments.get("brief").and_then(Value::as_str) })),
+        ),
         "crew_message" => core.call(
             "POST",
             "/mail",
