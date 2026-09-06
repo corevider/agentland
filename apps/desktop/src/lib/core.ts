@@ -711,7 +711,13 @@ export interface Engine {
     id: string;
     name: string;
     command: string;
-    resume_flag: string | null;
+    /// The words that make this engine pick up where it left off, empty where it
+    /// has none.
+    resume: string[];
+    /// Whether Agentland knows how to hand this engine the crew's own tools. An
+    /// agent on an engine without them does work but cannot move a card,
+    /// message anybody or propose a memory.
+    takes_the_tools: boolean;
     installed: boolean;
     version: string | null;
 }

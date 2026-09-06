@@ -14,38 +14,120 @@ pub struct Engine {
     pub id: &'static str,
     pub name: &'static str,
     pub command: &'static str,
-    pub resume_flag: Option<&'static str>,
+    /// The words that make this engine pick up where it left off. Empty where
+    /// it has none, and more than one where a single flag will not do it:
+    /// Codex's bare `resume` opens a picker and waits for a person, which in a
+    /// crew pane is an agent that never starts.
+    pub resume: &'static [&'static str],
     /// How this engine is told which model to run. Left out where we do not
     /// know the flag rather than guessed at.
     pub model_flag: Option<&'static str>,
-    /// How this engine is told how much to do without asking. Only Claude Code's
-    /// is known first-hand; the rest are left out rather than invented.
-    pub permission_flag: Option<&'static str>,
-    /// How this engine is handed the crew's own tools. Passing the file is the
-    /// only way that holds: leaving the engine to discover `.mcp.json` in the
-    /// worktree makes the tools depend on an approval nobody sees, which is
-    /// silently lost whenever the file changes — measured, twice, as a whole
-    /// commander session that looked healthy and could not call a single tool.
-    pub mcp_flags: &'static [&'static str],
     pub prompt_style: PromptStyle,
+    /// Whether Agentland knows how to hand this engine the crew's own tools.
+    /// An engine without them can be told things and can do work, but it cannot
+    /// move a card, message anybody or propose a memory.
+    pub takes_the_tools: bool,
+    /// Whether a resume can carry the brief along with it. Claude Code's
+    /// `--continue <prompt>` can; Codex's `resume [SESSION_ID] [PROMPT]` binds a
+    /// lone word to the session, so a brief handed to it would be read as the
+    /// name of a session nobody has.
+    pub resume_carries_a_brief: bool,
     pub installed: bool,
     pub version: Option<String>,
 }
 
-/// `--strict-mcp-config` goes with `--mcp-config`: an agent's tools are then
-/// exactly the ones Agentland gave it, and the human's own connectors — mail,
-/// calendar, drive — stay out of a crew pane entirely.
-const CLAUDE_MCP: &[&str] = &["--mcp-config", "--strict-mcp-config"];
+struct Known {
+    id: &'static str,
+    name: &'static str,
+    command: &'static str,
+    resume: &'static [&'static str],
+    model_flag: Option<&'static str>,
+    prompt_style: PromptStyle,
+    takes_the_tools: bool,
+    resume_carries_a_brief: bool,
+}
 
-const CATALOG: &[(&str, &str, &str, Option<&str>, Option<&str>, Option<&str>, &[&str], PromptStyle)] = &[
-    ("claude", "Claude Code", "claude", Some("--continue"), Some("--model"), Some("--permission-mode"), CLAUDE_MCP, PromptStyle::Positional),
-    ("codex", "Codex CLI", "codex", Some("resume"), Some("--model"), None, &[], PromptStyle::Positional),
-    ("gemini", "Gemini CLI", "gemini", None, Some("-m"), None, &[], PromptStyle::Flag("-p")),
-    ("opencode", "OpenCode", "opencode", None, Some("--model"), None, &[], PromptStyle::Positional),
-    ("crush", "Crush", "crush", None, None, None, &[], PromptStyle::Positional),
-    ("goose", "Goose", "goose", Some("--resume"), None, None, &[], PromptStyle::None),
-    ("qwen", "Qwen Code", "qwen", None, Some("-m"), None, &[], PromptStyle::Positional),
-    ("cursor-agent", "Cursor Agent", "cursor-agent", None, Some("--model"), None, &[], PromptStyle::Positional),
+const CATALOG: &[Known] = &[
+    Known {
+        id: "claude",
+        name: "Claude Code",
+        command: "claude",
+        resume: &["--continue"],
+        model_flag: Some("--model"),
+        prompt_style: PromptStyle::Positional,
+        takes_the_tools: true,
+        resume_carries_a_brief: true,
+    },
+    Known {
+        id: "codex",
+        name: "Codex CLI",
+        command: "codex",
+        resume: &["resume", "--last"],
+        model_flag: Some("--model"),
+        prompt_style: PromptStyle::Positional,
+        takes_the_tools: true,
+        resume_carries_a_brief: false,
+    },
+    Known {
+        id: "gemini",
+        name: "Gemini CLI",
+        command: "gemini",
+        resume: &[],
+        model_flag: Some("-m"),
+        prompt_style: PromptStyle::Flag("-p"),
+        takes_the_tools: false,
+        resume_carries_a_brief: false,
+    },
+    Known {
+        id: "opencode",
+        name: "OpenCode",
+        command: "opencode",
+        resume: &[],
+        model_flag: Some("--model"),
+        prompt_style: PromptStyle::Positional,
+        takes_the_tools: false,
+        resume_carries_a_brief: false,
+    },
+    Known {
+        id: "crush",
+        name: "Crush",
+        command: "crush",
+        resume: &[],
+        model_flag: None,
+        prompt_style: PromptStyle::Positional,
+        takes_the_tools: false,
+        resume_carries_a_brief: false,
+    },
+    Known {
+        id: "goose",
+        name: "Goose",
+        command: "goose",
+        resume: &["--resume"],
+        model_flag: None,
+        prompt_style: PromptStyle::None,
+        takes_the_tools: false,
+        resume_carries_a_brief: false,
+    },
+    Known {
+        id: "qwen",
+        name: "Qwen Code",
+        command: "qwen",
+        resume: &[],
+        model_flag: Some("-m"),
+        prompt_style: PromptStyle::Positional,
+        takes_the_tools: false,
+        resume_carries_a_brief: false,
+    },
+    Known {
+        id: "cursor-agent",
+        name: "Cursor Agent",
+        command: "cursor-agent",
+        resume: &[],
+        model_flag: Some("--model"),
+        prompt_style: PromptStyle::Positional,
+        takes_the_tools: false,
+        resume_carries_a_brief: false,
+    },
 ];
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -58,8 +140,8 @@ pub enum PromptStyle {
 pub fn engines() -> Vec<Engine> {
     CATALOG
         .iter()
-        .map(|(id, name, command, resume_flag, model_flag, permission_flag, mcp_flags, prompt_style)| {
-            let version = crate::exec::command(command)
+        .map(|known| {
+            let version = crate::exec::command(known.command)
                 .arg("--version")
                 .output()
                 .ok()
@@ -74,14 +156,14 @@ pub fn engines() -> Vec<Engine> {
                 });
 
             Engine {
-                id,
-                name,
-                command,
-                resume_flag: *resume_flag,
-                mcp_flags,
-                model_flag: *model_flag,
-                permission_flag: *permission_flag,
-                prompt_style: *prompt_style,
+                id: known.id,
+                name: known.name,
+                command: known.command,
+                resume: known.resume,
+                model_flag: known.model_flag,
+                prompt_style: known.prompt_style,
+                takes_the_tools: known.takes_the_tools,
+                resume_carries_a_brief: known.resume_carries_a_brief,
                 installed: version.is_some(),
                 version,
             }
@@ -89,11 +171,84 @@ pub fn engines() -> Vec<Engine> {
         .collect()
 }
 
+/// How this engine is handed the crew's own tools.
+///
+/// Handing them over is the only way that holds. Leaving an engine to discover
+/// a config file in the worktree makes the tools depend on an approval nobody
+/// sees, which is silently lost whenever the file changes — measured, twice, as
+/// a whole commander session that looked healthy and could not call a tool.
+///
+/// The two engines here want the same thing said in two languages. Claude Code
+/// takes the file, and `--strict-mcp-config` with it, so an agent's tools are
+/// exactly the ones Agentland gave it and the human's own connectors stay out
+/// of a crew pane. Codex takes configuration values on the command line, so the
+/// same server is spelled out as overrides — nothing written to anybody's
+/// `config.toml`, and no secret in the argument list, because what the tool
+/// needs to reach the core is in a file only it is told the path of.
+pub fn tools_for(engine_id: &str, tools: &Path, endpoint: &Path) -> Vec<String> {
+    match engine_id {
+        "claude" => vec![
+            "--mcp-config".to_owned(),
+            tools.to_string_lossy().into_owned(),
+            "--strict-mcp-config".to_owned(),
+        ],
+        "codex" => {
+            let program = read_the_tool_from(tools).unwrap_or_else(|| TOOL_NAME.to_owned());
+            vec![
+                "-c".to_owned(),
+                format!("mcp_servers.agentland.command={program}"),
+                "-c".to_owned(),
+                format!(
+                    "mcp_servers.agentland.args=[\"--endpoint\",\"{}\"]",
+                    endpoint.to_string_lossy()
+                ),
+            ]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The tool program, read back out of the file written for the engine that
+/// takes a file. One place decides where that program is; this reads its answer
+/// rather than working it out a second way and disagreeing.
+fn read_the_tool_from(tools: &Path) -> Option<String> {
+    let held: serde_json::Value = serde_json::from_str(&fs::read_to_string(tools).ok()?).ok()?;
+    held.get("mcpServers")?
+        .get("agentland")?
+        .get("command")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+const TOOL_NAME: &str = "agentland-mcp";
+
+/// How much this engine is told to do without stopping to ask.
+///
+/// Agentland has four rungs and Codex has three, so two of ours land on one of
+/// theirs. It is rounded towards asking: `acceptEdits` and `default` both come
+/// out as a writable workspace that still asks before it runs a command, rather
+/// than both coming out as one that does not.
+pub fn permission_args(engine_id: &str, mode: &str) -> Vec<String> {
+    let owned = |words: &[&str]| words.iter().map(|word| (*word).to_owned()).collect();
+
+    match engine_id {
+        "claude" => owned(&["--permission-mode", mode]),
+        "codex" => match mode {
+            "plan" => owned(&["--sandbox", "read-only"]),
+            "bypassPermissions" => owned(&["--dangerously-bypass-approvals-and-sandbox"]),
+            _ => owned(&["--sandbox", "workspace-write", "--ask-for-approval", "on-request"]),
+        },
+        _ => Vec::new(),
+    }
+}
+
 /// How an engine is handed a settings file.
 ///
 /// Only Claude Code's is known first-hand, so the rest are left out rather than
 /// invented — an engine handed a flag it does not have refuses to start, and a
-/// crew that cannot start is worse than one that asks too often.
+/// crew that cannot start is worse than one that asks too often. Codex is told
+/// the same thing a different way, in `permission_args`, because it takes the
+/// answer as arguments rather than as a file.
 pub fn settings_flag(engine_id: &str) -> Option<&'static str> {
     match engine_id {
         "claude" => Some("--settings"),
@@ -160,6 +315,16 @@ pub struct Agent {
     #[serde(default)]
     pub account: Option<String>,
 }
+
+/// Take a file down to its owner, where the platform has a way to say so.
+#[cfg(unix)]
+fn read_by_nobody_else(file: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = fs::set_permissions(file, fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(not(unix))]
+fn read_by_nobody_else(_file: &Path) {}
 
 fn offline() -> AgentState {
     AgentState::Offline
@@ -333,6 +498,28 @@ impl Crew {
         crate::db::save_state(&self.data_dir, "crew", state);
     }
 
+    /// Where the tool program is told how to reach the core.
+    ///
+    /// A token on a command line is a token in every process listing on the
+    /// machine, so the engines that take configuration as arguments are given a
+    /// path instead. The file is Agentland's own, readable by nobody else, and
+    /// rewritten whenever the core's port or token changes.
+    fn endpoint_file(&self) -> PathBuf {
+        let file = self.data_dir.join("endpoint.json");
+
+        if let Some((port, token)) = self.endpoint.lock().clone() {
+            let held = serde_json::json!({ "port": port, "token": token });
+            if let Ok(rendered) = serde_json::to_string(&held) {
+                let _ = fs::create_dir_all(&self.data_dir);
+                if fs::write(&file, rendered).is_ok() {
+                    read_by_nobody_else(&file);
+                }
+            }
+        }
+
+        file
+    }
+
     pub fn list(&self) -> Vec<Agent> {
         self.state.lock().agents.values().cloned().collect()
     }
@@ -399,7 +586,7 @@ impl Crew {
 
         let model = request
             .model
-            .or_else(|| model_for_role(&request.role).map(str::to_owned));
+            .or_else(|| model_for_role(&request.engine_id, &request.role).map(str::to_owned));
 
         let taken: Vec<String> = state
             .agents
@@ -552,12 +739,8 @@ impl Crew {
         // The crew's own tools, handed over rather than discovered.
         let tools = worktree_path.join(".mcp.json");
         if tools.exists() {
-            for flag in engine.mcp_flags {
-                args.push((*flag).to_owned());
-                if *flag == "--mcp-config" {
-                    args.push(tools.to_string_lossy().into_owned());
-                }
-            }
+            let endpoint = self.endpoint_file();
+            args.extend(tools_for(&agent.engine_id, &tools, &endpoint));
         }
 
         let mode = agent
@@ -608,10 +791,7 @@ impl Crew {
             }
         }
 
-        if let Some(flag) = engine.permission_flag {
-            args.push(flag.to_owned());
-            args.push(mode.clone());
-        }
+        args.extend(permission_args(&agent.engine_id, &mode));
 
         if let (Some(flag), Some(model)) = (engine.model_flag, agent.model.as_deref()) {
             let wanted = model.trim();
@@ -621,13 +801,18 @@ impl Crew {
             }
         }
 
-        if resume {
-            if let Some(flag) = engine.resume_flag {
-                args.push(flag.to_owned());
-            }
+        let brief = brief.filter(|value| !value.trim().is_empty());
+
+        // An engine whose resume cannot carry the brief is started fresh when
+        // there is one, rather than resumed with the brief dropped or handed to
+        // an argument that means something else. A brief that vanishes is an
+        // agent sitting at a prompt with nothing to do; a fresh session that
+        // has been told what to do is only a shorter memory.
+        if resume && !engine.resume.is_empty() && (engine.resume_carries_a_brief || brief.is_none()) {
+            args.extend(engine.resume.iter().map(|word| (*word).to_owned()));
         }
 
-        if let Some(text) = brief.filter(|value| !value.trim().is_empty()) {
+        if let Some(text) = brief {
             match engine.prompt_style {
                 PromptStyle::Positional => args.push(text.to_owned()),
                 PromptStyle::Flag(flag) => {
@@ -837,7 +1022,17 @@ pub fn free_colour(taken: &[String]) -> &'static str {
 /// worktree against a brief someone else wrote, and a smaller model does that at
 /// a fraction of the cost. These are only defaults — the commander overrules them
 /// agent by agent, which is the point of having one.
-pub fn model_for_role(role: &str) -> Option<&'static str> {
+///
+/// The names belong to an engine, not to a role. `opus` and `haiku` are things
+/// Claude Code understands and nothing else does, and handing `--model haiku` to
+/// Codex is naming a model that does not exist — measured, on the first Codex
+/// agent this crew ever hired. An engine whose aliases we do not know keeps its
+/// own default, which is whatever its owner already configured.
+pub fn model_for_role(engine_id: &str, role: &str) -> Option<&'static str> {
+    if engine_id != "claude" {
+        return None;
+    }
+
     match role {
         "commander" => Some("opus"),
         "reviewer" | "ops" => Some("sonnet"),
@@ -848,20 +1043,96 @@ pub fn model_for_role(role: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod model_tests {
-    use super::{engine, free_colour, model_for_role, PALETTE};
+    use super::{engine, free_colour, model_for_role, permission_args, tools_for, PALETTE};
+    use std::path::Path;
 
     #[test]
     fn claude_is_handed_the_crews_tools_rather_than_left_to_find_them() {
         let claude = engine("claude").expect("claude is in the catalog");
 
-        assert_eq!(claude.mcp_flags, &["--mcp-config", "--strict-mcp-config"]);
+        assert!(claude.takes_the_tools);
+        assert_eq!(
+            tools_for("claude", Path::new("/w/.mcp.json"), Path::new("/d/endpoint.json")),
+            vec!["--mcp-config", "/w/.mcp.json", "--strict-mcp-config"]
+        );
     }
 
     #[test]
     fn an_engine_we_have_not_learned_is_left_to_its_own_tools() {
         let codex = engine("codex").expect("codex is in the catalog");
 
-        assert!(codex.mcp_flags.is_empty(), "nothing is guessed at");
+        assert!(codex.takes_the_tools, "codex takes configuration as arguments, and that was measured");
+    }
+
+    #[test]
+    fn a_model_alias_belongs_to_the_engine_that_knows_it() {
+        // `haiku` is a Claude Code word. A Codex agent hired with it starts
+        // asking for a model nobody has.
+        assert_eq!(model_for_role("codex", "implementer"), None);
+        assert_eq!(model_for_role("gemini", "commander"), None);
+        assert_eq!(model_for_role("claude", "implementer"), Some("haiku"));
+    }
+
+    #[test]
+    fn codex_is_told_to_continue_rather_than_shown_a_picker() {
+        let codex = engine("codex").expect("codex is in the catalog");
+
+        // `codex resume` on its own opens a session picker and waits for a
+        // person to choose. In a crew pane that is an agent that never starts.
+        assert_eq!(codex.resume, &["resume", "--last"]);
+    }
+
+    #[test]
+    fn codex_is_handed_the_same_server_in_its_own_language() {
+        let said = tools_for("codex", Path::new("/nowhere/.mcp.json"), Path::new("/d/endpoint.json"));
+
+        assert_eq!(said[0], "-c");
+        assert!(said[1].starts_with("mcp_servers.agentland.command="), "{said:?}");
+        assert_eq!(said[2], "-c");
+        assert_eq!(
+            said[3],
+            "mcp_servers.agentland.args=[\"--endpoint\",\"/d/endpoint.json\"]"
+        );
+
+        // Nothing in the argument list is a secret. The tool is told where to
+        // read what it needs, and the file is Agentland's own.
+        assert!(
+            said.iter().all(|word| !word.contains("token")),
+            "no credential belongs in a process listing: {said:?}"
+        );
+    }
+
+    #[test]
+    fn an_engine_that_takes_no_tools_is_handed_none() {
+        assert!(tools_for("gemini", Path::new("/w/.mcp.json"), Path::new("/d/e.json")).is_empty());
+    }
+
+    #[test]
+    fn codex_rounds_our_four_rungs_onto_its_three_towards_asking() {
+        assert_eq!(permission_args("codex", "plan"), vec!["--sandbox", "read-only"]);
+        assert_eq!(
+            permission_args("codex", "bypassPermissions"),
+            vec!["--dangerously-bypass-approvals-and-sandbox"]
+        );
+
+        // The two in the middle land on the same rung, and it is the one that
+        // still asks before running a command.
+        let asking = vec!["--sandbox", "workspace-write", "--ask-for-approval", "on-request"];
+        assert_eq!(permission_args("codex", "default"), asking);
+        assert_eq!(permission_args("codex", "acceptEdits"), asking);
+    }
+
+    #[test]
+    fn claude_is_still_told_in_its_own_words() {
+        assert_eq!(
+            permission_args("claude", "acceptEdits"),
+            vec!["--permission-mode", "acceptEdits"]
+        );
+    }
+
+    #[test]
+    fn an_engine_whose_permissions_we_do_not_know_is_told_nothing() {
+        assert!(permission_args("crush", "plan").is_empty(), "nothing is guessed at");
     }
 
     #[test]
@@ -919,14 +1190,17 @@ mod model_tests {
 
     #[test]
     fn the_commander_gets_the_strongest_model_and_the_others_do_not() {
-        assert_eq!(model_for_role("commander"), Some("opus"));
-        assert_ne!(model_for_role("implementer"), model_for_role("commander"));
-        assert_eq!(model_for_role("implementer"), Some("haiku"));
+        assert_eq!(model_for_role("claude", "commander"), Some("opus"));
+        assert_ne!(
+            model_for_role("claude", "implementer"),
+            model_for_role("claude", "commander")
+        );
+        assert_eq!(model_for_role("claude", "implementer"), Some("haiku"));
     }
 
     #[test]
     fn a_role_nobody_has_an_opinion_about_keeps_the_engine_default() {
-        assert_eq!(model_for_role("gardener"), None);
+        assert_eq!(model_for_role("claude", "gardener"), None);
     }
 
     #[test]

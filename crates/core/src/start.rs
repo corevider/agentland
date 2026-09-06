@@ -103,7 +103,7 @@ pub fn commander_name(wanted: Option<&str>, taken_ids: &[String]) -> String {
 pub fn engine_for_a_commander(engines: &[Engine]) -> Option<String> {
     engines
         .iter()
-        .find(|engine| engine.installed && !engine.mcp_flags.is_empty())
+        .find(|engine| engine.installed && engine.takes_the_tools)
         .or_else(|| engines.iter().find(|engine| engine.installed))
         .map(|engine| engine.id.to_owned())
 }
@@ -113,16 +113,16 @@ mod tests {
     use super::*;
     use crate::crew::PromptStyle;
 
-    fn engine(id: &'static str, installed: bool, mcp_flags: &'static [&'static str]) -> Engine {
+    fn engine(id: &'static str, installed: bool, takes_the_tools: bool) -> Engine {
         Engine {
             id,
             name: id,
             command: id,
-            resume_flag: None,
+            resume: &[],
             model_flag: None,
-            permission_flag: None,
-            mcp_flags,
             prompt_style: PromptStyle::Positional,
+            takes_the_tools,
+            resume_carries_a_brief: false,
             installed,
             version: None,
         }
@@ -173,8 +173,8 @@ mod tests {
     #[test]
     fn a_project_starts_on_an_engine_that_takes_the_crews_tools() {
         let catalog = vec![
-            engine("toolless", true, &[]),
-            engine("claude", true, &["--mcp-config"]),
+            engine("toolless", true, false),
+            engine("claude", true, true),
         ];
 
         assert_eq!(engine_for_a_commander(&catalog).as_deref(), Some("claude"));
@@ -183,11 +183,11 @@ mod tests {
     #[test]
     fn an_engine_that_is_not_installed_is_not_offered() {
         let catalog = vec![
-            engine("claude", false, &["--mcp-config"]),
-            engine("toolless", true, &[]),
+            engine("claude", false, true),
+            engine("toolless", true, false),
         ];
 
         assert_eq!(engine_for_a_commander(&catalog).as_deref(), Some("toolless"));
-        assert_eq!(engine_for_a_commander(&[engine("claude", false, &["--mcp-config"])]), None);
+        assert_eq!(engine_for_a_commander(&[engine("claude", false, true)]), None);
     }
 }

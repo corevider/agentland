@@ -1939,6 +1939,53 @@ themselves, and CI has a step for it. The first tag after the change went red on
 exactly that: the machine that wrote it had the file already, so the local run
 was green for a reason that did not travel.
 
+## Codex, taught rather than assumed
+
+The catalog had a Codex row from the start, and installing the engine showed
+most of it was wrong. Every line below was measured against `codex-cli 0.153.4`
+on this machine.
+
+**`resume` was a session picker, not a continue.** `codex resume` opens a list
+and waits for a person to choose one — in a crew pane, an agent that never
+starts. The words that continue are `resume --last`, so an engine's resume is
+now a list of words rather than a single flag.
+
+**A resume cannot carry the brief.** `codex resume [SESSION_ID] [PROMPT]` binds
+one positional to the session, so a brief handed there would be read as the name
+of a session nobody has. An engine whose resume cannot carry a brief is started
+fresh when there is one: a shorter memory beats a brief that vanishes.
+
+**Codex has three rungs where Agentland has four.** `--sandbox` takes
+`read-only`, `workspace-write` or `danger-full-access`, with `--ask-for-approval`
+beside it. `plan` maps to read-only and `bypassPermissions` to the bypass flag;
+`default` and `acceptEdits` both land on a writable workspace that still asks
+before running a command. Rounded towards asking, and said out loud rather than
+left for somebody to discover.
+
+**It takes the crew's tools as arguments rather than as a file.** Claude Code is
+handed `--mcp-config`; Codex is handed `-c mcp_servers.agentland.command=…` and
+`-c mcp_servers.agentland.args=[…]`, which writes nothing to anybody's
+`config.toml`. That raised the one problem worth solving properly: the tool needs
+the core's port and token, and a token in an argument is a token in every process
+listing on the machine. So it is handed the path of a file instead — Agentland's
+own, mode 600 — and `agentland-mcp` learned `--endpoint`. Verified with the
+token deliberately stripped from the environment: the tool read the file,
+answered a handshake and returned the crew.
+
+**`CODEX_HOME` moves the whole home.** A "global" MCP server added with it set
+landed in that folder and `~/.codex` was never touched, so a second Codex
+subscription is a second folder, the same as Claude Code's.
+
+**And a bug the first Codex agent found on its way out.** Roles carried default
+models — `opus`, `sonnet`, `haiku` — and those are Claude Code's words. The
+first Codex agent this crew ever hired started with `--model haiku`, naming a
+model that does not exist. A model alias belongs to the engine that knows it;
+every other engine now keeps its own default.
+
+One link is still unverified, and it needs a Codex login rather than more work:
+that a running Codex session actually launches the server it was configured
+with. Everything up to that point is measured.
+
 ## Two subscriptions, one crew
 
 A week runs out on a Friday and the crew stops. The obvious answer is a second
@@ -1961,7 +2008,7 @@ row that says yes because this app once opened a login pane is a row that lies
 the moment a token expires or somebody signs out in another window.
 
 **An engine we cannot isolate is offered no second account at all.**
-`CLAUDE_CONFIG_DIR` and `CODEX_HOME` are the two we know; a guessed variable is
+`CLAUDE_CONFIG_DIR` and `CODEX_HOME` are the two we know, both measured; a guessed variable is
 silently ignored, and then two rows claiming to be two people share one login and
 one week. The Logins panel lists what the machine can actually hold, which is
 sometimes nothing.

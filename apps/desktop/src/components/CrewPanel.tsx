@@ -151,9 +151,18 @@ export function CrewPanel({ active, on_open_session }: Props) {
                                     ? "border-turquoise text-turquoise"
                                     : "border-reef text-shade"
                             }`}
-                            title={engine.version ?? "not installed"}
+                            title={
+                                engine.installed
+                                    ? `${engine.version}${
+                                          engine.takes_the_tools
+                                              ? ""
+                                              : " — works in its pane, but cannot move a card, message anybody or propose a memory"
+                                      }`
+                                    : "not installed"
+                            }
                         >
                             {engine.id}
+                            {engine.installed && !engine.takes_the_tools ? " ·" : ""}
                         </span>
                     ))}
                 </div>

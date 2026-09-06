@@ -13,11 +13,27 @@ struct Core {
 }
 
 impl Core {
+    /// Where the core is and what it will answer to.
+    ///
+    /// The environment first, because the engine that takes a config file
+    /// expands the variables into it and nothing has to be written down. An
+    /// engine that takes configuration as command-line arguments cannot do
+    /// that, and a token in an argument is a token in every process listing —
+    /// so it is handed the path of a file instead, and the file is read here.
     fn from_env() -> Self {
-        let port = std::env::var("AGENTLAND_PORT").unwrap_or_else(|_| "9470".to_owned());
+        let held = std::env::var("AGENTLAND_TOKEN").ok().filter(|token| !token.is_empty());
+
+        let (port, token) = match held {
+            Some(token) => (
+                std::env::var("AGENTLAND_PORT").unwrap_or_else(|_| "9470".to_owned()),
+                token,
+            ),
+            None => endpoint_from_a_file().unwrap_or_else(|| ("9470".to_owned(), String::new())),
+        };
+
         Self {
             base: format!("http://127.0.0.1:{port}"),
-            token: std::env::var("AGENTLAND_TOKEN").unwrap_or_default(),
+            token,
             client: reqwest::blocking::Client::new(),
         }
     }
@@ -686,6 +702,30 @@ fn respond(id: Option<&Value>, result: Value) {
     let mut stdout = io::stdout().lock();
     let _ = writeln!(stdout, "{message}");
     let _ = stdout.flush();
+}
+
+/// The port and token, out of the file named after `--endpoint`.
+fn endpoint_from_a_file() -> Option<(String, String)> {
+    let mut args = std::env::args().skip(1);
+    let file = loop {
+        match args.next() {
+            Some(arg) if arg == "--endpoint" => break args.next()?,
+            Some(arg) => match arg.strip_prefix("--endpoint=") {
+                Some(path) => break path.to_owned(),
+                None => continue,
+            },
+            None => return None,
+        }
+    };
+
+    let held: Value = serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()?;
+    let port = held.get("port")?;
+    let port = port
+        .as_u64()
+        .map(|number| number.to_string())
+        .or_else(|| port.as_str().map(str::to_owned))?;
+
+    Some((port, held.get("token")?.as_str()?.to_owned()))
 }
 
 fn main() {
