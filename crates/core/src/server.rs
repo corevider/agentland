@@ -683,7 +683,25 @@ fn scope_for(state: &AppState, written: &str) -> crate::vault::Scope {
     });
 
     let workspace = owner.or_else(|| active_workspace_folder(state));
-    crate::vault::Scope::parse(written, workspace.as_deref())
+
+    // A chief reads its workspace through a tool, and a tool answers with ids:
+    // it wrote `workspace:ws3` and the note landed in a vault folder called
+    // "ws3". A folder in somebody's Obsidian is named after the workspace, so
+    // an id that names one is turned back into its name here.
+    let written = written
+        .trim()
+        .strip_prefix("workspace:")
+        .and_then(|rest| {
+            state
+                .workspaces
+                .list()
+                .into_iter()
+                .find(|held| held.id == rest.trim())
+        })
+        .map(|held| format!("workspace:{}", held.name))
+        .unwrap_or_else(|| written.to_owned());
+
+    crate::vault::Scope::parse(&written, workspace.as_deref())
 }
 
 const BRIEF_MEMORIES: usize = 6;
@@ -1398,37 +1416,36 @@ fn spawn_supervisor(state: AppState) {
 
                     if let Some((command, rule)) = wanted {
                         {
-                            let known = state
-                                .permits
-                                .for_project(&agent.repository_id)
-                                .contains(&rule);
+                            // Whose yes this would be. A chief has no project,
+                            // so the grant belongs to the workspace it
+                            // commands — and the question says so, rather than
+                            // asking whether to let the empty string run
+                            // something.
+                            let home = crate::crew::home_of(
+                                &agent.repository_id,
+                                agent.workspace_id.as_deref(),
+                            );
+                            let whose = what_it_is_called(&state, &home);
+                            let known = state.permits.for_project(&home).contains(&rule);
 
-                            if !known
-                                && !state.approvals.already_asking(&agent.repository_id, &rule)
-                            {
+                            if !known && !state.approvals.already_asking(&home, &rule) {
                                 let asked = state.approvals.request_allow(
-                                    format!("Let {} run `{command}`?", agent.repository_id),
+                                    format!("Let {whose} run `{command}`?"),
                                     format!(
-                                        "{} stopped on it. Saying yes lets every agent in {} run \
-                                         that command from now on without asking; saying no leaves \
-                                         the question with {}.",
-                                        agent.name, agent.repository_id, agent.name
+                                        "{} stopped on it. Saying yes lets every agent in {whose} \
+                                         run that command from now on without asking; saying no \
+                                         leaves the question with {}.",
+                                        agent.name, agent.name
                                     ),
                                     crate::approvals::AllowCommand {
-                                        repository_id: agent.repository_id.clone(),
+                                        repository_id: home.clone(),
                                         rule: rule.clone(),
                                         agent_id: agent.id.clone(),
                                     },
                                 );
 
                                 if asked.is_ok() {
-                                    state.journal.write(
-                                        "permit.asked",
-                                        &agent.id,
-                                        &agent.repository_id,
-                                        &command,
-                                        now,
-                                    );
+                                    state.journal.write("permit.asked", &agent.id, &home, &command, now);
                                 }
                             }
                         }
@@ -4863,6 +4880,21 @@ fn where_it_sits(state: &AppState, agent: &Agent) -> Result<PathBuf, ApiError> {
         })
         .map(|entry| entry.worktree.path)
         .ok_or_else(|| ApiError(anyhow::anyhow!("{}'s worktree is gone", agent.name)))
+}
+
+/// What a project or a workspace is called, for a sentence a person reads.
+fn what_it_is_called(state: &AppState, id: &str) -> String {
+    if let Some(repository) = state.repos.repositories().into_iter().find(|held| held.id == id) {
+        return repository.name;
+    }
+
+    state
+        .workspaces
+        .list()
+        .into_iter()
+        .find(|held| held.id == id)
+        .map(|workspace| format!("the {} workspace", workspace.name))
+        .unwrap_or_else(|| id.to_owned())
 }
 
 fn workspace_called(state: &AppState, id: &str) -> Result<Workspace, ApiError> {

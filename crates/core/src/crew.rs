@@ -878,12 +878,9 @@ impl Crew {
             // project says about how it is tested. `bash tests/run.sh` is a
             // rule only ccdo gets, because only ccdo keeps that file.
             let mut declared = crate::permits::declared_in(worktree_path);
-            declared.extend(self.learned.lock().get(&agent.repository_id).cloned().unwrap_or_default());
-            let file = folder.join(format!(
-                "{}-{}.json",
-                slugify(&agent.role),
-                slugify(&home_of(&agent.repository_id, agent.workspace_id.as_deref()))
-            ));
+            let home = home_of(&agent.repository_id, agent.workspace_id.as_deref());
+            declared.extend(self.learned.lock().get(&home).cloned().unwrap_or_default());
+            let file = folder.join(format!("{}-{}.json", slugify(&agent.role), slugify(&home)));
 
             if fs::create_dir_all(&folder).is_ok()
                 && fs::write(
