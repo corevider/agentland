@@ -4,7 +4,37 @@ An open-source desktop workspace where a named crew of CLI coding agents works i
 real git worktrees — each agent with its own branch, its own running dev server, and a preview beside
 the diff.
 
-Status: **M7 — approvals reach the phone.** 289 core tests and 189 in the window. M0 passed and Tauri is confirmed by measurement; M1 shipped worktrees, ports and per-worktree dev servers; M2 hires agents and runs their engines; the board now carries a card from assignment to a diff.
+Status: **M7 — approvals reach the phone.** 489 core tests and 282 in the window. M0 passed and Tauri is confirmed by measurement; M1 shipped worktrees, ports and per-worktree dev servers; M2 hires agents and runs their engines; the board now carries a card from assignment to a diff.
+
+## What it looks like
+
+A crew is named, given an engine and a worktree each, and hired. Nobody is
+running here — starting an agent is a decision, not a side effect of hiring one.
+
+![The crew panel: Ada, Kai and Wren, each with an engine, a model and a worktree of their own](docs/the-crew.png)
+
+Work is cards. A card carries the project it belongs to, moves through the
+columns as it is picked up, and ends beside the diff it produced.
+
+![The board: cards in backlog, review and done across two projects](docs/the-board.png)
+
+What the crew has learned is one line at a time, and no agent is told any of it
+until a person says yes. An agent proposes; you approve, revoke or forget.
+
+![The memory panel: one proposal waiting on a human, three memories in force](docs/what-the-crew-remembers.png)
+
+Notes live in a folder of markdown with `[[links]]` between them — the same
+folder Obsidian opens, on your own disk. The check reads the whole vault and
+says what has gone wrong in it: links reaching nothing, notes nothing points at,
+proposals nobody answered, corrections that left both sides in force.
+
+![The notes panel with the vault check open, naming two notes nothing points at](docs/checking-the-vault.png)
+
+These four are made by `node scripts/shots.mjs`, which stands up a core of its
+own on its own port, seeds a crew that exists nowhere else, photographs the built
+interface in a headless browser and takes it all down again. Nobody's real
+repositories, cards or notes are in them, and re-running it after an interface
+change is how they stay true.
 
 ## Why M0 comes first
 
