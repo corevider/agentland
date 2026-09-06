@@ -31,8 +31,15 @@ const PORT = Number(process.env.SHOTS_CORE_PORT ?? 9491);
 const SITE = Number(process.env.SHOTS_SITE_PORT ?? 5274);
 const CHROME = Number(process.env.SHOTS_CHROME_PORT ?? 9339);
 const TOKEN = "shots";
-const WIDTH = 1500;
-const HEIGHT = 940;
+
+// A picture in a README is shown at the width of a column of prose — around 840
+// pixels on GitHub, and less on a phone. A 1500-pixel window scaled into that
+// turns every label in the interface into a smear, which is a picture of
+// nothing. So the window is narrow, the pixels are doubled for sharpness, and
+// each view is given only the height it fills.
+const WIDTH = 1180;
+const HEIGHT = 820;
+const SHARPNESS = 2;
 
 const rest = (ms) => new Promise((go) => setTimeout(go, ms));
 const say = (words) => console.log(`  ${words}`);
@@ -268,6 +275,18 @@ class Window {
         `);
     }
 
+    /// Give the window the height this view actually fills, so the picture is
+    /// the interface rather than the interface and a field of empty panel.
+    async fit(height) {
+        await this.send("Emulation.setDeviceMetricsOverride", {
+            width: WIDTH,
+            height,
+            deviceScaleFactor: SHARPNESS,
+            mobile: false,
+        });
+        await rest(700);
+    }
+
     async shoot(name) {
         const shot = await this.send("Page.captureScreenshot", { format: "png" });
         const path = join(shelf, `${name}.png`);
@@ -379,18 +398,24 @@ try {
     // The island draws an agent once its pane is running, and starting a pane
     // starts a real engine. The crew list says who has been hired without
     // spending anybody's tokens to say it.
+    // Tall enough that the list of views ends where it ends, rather than being
+    // sliced through the middle of a word.
     await show("crew");
+    await window.fit(600);
     await window.shoot("the-crew");
 
     await show("board");
+    await window.fit(600);
     await window.shoot("the-board");
 
     await show("memory");
+    await window.fit(600);
     await window.shoot("what-the-crew-remembers");
 
     await show("notes");
     await window.click("check");
     await rest(2000);
+    await window.fit(760);
     await window.shoot("checking-the-vault");
 
     window.close();
