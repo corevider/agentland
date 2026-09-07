@@ -145,6 +145,21 @@ export function TerminalsPanel({ active }: { active: boolean }) {
         [services.crew],
     );
 
+    /// Put a pane the grid is not showing back into it: one that was hidden and
+    /// kept running, or one living in a window of its own. Closing that window
+    /// is what "back in the grid" means for the second, and a no-op for the
+    /// first — a pane with no window of its own has none to close.
+    const bring_back = useCallback(
+        (id: string) => {
+            set_window(id, { holder: "grid" })
+                .then(set_views)
+                .then(() => (is_tauri() ? invoke("close_pane_window", { sessionId: id }) : undefined))
+                .catch(() => undefined);
+            services.open_session(id);
+        },
+        [services],
+    );
+
     const name_of = useCallback(
         (id: string) =>
             views[id]?.title || services.crew.find((agent) => agent.session_id === id)?.name || id,
@@ -217,21 +232,42 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                 Object.values(live),
                 services.sessions,
                 (id) => views[id]?.holder,
-            ).filter((entry) => {
+            );
+
+            const mine = (entry: SessionInfo) => {
                 const held = agent_of(entry.id);
                 return (
                     !held || !services.repositories || services.repositories.includes(held.repository_id)
                 );
-            });
+            };
 
-            if (waiting.length > 0) {
-                items.push({ label: "still running, not on screen", disabled: true });
-                for (const entry of waiting) {
-                    const held = agent_of(entry.id);
+            const said = (entry: SessionInfo) => {
+                const held = agent_of(entry.id);
+                return held ? held.title || held.name : entry.command.split(/\s+/)[0];
+            };
+
+            // A pane in a window of its own is on screen, but not in the grid,
+            // and the card offering it back sits on whichever page of the grid
+            // it left behind. This is the way back that does not depend on
+            // finding that card.
+            const elsewhere = Object.values(live).filter(
+                (entry) => views[entry.id]?.holder === "window" && mine(entry),
+            );
+
+            for (const [heading, group] of [
+                ["still running, not on screen", waiting.filter(mine)],
+                ["in a window of its own", elsewhere],
+            ] as [string, SessionInfo[]][]) {
+                if (group.length === 0) {
+                    continue;
+                }
+
+                items.push({ label: heading, disabled: true });
+                for (const entry of group) {
                     items.push({
-                        label: held ? held.title || held.name : entry.command.split(/\s+/)[0],
+                        label: said(entry),
                         hint: place_label(entry.cwd, known.repos, known.trees) ?? undefined,
-                        run: () => services.open_session(entry.id),
+                        run: () => bring_back(entry.id),
                     });
                 }
             }
@@ -321,7 +357,7 @@ export function TerminalsPanel({ active }: { active: boolean }) {
 
             services.open_menu(at, "Another shell", items);
         },
-        [agent_of, known, live, refresh_places, services, views],
+        [agent_of, bring_back, known, live, refresh_places, services, views],
     );
 
     // The engines are probed by running each one, so they are read when the
@@ -922,25 +958,13 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                         transition={{ duration: 0.14, ease: [0.2, 0, 0, 1] }}
                         className="flex min-h-0 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-reef bg-lagoon-deep p-3 text-center"
                     >
-                        <span className="text-[12px] text-shell">
-                            {services.crew.find((agent) => agent.session_id === session.id)?.name ??
-                                session.id}
-                        </span>
+                        <span className="text-[12px] text-shell">{name_of(session.id)}</span>
                         <span className="font-mono text-[10px] text-shade">
                             open in its own window
                         </span>
                         <button
                             className="mt-1 rounded border border-reef px-2 py-0.5 font-mono text-[10px] text-shell hover:border-foam"
-                            onClick={() => {
-                                set_window(session.id, { holder: "grid" })
-                                    .then(() =>
-                                        is_tauri()
-                                            ? invoke("close_pane_window", { sessionId: session.id })
-                                            : undefined,
-                                    )
-                                    .then(() => list_windows().then(set_views))
-                                    .catch(() => undefined);
-                            }}
+                            onClick={() => bring_back(session.id)}
                         >
                             bring it back
                         </button>
