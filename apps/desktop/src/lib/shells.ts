@@ -103,3 +103,21 @@ export function place_label(
 
     return here.worktree ? `${here.repository_id}/${here.worktree}` : here.repository_id;
 }
+
+/// Whether what a pane is called already says who is working in it.
+///
+/// The crew's name is put beside a pane's own only when the pane would
+/// otherwise not say it. Asking who set the name is the wrong question — the
+/// live commander names its own pane "X · commander", and a badge repeating
+/// that said the name and the role twice. Asking whether the name is in there
+/// holds however it got there.
+///
+/// Matched on whole words, so "Xavier" does not count as having named "X".
+export function names_the_agent(label: string | null | undefined, name: string | null | undefined): boolean {
+    if (!label || !name) {
+        return false;
+    }
+
+    const loose = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(^|\\W)${loose}($|\\W)`, "i").test(label);
+}

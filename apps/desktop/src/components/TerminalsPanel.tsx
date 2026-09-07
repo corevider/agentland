@@ -15,6 +15,7 @@ import {
     list_windows,
     open_cli,
     set_window,
+    shape_agent,
     spawn_default_shell,
     stop_agent,
     type Authority,
@@ -338,17 +339,34 @@ export function TerminalsPanel({ active }: { active: boolean }) {
         }
     }, [engines]);
 
+    /// A pane's name is kept wherever it can outlive the pane.
+    ///
+    /// Panes are the core's own children, so a core restart gives every one of
+    /// them a new id — a name filed under the old id would be lost, or worse,
+    /// land on whichever pane took that id next. An agent survives the restart
+    /// and comes back to a fresh pane, so its name is kept on the agent. A
+    /// shell nobody was hired into does not come back at all, and its name has
+    /// nothing to outlive.
     const rename_pane = useCallback(
         (title: string) => {
             if (!renaming) {
                 return;
             }
-            set_window(renaming.id, { title })
-                .then(set_views)
-                .catch(() => undefined);
+
+            const held = agent_of(renaming.id);
+            if (held) {
+                shape_agent(held.id, { title })
+                    .then(() => services.refresh_crew())
+                    .catch(() => undefined);
+            } else {
+                set_window(renaming.id, { title })
+                    .then(set_views)
+                    .catch(() => undefined);
+            }
+
             set_renaming(null);
         },
-        [renaming],
+        [agent_of, renaming, services],
     );
 
     const start_cli = useCallback(() => {
@@ -902,8 +920,8 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                         agent_of(session.id)?.name
                     }
                     place={place_label(session.cwd, known.repos, known.trees)}
-                    crew_name={views[session.id]?.title ? agent_of(session.id)?.name : undefined}
-                    crew_role={views[session.id]?.title ? agent_of(session.id)?.role : undefined}
+                    crew_name={agent_of(session.id)?.name}
+                    crew_role={agent_of(session.id)?.role}
                     crowned={(() => {
                         const role = services.crew.find(
                             (agent) => agent.session_id === session.id,

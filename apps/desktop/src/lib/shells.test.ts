@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { folder_name, place_label, places_in, settled_place, standing_of } from "@/lib/shells";
+import { folder_name, names_the_agent, place_label, places_in, settled_place, standing_of } from "@/lib/shells";
 
 const repos = [{ id: "svc", primary_path: "/home/ege/code/svc" }];
 const worktrees = [
@@ -94,5 +94,31 @@ describe("what a footer calls the folder a pane is in", () => {
 
     it("says nothing when the pane stands nowhere it knows of", () => {
         expect(place_label(null, repos, worktrees)).toBeNull();
+    });
+});
+
+describe("whether a pane already says who is in it", () => {
+    it("counts a name the pane's own title spells out", () => {
+        expect(names_the_agent("X · commander", "X")).toBe(true);
+        expect(names_the_agent("Vega", "Vega")).toBe(true);
+    });
+
+    it("does not count a longer word that merely starts with it", () => {
+        expect(names_the_agent("Xavier's branch", "X")).toBe(false);
+        expect(names_the_agent("Vegan menu", "Vega")).toBe(false);
+    });
+
+    it("says no for a name the pane does not mention", () => {
+        expect(names_the_agent("auth refactor", "Vega")).toBe(false);
+    });
+
+    it("is not thrown by a name with regex punctuation in it", () => {
+        expect(names_the_agent("c++ work", "c++")).toBe(true);
+        expect(names_the_agent("auth refactor", "c++")).toBe(false);
+    });
+
+    it("says no when there is nothing to compare", () => {
+        expect(names_the_agent(null, "Vega")).toBe(false);
+        expect(names_the_agent("auth refactor", null)).toBe(false);
     });
 });

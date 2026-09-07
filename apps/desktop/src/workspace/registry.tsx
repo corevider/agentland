@@ -55,6 +55,9 @@ export interface WorkspaceServices {
     open_shell_in: (cwd: string) => void;
     /// Take a pane the panel opened for itself into the workspace, focused.
     adopt_session: (created: SessionInfo) => void;
+    /// Read the crew again now, rather than waiting for the next poll to show
+    /// something the person just changed.
+    refresh_crew: () => void;
     focus_pane: (id: string) => void;
     focused_id: string | null;
     on_metrics: (id: string, value: PaneMetrics) => void;

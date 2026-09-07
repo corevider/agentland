@@ -6,6 +6,7 @@ import "@xterm/xterm/css/xterm.css";
 
 import { ReadablePane } from "@/components/ReadablePane";
 import { upgrade_soon } from "@/lib/gpu_queue";
+import { names_the_agent } from "@/lib/shells";
 import { SETTINGS_EVENT, load_settings, resolve_renderer, type Settings } from "@/lib/settings";
 import { detect_surface } from "@/lib/surface";
 import { use_poll } from "@/lib/poll";
@@ -53,10 +54,9 @@ interface Props {
     /// The folder this pane stands in, said the short way: a project, or a
     /// project and the worktree inside it.
     place?: string | null;
-    /// What the crew calls whoever is working in here — given only where a
-    /// person has renamed the pane over it, because that is the one case where
-    /// the name they are addressed by everywhere else is otherwise nowhere on
-    /// the pane. An agent's own name needs no repeating beside itself.
+    /// What the crew calls whoever is working in here. Shown only where the
+    /// pane's own name does not already say it — the name the crew is addressed
+    /// by everywhere else should be somewhere on the pane, and never twice.
     crew_name?: string | null;
     /// What that agent is for. A name says which one; a name and a role say
     /// what it is allowed to be doing, which is the thing a person is actually
@@ -495,7 +495,7 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
                 >
                     {label ?? session.id}
                 </span>
-                {crew_name && crew_name !== label ? (
+                {crew_name && !names_the_agent(label, crew_name) ? (
                     <span
                         className="shrink-0 rounded border border-reef px-1 py-[1px] font-mono text-[9px] text-shell"
                         title="who is working here, and what they are for"

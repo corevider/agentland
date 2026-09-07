@@ -630,14 +630,18 @@ export default function App() {
     const [crew_count, set_crew_count] = useState(0);
     const [card_count, set_card_count] = useState(0);
 
+    const refresh_crew = useCallback(() => {
+        list_agents()
+            .then((roster) => {
+                set_crew(roster);
+                set_crew_count(roster.length);
+            })
+            .catch(() => undefined);
+    }, []);
+
     useEffect(() => {
         const tick = () => {
-            list_agents()
-                .then((roster) => {
-                    set_crew(roster);
-                    set_crew_count(roster.length);
-                })
-                .catch(() => undefined);
+            refresh_crew();
             list_tasks()
                 .then((cards) => set_card_count(cards.filter((card) => card.column !== "done").length))
                 .catch(() => undefined);
@@ -657,7 +661,7 @@ export default function App() {
         tick();
         const handle = window.setInterval(tick, 5000);
         return () => window.clearInterval(handle);
-    }, []);
+    }, [refresh_crew]);
     const [zoomed_id, set_zoomed_id] = useState<string | null>(null);
     const shown_sessions = useMemo(() => {
         if (zoomed_id) {
@@ -767,6 +771,7 @@ export default function App() {
                     .catch((cause) => set_error(String(cause)));
             },
             adopt_session,
+            refresh_crew,
             focus_pane: set_focused_id,
             focused_id,
             on_metrics,
@@ -774,6 +779,7 @@ export default function App() {
         [
             adopt_session,
             close_session,
+            refresh_crew,
             crew,
             focused_id,
             going,
