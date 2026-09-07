@@ -897,6 +897,7 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                     })()}
                     place={place_label(session.cwd, known.repos, known.trees)}
                     crew_name={services.crew.find((agent) => agent.session_id === session.id)?.name}
+                    crew_role={services.crew.find((agent) => agent.session_id === session.id)?.role}
                     crowned={(() => {
                         const role = services.crew.find(
                             (agent) => agent.session_id === session.id,
