@@ -131,6 +131,11 @@ export function TerminalsPanel({ active }: { active: boolean }) {
             .catch(() => undefined);
     }, []);
 
+    const agent_of = useCallback(
+        (id: string) => services.crew.find((agent) => agent.session_id === id),
+        [services.crew],
+    );
+
     const name_of = useCallback(
         (id: string) =>
             views[id]?.title || services.crew.find((agent) => agent.session_id === id)?.name || id,
@@ -891,13 +896,14 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                 <TerminalPane
                     key={session.id}
                     session={session}
-                    label={(() => {
-                        const held = services.crew.find((agent) => agent.session_id === session.id);
-                        return views[session.id]?.title || held?.title || held?.name;
-                    })()}
+                    label={
+                        views[session.id]?.title ||
+                        agent_of(session.id)?.title ||
+                        agent_of(session.id)?.name
+                    }
                     place={place_label(session.cwd, known.repos, known.trees)}
-                    crew_name={services.crew.find((agent) => agent.session_id === session.id)?.name}
-                    crew_role={services.crew.find((agent) => agent.session_id === session.id)?.role}
+                    crew_name={views[session.id]?.title ? agent_of(session.id)?.name : undefined}
+                    crew_role={views[session.id]?.title ? agent_of(session.id)?.role : undefined}
                     crowned={(() => {
                         const role = services.crew.find(
                             (agent) => agent.session_id === session.id,

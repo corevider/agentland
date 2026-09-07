@@ -53,10 +53,10 @@ interface Props {
     /// The folder this pane stands in, said the short way: a project, or a
     /// project and the worktree inside it.
     place?: string | null;
-    /// What the crew calls whoever is working in here, where somebody is. Shown
-    /// beside the pane's name rather than instead of it: a pane called what a
-    /// person chose is a pane whose agent is otherwise nowhere on it, and the
-    /// crew is addressed by these names everywhere else.
+    /// What the crew calls whoever is working in here — given only where a
+    /// person has renamed the pane over it, because that is the one case where
+    /// the name they are addressed by everywhere else is otherwise nowhere on
+    /// the pane. An agent's own name needs no repeating beside itself.
     crew_name?: string | null;
     /// What that agent is for. A name says which one; a name and a role say
     /// what it is allowed to be doing, which is the thing a person is actually
