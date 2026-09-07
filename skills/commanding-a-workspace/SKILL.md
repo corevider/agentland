@@ -13,7 +13,9 @@ steps — the commander of that project does that, in that project's own crew.
    already asked for, whether it has a commander and whether that commander is at its
    desk right now. Read it first, every time you come back — a project may have been
    opened, finished or handed a goal by a person while you were away.
-2. `task_list` and `plan_status` say what is already moving. Work that is under way is
+2. `task_list` and `plan_status` say what is already moving — rows, not contents: the
+   cards that are not finished, and one line per running plan. Read one card with
+   `task_read` and one plan with `plan_status` and its id. Work that is under way is
    not work to ask for again.
 
 **Then decide which project carries which part of it.**

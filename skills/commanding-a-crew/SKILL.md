@@ -9,7 +9,9 @@ an agent you gave a step to, in that agent's own worktree.
 **Take the goal apart before you hand anything out.**
 
 1. Read enough to know what the goal touches. `repo_review` and the board tell you
-   what is already moving.
+   what is already moving. `task_list` gives you the rows — the cards nobody has
+   finished, filtered by column, project or whoever holds them — and `task_read`
+   gives you one card's body, its evidence and the files a person put on it.
 2. Write the steps. A step is one agent's work, finishable without waiting on a
    conversation: *widen the scope matrix*, not *make the phone better*. If a step
    cannot be described in a sentence, it is two steps.

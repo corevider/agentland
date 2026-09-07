@@ -70,6 +70,104 @@ fn unknown_author() -> String {
     "x".to_owned()
 }
 
+/// A plan as a list shows it: what it is for and how far along it is.
+///
+/// The steps are counted rather than listed. Fifteen plans with their steps came
+/// to 112 KB, which an engine saves to a file instead of answering with — and a
+/// commander that has to grep its own plans is not reading them. `plan_status`
+/// with an id still gives the whole plan, which is what reading one is for.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PlanAtAGlance {
+    pub id: String,
+    pub goal: String,
+    pub repository_id: String,
+    pub state: PlanState,
+    pub created_by: String,
+    pub done: usize,
+    pub steps: usize,
+    /// Steps that could start right now — nothing is waiting on them.
+    pub ready: usize,
+    pub blocked: usize,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct WhichPlans {
+    #[serde(default)]
+    pub repository_id: Option<String>,
+    /// Finished and abandoned plans are left out unless somebody asks: what a
+    /// crew is doing is a shorter list than what it has ever done.
+    #[serde(default)]
+    pub all: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PlansAtAGlance {
+    pub plans: Vec<PlanAtAGlance>,
+    pub of: usize,
+    pub says: String,
+}
+
+/// A goal is written for a person to read and can run to a paragraph; a list
+/// shows enough of it to tell two plans apart.
+const GOAL_AT_A_GLANCE: usize = 160;
+
+fn opening_of(goal: &str) -> String {
+    let trimmed = goal.trim();
+    if trimmed.chars().count() <= GOAL_AT_A_GLANCE {
+        return trimmed.to_owned();
+    }
+
+    let cut: String = trimmed.chars().take(GOAL_AT_A_GLANCE).collect();
+    format!("{cut}…")
+}
+
+pub fn at_a_glance(plans: Vec<Plan>, ask: &WhichPlans) -> PlansAtAGlance {
+    let of = plans.len();
+
+    let kept: Vec<PlanAtAGlance> = plans
+        .into_iter()
+        .filter(|plan| ask.all || plan.state == PlanState::Running)
+        .filter(|plan| {
+            ask.repository_id
+                .as_deref()
+                .is_none_or(|held| held == plan.repository_id)
+        })
+        .map(|plan| {
+            let (done, steps) = plan.progress();
+            PlanAtAGlance {
+                ready: plan.ready().len(),
+                blocked: plan
+                    .steps
+                    .iter()
+                    .filter(|step| step.state == StepState::Blocked)
+                    .count(),
+                id: plan.id,
+                goal: opening_of(&plan.goal),
+                repository_id: plan.repository_id,
+                state: plan.state,
+                created_by: plan.created_by,
+                done,
+                steps,
+            }
+        })
+        .collect();
+
+    let says = if ask.all {
+        format!("{} of {of} plans", kept.len())
+    } else {
+        format!(
+            "{} running, of {of} plans ever — pass all for the finished ones, or plan_id for one plan's steps",
+            kept.len()
+        )
+    };
+
+    PlansAtAGlance {
+        plans: kept,
+        of,
+        says,
+    }
+}
+
 impl Plan {
     /// The steps whose every dependency is done and which nobody is holding.
     pub fn ready(&self) -> Vec<&Step> {
@@ -393,6 +491,49 @@ mod tests {
             brief: format!("do the work for {title}"),
             needs: needs.iter().map(|name| (*name).to_owned()).collect(),
         }
+    }
+
+    #[test]
+    fn a_list_of_plans_counts_the_steps_rather_than_carrying_them() {
+        let held = plans("glance");
+        let made = held
+            .create(draft(vec![step("one", &[]), step("two", &["one"])]))
+            .expect("a plan");
+        held.mark(&made.id, &made.steps[0].id, StepState::Done, None).expect("done");
+
+        let shown = at_a_glance(held.list(), &WhichPlans::default());
+        let rendered = serde_json::to_string(&shown).expect("it serialises");
+
+        assert_eq!(shown.plans.len(), 1);
+        assert_eq!((shown.plans[0].done, shown.plans[0].steps), (1, 2));
+        assert_eq!(shown.plans[0].ready, 1, "the step that can start now");
+        assert!(!rendered.contains("do the work for"), "no step briefs: {rendered}");
+    }
+
+    #[test]
+    fn what_a_crew_is_doing_is_shorter_than_what_it_has_done() {
+        let held = plans("glance-running");
+        let finished = held.create(draft(vec![step("one", &[])])).expect("a plan");
+        held.mark(&finished.id, &finished.steps[0].id, StepState::Done, None).expect("done");
+        held.create(draft(vec![step("later", &[])])).expect("a second plan");
+
+        let running = at_a_glance(held.list(), &WhichPlans::default());
+        assert_eq!(running.plans.len(), 1, "the finished one is left out");
+        assert_eq!(running.of, 2, "and it still says how many there are");
+        assert!(running.says.contains("pass all"), "{}", running.says);
+
+        let everything = at_a_glance(held.list(), &WhichPlans { all: true, ..WhichPlans::default() });
+        assert_eq!(everything.plans.len(), 2);
+    }
+
+    #[test]
+    fn a_goal_written_as_a_paragraph_is_cut_where_a_row_ends() {
+        let long = "x".repeat(400);
+        let shown = opening_of(&long);
+
+        assert_eq!(shown.chars().count(), GOAL_AT_A_GLANCE + 1);
+        assert!(shown.ends_with('…'));
+        assert_eq!(opening_of("  short  "), "short");
     }
 
     #[test]

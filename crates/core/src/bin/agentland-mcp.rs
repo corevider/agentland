@@ -85,8 +85,26 @@ fn tools() -> Value {
     json!([
         {
             "name": "task_list",
-            "description": "List every card on the board with its column, assignee, branch and attachments. An attachment is a file a person put on the card — a screenshot, a design, a log — given as an absolute path on this machine: open and read it, it is part of what the card asks for, and quote the path in any brief you write for the card. A picture may carry marks — boxes, arrows, pins and labels a person drew on it, in the picture's pixels, with words — and a marked copy (derived_from names the original) with the marks numbered on it: read the copy, and treat each mark as a thing the person pointed at.",
-            "inputSchema": { "type": "object", "properties": {} }
+            "description": "The board as rows: each card's id, title, column, project, who holds it and how much is on it. Bodies, evidence and attachments are counted rather than listed — read one card with task_read. Finished cards are left out unless done is true. Says at the end how many matched and how many were left out; narrow with column, repository_id or assignee rather than raising limit past what you will read.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "column": { "type": "string", "description": "backlog, assigned, working, review, ready or done" },
+                    "repository_id": { "type": "string" },
+                    "assignee": { "type": "string", "description": "an agent id" },
+                    "done": { "type": "boolean", "description": "include finished cards" },
+                    "limit": { "type": "integer", "description": "how many rows, 40 by default" }
+                }
+            }
+        },
+        {
+            "name": "task_read",
+            "description": "One card in full: its body, every piece of evidence on it and the files a person attached. An attachment is a file a person put on the card — a screenshot, a design, a log — given as an absolute path on this machine: open and read it, it is part of what the card asks for, and quote the path in any brief you write for the card. A picture may carry marks — boxes, arrows, pins and labels a person drew on it, in the picture's pixels, with words — and a marked copy (derived_from names the original) with the marks numbered on it: read the copy, and treat each mark as a thing the person pointed at.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "task_id": { "type": "string" } },
+                "required": ["task_id"]
+            }
         },
         {
             "name": "task_create",
@@ -425,10 +443,14 @@ fn tools() -> Value {
         },
         {
             "name": "plan_status",
-            "description": "Read every plan with its steps, or one plan by id. Says what is done, what is running and what each waiting step is waiting for.",
+            "description": "One plan by id, with every step and what each waiting step is waiting for. Without an id: a row per running plan — its goal, how many steps are done and how many can start now. Pass all to see the finished and abandoned ones too.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "plan_id": { "type": "string" } }
+                "properties": {
+                    "plan_id": { "type": "string" },
+                    "repository_id": { "type": "string", "description": "only this project's plans" },
+                    "all": { "type": "boolean", "description": "include plans that are finished or abandoned" }
+                }
             }
         },
         {
@@ -511,7 +533,23 @@ fn call_tool(core: &Core, name: &str, arguments: &Value) -> Result<Value, String
     };
 
     match name {
-        "task_list" => core.call("GET", "/tasks", None),
+        "task_list" => {
+            let mut query: Vec<String> = Vec::new();
+            for field in ["column", "repository_id", "assignee"] {
+                if let Some(value) = arguments.get(field).and_then(Value::as_str) {
+                    query.push(format!("{field}={}", urlencode(value)));
+                }
+            }
+            if arguments.get("done").and_then(Value::as_bool) == Some(true) {
+                query.push("done=true".to_owned());
+            }
+            if let Some(limit) = arguments.get("limit").and_then(Value::as_u64) {
+                query.push(format!("limit={limit}"));
+            }
+
+            core.call("GET", &format!("/tasks/glance?{}", query.join("&")), None)
+        }
+        "task_read" => core.call("GET", &format!("/tasks/{}", urlencode(&text("task_id")?)), None),
         "plan_create" => core.call(
             "POST",
             "/plans",
@@ -523,8 +561,18 @@ fn call_tool(core: &Core, name: &str, arguments: &Value) -> Result<Value, String
             })),
         ),
         "plan_status" => match arguments.get("plan_id").and_then(Value::as_str) {
-            Some(id) => core.call("GET", &format!("/plans/{id}"), None),
-            None => core.call("GET", "/plans", None),
+            Some(id) => core.call("GET", &format!("/plans/{}", urlencode(id)), None),
+            None => {
+                let mut query: Vec<String> = Vec::new();
+                if let Some(value) = arguments.get("repository_id").and_then(Value::as_str) {
+                    query.push(format!("repository_id={}", urlencode(value)));
+                }
+                if arguments.get("all").and_then(Value::as_bool) == Some(true) {
+                    query.push("all=true".to_owned());
+                }
+
+                core.call("GET", &format!("/plans/glance?{}", query.join("&")), None)
+            }
         },
         "plan_ready" => core.call("GET", "/plans/ready", None),
         "plan_step_done" => {

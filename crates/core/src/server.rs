@@ -296,7 +296,8 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/agents/{id}/start", post(start_agent))
         .route("/agents/{id}/stop", post(stop_agent))
         .route("/tasks", get(list_tasks).post(create_task))
-        .route("/tasks/{id}", delete(delete_task).patch(edit_task))
+        .route("/tasks/glance", get(board_at_a_glance))
+        .route("/tasks/{id}", get(read_task).delete(delete_task).patch(edit_task))
         .route(
             "/tasks/{id}/attachments",
             post(attach_to_task).layer(axum::extract::DefaultBodyLimit::max(MOST_ATTACHMENT_BYTES)),
@@ -360,6 +361,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/workspaces/active", post(activate_workspace))
         .route("/workspaces/suggest", get(suggest_a_chief))
         .route("/plans", get(list_plans).post(create_plan))
+        .route("/plans/glance", get(plans_at_a_glance))
         .route("/plans/{id}", get(read_plan).delete(abandon_plan))
         .route("/plans/{id}/steps/{step}", post(mark_step))
         .route("/plans/ready", get(ready_steps))
@@ -2308,6 +2310,29 @@ struct AssignBody {
 
 async fn list_tasks(State(state): State<AppState>) -> Json<Vec<Task>> {
     Json(state.board.list())
+}
+
+/// The board as a list rather than as everything on it.
+///
+/// What the whole board is for is drawing it, and the window asks for that. An
+/// agent asking what there is gets rows: no bodies, no evidence, finished cards
+/// left out unless it says otherwise.
+async fn board_at_a_glance(
+    State(state): State<AppState>,
+    Query(ask): Query<crate::board::WhatToShow>,
+) -> Json<crate::board::BoardAtAGlance> {
+    Json(crate::board::at_a_glance(state.board.list(), &ask))
+}
+
+async fn read_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Task>, ApiError> {
+    state
+        .board
+        .get(&id)
+        .map(Json)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("there is no card called {id}")))
 }
 
 async fn create_task(
@@ -6821,6 +6846,14 @@ async fn supervisor_status(State(state): State<AppState>) -> Json<Vec<Watch>> {
 
 async fn list_plans(State(state): State<AppState>) -> Json<Vec<Plan>> {
     Json(state.plans.list())
+}
+
+/// Every plan as one row each: what it is for, and how far along.
+async fn plans_at_a_glance(
+    State(state): State<AppState>,
+    Query(ask): Query<crate::plans::WhichPlans>,
+) -> Json<crate::plans::PlansAtAGlance> {
+    Json(crate::plans::at_a_glance(state.plans.list(), &ask))
 }
 
 async fn create_plan(

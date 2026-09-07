@@ -259,6 +259,142 @@ pub struct Task {
     pub attachments: Vec<Attachment>,
 }
 
+/// A card as a list shows it: what it is, where it is and who has it.
+///
+/// Everything a card carries for the work itself — its body, the evidence
+/// attached to it, where files landed — is left out and counted instead. The
+/// whole board came to 135 KB on a crew that had been working for a week, which
+/// an engine hands to the model as a saved file rather than as an answer: the
+/// commander then read its own board with `grep`, a chunk at a time, asking
+/// permission for each chunk. A list says what there is; `task_read` says what
+/// one of them is about.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CardAtAGlance {
+    pub id: String,
+    pub title: String,
+    pub column: Column,
+    pub repository_id: String,
+    pub assignee: Option<String>,
+    pub worktree: Option<String>,
+    /// How much is on the card that this row is not showing.
+    pub evidence: usize,
+    pub attachments: usize,
+    pub at: u64,
+}
+
+/// What to show of a board, and how much of it.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct WhatToShow {
+    #[serde(default)]
+    pub column: Option<String>,
+    #[serde(default)]
+    pub repository_id: Option<String>,
+    #[serde(default)]
+    pub assignee: Option<String>,
+    /// Finished cards, which are most of a board that has been worked, are left
+    /// out unless somebody asks for them.
+    #[serde(default)]
+    pub done: bool,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BoardAtAGlance {
+    pub cards: Vec<CardAtAGlance>,
+    /// How many cards the board holds, before any of this was applied.
+    pub of: usize,
+    pub left_out: usize,
+    /// Said in words, because a number nobody reads is a number nobody acts on.
+    pub says: String,
+}
+
+const CARDS_AT_A_GLANCE: usize = 40;
+const MOST_CARDS: usize = 200;
+
+/// The order a person reads a board in: what is waiting first, what is finished
+/// last, and within a column whatever order the columns themselves are kept in.
+fn how_far_along(column: Column) -> u8 {
+    match column {
+        Column::Working => 0,
+        Column::Review => 1,
+        Column::Ready => 2,
+        Column::Assigned => 3,
+        Column::Backlog => 4,
+        Column::Done => 5,
+    }
+}
+
+pub fn at_a_glance(cards: Vec<Task>, ask: &WhatToShow) -> BoardAtAGlance {
+    let of = cards.len();
+    let wanted_column = ask
+        .column
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_lowercase);
+
+    let mut kept: Vec<Task> = cards
+        .into_iter()
+        .filter(|card| match &wanted_column {
+            Some(column) => format!("{:?}", card.column).to_lowercase() == *column,
+            // Asked for one column, that column is the answer even when it is
+            // the finished one.
+            None => ask.done || card.column != Column::Done,
+        })
+        .filter(|card| {
+            ask.repository_id
+                .as_deref()
+                .is_none_or(|held| held == card.repository_id)
+        })
+        .filter(|card| {
+            ask.assignee
+                .as_deref()
+                .is_none_or(|held| card.assignee.as_deref() == Some(held))
+        })
+        .collect();
+
+    kept.sort_by(|one, other| {
+        how_far_along(one.column)
+            .cmp(&how_far_along(other.column))
+            .then(one.position.total_cmp(&other.position))
+            .then(one.id.cmp(&other.id))
+    });
+
+    let matched = kept.len();
+    let limit = ask.limit.unwrap_or(CARDS_AT_A_GLANCE).clamp(1, MOST_CARDS);
+    let left_out = matched.saturating_sub(limit);
+
+    let says = if left_out == 0 {
+        format!("{matched} of {of} cards; nothing left out")
+    } else {
+        format!(
+            "{limit} of {matched} matching cards ({of} on the board); {left_out} left out —              narrow it with column, repository_id or assignee, or raise limit"
+        )
+    };
+
+    BoardAtAGlance {
+        cards: kept
+            .into_iter()
+            .take(limit)
+            .map(|card| CardAtAGlance {
+                id: card.id,
+                title: card.title,
+                column: card.column,
+                repository_id: card.repository_id,
+                assignee: card.assignee,
+                worktree: card.worktree,
+                evidence: card.evidence.len(),
+                attachments: card.attachments.len(),
+                at: card.at,
+            })
+            .collect(),
+        of,
+        left_out,
+        says,
+    }
+}
+
 impl Task {
     /// What an agent is told when it is handed this card.
     ///
@@ -950,6 +1086,130 @@ pub fn where_a_decided_card_goes(column: Column) -> Option<Column> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn card(id: &str, column: Column, repository: &str, assignee: Option<&str>) -> Task {
+        Task {
+            id: id.to_owned(),
+            title: format!("what {id} is for"),
+            body: "a paragraph nobody needs in a list".repeat(40),
+            column,
+            repository_id: repository.to_owned(),
+            assignee: assignee.map(str::to_owned),
+            worktree: Some("ada-tree".to_owned()),
+            branch: None,
+            evidence: vec![Entry {
+                what: Evidence::Note { text: "something happened".to_owned() },
+                by: "ada".to_owned(),
+                at: 1,
+            }],
+            at: 10,
+            position: 1.0,
+            attachments: Vec::new(),
+        }
+    }
+
+    fn a_board() -> Vec<Task> {
+        vec![
+            card("t1", Column::Done, "svc-demo", Some("ada")),
+            card("t2", Column::Backlog, "svc-demo", None),
+            card("t3", Column::Working, "ccdo", Some("kai")),
+            card("t4", Column::Review, "svc-demo", Some("ada")),
+        ]
+    }
+
+    #[test]
+    fn a_list_says_what_there_is_rather_than_everything_on_it() {
+        let shown = at_a_glance(a_board(), &WhatToShow::default());
+        let rendered = serde_json::to_string(&shown).expect("it serialises");
+
+        assert_eq!(shown.of, 4, "it says how big the board is");
+        assert_eq!(shown.cards.len(), 3, "and leaves the finished one out");
+        assert!(!rendered.contains("a paragraph nobody needs"), "no bodies: {rendered}");
+        assert_eq!(shown.cards[0].evidence, 1, "what is on the card is counted");
+    }
+
+    #[test]
+    fn what_is_moving_is_read_before_what_is_waiting() {
+        let shown = at_a_glance(a_board(), &WhatToShow::default());
+        let order: Vec<&str> = shown.cards.iter().map(|card| card.id.as_str()).collect();
+
+        assert_eq!(order, vec!["t3", "t4", "t2"], "working, then review, then backlog");
+    }
+
+    #[test]
+    fn a_column_asked_for_by_name_is_the_answer_even_when_it_is_the_finished_one() {
+        let shown = at_a_glance(
+            a_board(),
+            &WhatToShow {
+                column: Some("Done".to_owned()),
+                ..WhatToShow::default()
+            },
+        );
+
+        assert_eq!(shown.cards.len(), 1);
+        assert_eq!(shown.cards[0].id, "t1");
+    }
+
+    #[test]
+    fn a_project_or_an_agent_narrows_it() {
+        let mine = at_a_glance(
+            a_board(),
+            &WhatToShow {
+                repository_id: Some("svc-demo".to_owned()),
+                ..WhatToShow::default()
+            },
+        );
+        assert_eq!(mine.cards.len(), 2);
+
+        let held = at_a_glance(
+            a_board(),
+            &WhatToShow {
+                assignee: Some("kai".to_owned()),
+                done: true,
+                ..WhatToShow::default()
+            },
+        );
+        assert_eq!(held.cards.len(), 1);
+        assert_eq!(held.cards[0].id, "t3");
+    }
+
+    #[test]
+    fn what_was_left_out_is_said_rather_than_dropped_quietly() {
+        let shown = at_a_glance(
+            a_board(),
+            &WhatToShow {
+                limit: Some(1),
+                ..WhatToShow::default()
+            },
+        );
+
+        assert_eq!(shown.cards.len(), 1);
+        assert_eq!(shown.left_out, 2);
+        assert!(shown.says.contains("2 left out"), "{}", shown.says);
+        assert!(shown.says.contains("narrow it"), "and how to see the rest");
+    }
+
+    #[test]
+    fn a_limit_nobody_could_read_is_brought_back_to_one_that_fits() {
+        let huge = at_a_glance(
+            a_board(),
+            &WhatToShow {
+                limit: Some(100_000),
+                done: true,
+                ..WhatToShow::default()
+            },
+        );
+        assert_eq!(huge.cards.len(), 4, "asking for more than there is is not an error");
+
+        let none = at_a_glance(
+            a_board(),
+            &WhatToShow {
+                limit: Some(0),
+                ..WhatToShow::default()
+            },
+        );
+        assert_eq!(none.cards.len(), 1, "and nought still shows something");
+    }
 
     #[test]
     fn a_board_written_before_anyone_signed_their_work_still_opens() {
