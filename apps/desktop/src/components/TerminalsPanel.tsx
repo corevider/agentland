@@ -896,6 +896,7 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                         return views[session.id]?.title || held?.title || held?.name;
                     })()}
                     place={place_label(session.cwd, known.repos, known.trees)}
+                    crew_name={services.crew.find((agent) => agent.session_id === session.id)?.name}
                     crowned={(() => {
                         const role = services.crew.find(
                             (agent) => agent.session_id === session.id,
@@ -990,7 +991,7 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                                 return held
                                     ? [
                                           {
-                                              label: "Put this pane away",
+                                              label: "Hide this pane",
                                               hint: "it keeps running",
                                               run: () => services.close_session(session.id),
                                           },

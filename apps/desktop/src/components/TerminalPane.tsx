@@ -53,6 +53,11 @@ interface Props {
     /// The folder this pane stands in, said the short way: a project, or a
     /// project and the worktree inside it.
     place?: string | null;
+    /// What the crew calls whoever is working in here, where somebody is. Shown
+    /// beside the pane's name rather than instead of it: a pane called what a
+    /// person chose is a pane whose agent is otherwise nowhere on it, and the
+    /// crew is addressed by these names everywhere else.
+    crew_name?: string | null;
     /// A commander: of a project, or of the whole workspace. Marked because it
     /// is the one to talk to — it hands the work out and everybody else is
     /// working to what it decided.
@@ -100,7 +105,7 @@ function collapse_to_tail(data: Uint8Array): Uint8Array {
     return result;
 }
 
-export function TerminalPane({ session, crowned, kept = false, focused, on_focus, on_metrics, label, place, on_close, on_zoom, zoomed, on_add, on_tear_out, readable = false, on_readable, on_menu, stats_from, now_from, on_pick_up, on_drop_on, wanted = false }: Props) {
+export function TerminalPane({ session, crowned, kept = false, focused, on_focus, on_metrics, label, place, crew_name, on_close, on_zoom, zoomed, on_add, on_tear_out, readable = false, on_readable, on_menu, stats_from, now_from, on_pick_up, on_drop_on, wanted = false }: Props) {
     const host_ref = useRef<HTMLDivElement>(null);
     const screen_ref = useRef<Terminal | null>(null);
     const gpu_ref = useRef<WebglAddon | null>(null);
@@ -486,6 +491,14 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
                 >
                     {label ?? session.id}
                 </span>
+                {crew_name && crew_name !== label ? (
+                    <span
+                        className="shrink-0 rounded border border-reef px-1 py-[1px] font-mono text-[9px] text-shell"
+                        title="what the crew calls whoever is working here"
+                    >
+                        {crew_name}
+                    </span>
+                ) : null}
                 <span className="shrink-0 rounded bg-lagoon px-1 py-[1px] font-mono text-[9px] text-shade">
                     {session.command.split(/\s+/)[0]}
                 </span>
