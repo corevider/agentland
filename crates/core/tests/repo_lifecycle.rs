@@ -161,3 +161,116 @@ fn a_checkout_that_is_gone_says_so_instead_of_failing_in_git() {
 
     assert!(refused.to_string().contains("is gone"), "{refused}");
 }
+
+fn rust_project(base: &PathBuf) -> PathBuf {
+    let repo_path = base.join("demo");
+    fs::create_dir_all(&repo_path).unwrap();
+    git(&["init", "-q", "-b", "main"], &repo_path);
+    git(&["config", "user.email", "test@example.com"], &repo_path);
+    git(&["config", "user.name", "test"], &repo_path);
+    fs::write(
+        repo_path.join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    git(&["add", "-A"], &repo_path);
+    git(&["commit", "-qm", "init"], &repo_path);
+    repo_path
+}
+
+#[test]
+fn worktrees_of_one_project_compile_into_one_build_directory() {
+    let base = scratch("shared-build-cache");
+    let repo_path = rust_project(&base);
+
+    let registry = RepoRegistry::new(base.join("data"));
+    registry.register(&repo_path).expect("register");
+    let first = registry.create_worktree("demo", "work1").expect("first");
+    let second = registry.create_worktree("demo", "work2").expect("second");
+
+    let config = |worktree: &PathBuf| {
+        fs::read_to_string(worktree.join(".cargo").join("config.toml")).expect("cargo config")
+    };
+
+    let written = config(&first.path);
+    assert_eq!(
+        written,
+        config(&second.path),
+        "both worktrees are pointed at the same build directory"
+    );
+
+    let target = written
+        .split('"')
+        .nth(1)
+        .expect("the config names a directory")
+        .to_owned();
+    assert!(
+        PathBuf::from(&target).is_dir(),
+        "the shared build directory is made, not merely named: {target}"
+    );
+    assert!(
+        target.contains("caches") && target.ends_with("cargo-target"),
+        "it lives in Agentland's own cache, away from either checkout: {target}"
+    );
+
+    let status = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&first.path)
+        .output()
+        .expect("git");
+    assert!(
+        String::from_utf8_lossy(&status.stdout).trim().is_empty(),
+        "the config Agentland wrote is not work the agent has to explain"
+    );
+
+    registry.remove_worktree("demo", "work1", true).expect("remove");
+    registry.remove_worktree("demo", "work2", true).expect("remove");
+    registry.forget("demo").expect("forget");
+    assert!(
+        !PathBuf::from(&target).exists(),
+        "a forgotten project leaves no gigabytes behind"
+    );
+}
+
+#[test]
+fn a_project_that_chose_its_own_build_directory_keeps_it() {
+    let base = scratch("own-cargo-config");
+    let repo_path = rust_project(&base);
+    let theirs = "[build]\ntarget-dir = \"somewhere-they-picked\"\n";
+    fs::create_dir_all(repo_path.join(".cargo")).unwrap();
+    fs::write(repo_path.join(".cargo").join("config.toml"), theirs).unwrap();
+    git(&["add", "-A"], &repo_path);
+    git(&["commit", "-qm", "cargo config"], &repo_path);
+
+    let registry = RepoRegistry::new(base.join("data"));
+    registry.register(&repo_path).expect("register");
+    let worktree = registry.create_worktree("demo", "work1").expect("worktree");
+
+    assert_eq!(
+        fs::read_to_string(worktree.path.join(".cargo").join("config.toml")).unwrap(),
+        theirs,
+        "a config the project ships is not overwritten"
+    );
+}
+
+#[test]
+fn a_project_with_no_cargo_manifest_is_left_as_it_is() {
+    let base = scratch("no-cargo");
+    let repo_path = base.join("demo");
+    fs::create_dir_all(&repo_path).unwrap();
+    git(&["init", "-q", "-b", "main"], &repo_path);
+    git(&["config", "user.email", "test@example.com"], &repo_path);
+    git(&["config", "user.name", "test"], &repo_path);
+    fs::write(repo_path.join("package.json"), "{}").unwrap();
+    git(&["add", "-A"], &repo_path);
+    git(&["commit", "-qm", "init"], &repo_path);
+
+    let registry = RepoRegistry::new(base.join("data"));
+    registry.register(&repo_path).expect("register");
+    let worktree = registry.create_worktree("demo", "work1").expect("worktree");
+
+    assert!(
+        !worktree.path.join(".cargo").exists(),
+        "nothing here builds with cargo, so nothing here is configured for it"
+    );
+}

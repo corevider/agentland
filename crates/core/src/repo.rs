@@ -209,6 +209,7 @@ impl RepoRegistry {
             if worktree.path.exists() {
                 write_mcp_config(&worktree.path, &data_dir);
                 trust_the_folder(&worktree.path);
+                share_the_build_cache(&worktree.path, &cache_root(&data_dir, &worktree.repository_id));
             }
         }
 
@@ -366,11 +367,15 @@ impl RepoRegistry {
         self.register(&target)
     }
 
-    /// Stop tracking a project. The folder on disk is not touched.
+    /// Stop tracking a project. The checkout on disk is not touched.
     ///
     /// Opening the wrong folder is a normal mistake and has to be undoable, but
     /// a project with worktrees cut from it is not forgotten by accident: those
     /// are branches someone is working on, so they have to go first.
+    ///
+    /// The build directory Agentland kept for the project does go. It is
+    /// Agentland's own, it is measured in gigabytes, and once the project is
+    /// forgotten nothing left on screen would ever name it again.
     pub fn forget(&self, id: &str) -> Result<()> {
         let mut state = self.state.lock();
         if !state.repositories.contains_key(id) {
@@ -394,6 +399,7 @@ impl RepoRegistry {
 
         state.repositories.remove(id);
         self.persist(&state);
+        let _ = fs::remove_dir_all(cache_root(&self.data_dir, id));
         Ok(())
     }
 
@@ -483,6 +489,7 @@ impl RepoRegistry {
         let port = self.ports.allocate(&key)?;
         write_mcp_config(&path, &self.data_dir);
         trust_the_folder(&path);
+        share_the_build_cache(&path, &cache_root(&self.data_dir, repository_id));
         let worktree = Worktree {
             name: name.to_owned(),
             repository_id: repository_id.to_owned(),
@@ -861,6 +868,61 @@ fn trust_our_own_tools(worktree: &Path) {
     }
 
     exclude_from_git(worktree, ".claude/settings.local.json");
+}
+
+/// Where the build artefacts of one project live, whichever worktree made them.
+fn cache_root(data_dir: &Path, repository_id: &str) -> PathBuf {
+    data_dir.join("caches").join(repository_id)
+}
+
+/// Point cargo at one build directory per project, shared by every worktree cut
+/// from it.
+///
+/// `git worktree add` copies nothing git does not track, so a new worktree
+/// starts with no build directory at all and the agent in it compiles the whole
+/// dependency graph again into a directory of its own. That is the largest
+/// thing on the disk by a distance — the debug artefacts of this checkout alone
+/// run to 145 GB — so N agents cost N of it.
+///
+/// Sharing one is cargo's own supported arrangement rather than a trick: it
+/// takes a lock on a build directory, so two agents building at once queue
+/// instead of racing, and the second finds the dependencies already compiled.
+/// Queuing on a warm directory beats compiling in parallel from cold.
+///
+/// Two projects deliberately get nothing here. A worktree with no `Cargo.toml`
+/// at its root has no cargo build to share, and a project carrying a cargo
+/// config of its own is left alone: that config would have to be merged rather
+/// than replaced, and a build directory somebody chose outranks this one.
+fn share_the_build_cache(worktree: &Path, cache_root: &Path) {
+    if !worktree.join("Cargo.toml").is_file() {
+        return;
+    }
+
+    let folder = worktree.join(".cargo");
+    if folder.join("config.toml").exists() || folder.join("config").exists() {
+        return;
+    }
+
+    let target = cache_root.join("cargo-target");
+    if fs::create_dir_all(&target).is_err() || fs::create_dir_all(&folder).is_err() {
+        return;
+    }
+
+    let rendered = format!(
+        "[build]\ntarget-dir = {}\n",
+        as_toml_string(&crate::exec::settled(&target).to_string_lossy())
+    );
+
+    if fs::write(folder.join("config.toml"), rendered).is_ok() {
+        exclude_from_git(worktree, ".cargo/config.toml");
+    }
+}
+
+/// A path as a TOML basic string. Windows spells its paths with the one
+/// character TOML reads as an escape, so writing one in raw would produce a
+/// config cargo refuses to parse.
+fn as_toml_string(text: &str) -> String {
+    format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 fn exclude_from_git(worktree: &Path, pattern: &str) {
