@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 
 import { AgentSheet } from "@/components/AgentSheet";
+import { photograph } from "@/lib/capture";
 import { Island } from "@/island/Island";
 import { PRESENCE_COLOR, tier_for } from "@/island/geometry";
 import { color_of, plan_to_show, type FlowStep } from "@/island/plan_flow";
@@ -195,11 +196,7 @@ export function IslandPanel({ active, on_open_session }: Props) {
             invalidate_ref.current?.();
             await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
-            const { toPng } = await import("html-to-image");
-            data = await toPng(document.getElementById("root") as HTMLElement, {
-                pixelRatio: 1,
-                backgroundColor: "#0d1c1f",
-            });
+            data = await photograph(document.getElementById("root") as HTMLElement, "#0d1c1f");
         } else {
             const canvas = container_ref.current?.querySelector("canvas");
             if (!canvas) {

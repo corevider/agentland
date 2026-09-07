@@ -2,6 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 
 import { BoardPanel } from "@/components/BoardPanel";
 import { ContextMenu, useContextMenu } from "@/components/ContextMenu";
+import { photograph } from "@/lib/capture";
 import { Workspace } from "@/workspace/Workspace";
 import {
     focus_panel as focus_panel_in,
@@ -508,8 +509,7 @@ export default function App() {
 
             void (async () => {
                 try {
-                    const { toPng } = await import("html-to-image");
-                    const data = await toPng(document.body, { pixelRatio: 1 });
+                    const data = await photograph(document.body);
 
                     if (!is_tauri()) {
                         return;
