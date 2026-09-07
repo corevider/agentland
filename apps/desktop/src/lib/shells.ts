@@ -66,3 +66,18 @@ export function places_in(
 
     return places;
 }
+
+/// The place a form should be holding, given what it holds and what it offers.
+///
+/// A `<select>` whose value matches none of its options renders the first one
+/// and keeps the other, so the form reads as one place while carrying another.
+/// That shipped: the place shown was a live worktree, the place held was a
+/// checkout deleted from disk, and starting there failed on a path the person
+/// had never chosen. Anything not on offer becomes the first thing that is.
+export function settled_place(wanted: string, offered: Place[]): string {
+    if (offered.length === 0) {
+        return wanted;
+    }
+
+    return offered.some((place) => place.path === wanted) ? wanted : offered[0].path;
+}

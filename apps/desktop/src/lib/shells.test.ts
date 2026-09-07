@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { folder_name, places_in, standing_of } from "@/lib/shells";
+import { folder_name, places_in, settled_place, standing_of } from "@/lib/shells";
 
 const repos = [{ id: "svc", primary_path: "/home/ege/code/svc" }];
 const worktrees = [
@@ -60,5 +60,21 @@ describe("where a CLI can open", () => {
 
     it("offers nothing for a project it has never heard of", () => {
         expect(places_in(known, "nobody")).toEqual([]);
+    });
+});
+
+describe("the place a form is holding", () => {
+    it("keeps a place that is on offer", () => {
+        expect(settled_place("/data/worktrees/svc/x-desk", places_in(known, "svc"))).toBe(
+            "/data/worktrees/svc/x-desk",
+        );
+    });
+
+    it("replaces a place that is not, so the form cannot read as one and hold another", () => {
+        expect(settled_place("/home/ege/code/deleted", places_in(known, "svc"))).toBe("/home/ege/code/svc");
+    });
+
+    it("leaves the value alone when there is nothing to offer instead", () => {
+        expect(settled_place("/home/ege/code/gone", places_in(known, "gone"))).toBe("/home/ege/code/gone");
     });
 });

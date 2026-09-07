@@ -36,7 +36,11 @@ import {
     tracks_for,
 } from "@/lib/grid";
 import { apply_order, move_onto, order_of, prune_order } from "@/lib/order";
-import { folder_name, places_in, standing_of } from "@/lib/shells";
+import { folder_name, places_in, settled_place, standing_of, type Place } from "@/lib/shells";
+
+/// The place that is not a folder yet. No path is ever the empty string, so it
+/// can stand for "cut a new worktree" without colliding with a real one.
+const A_NEW_WORKTREE = "";
 import { use_services } from "@/workspace/registry";
 
 const SIZES_KEY = "agentland-pane-grid-2";
@@ -138,6 +142,7 @@ export function TerminalsPanel({ active }: { active: boolean }) {
     const [starting, set_starting] = useState<{
         repository_id: string;
         cwd: string;
+        name: string;
         engine_id: string;
         authority: Authority;
         x: number;
@@ -232,6 +237,7 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                         set_starting({
                             repository_id: standing.repository_id,
                             cwd: standing.path,
+                            name: "",
                             engine_id: "",
                             authority: "own",
                             x: at.clientX,
@@ -252,6 +258,35 @@ export function TerminalsPanel({ active }: { active: boolean }) {
 
     // The engines are probed by running each one, so they are read when the
     // form opens rather than kept fresh against a poll nobody is watching.
+    // Where this project's CLI could open: its folders that are actually there,
+    // and a worktree it has not cut yet.
+    const cli_places = useMemo((): Place[] => {
+        if (!starting) {
+            return [];
+        }
+
+        const held = places_in(known, starting.repository_id);
+        const project = known.repos.find((repo) => repo.id === starting.repository_id);
+
+        return project && !project.missing
+            ? [...held, { path: A_NEW_WORKTREE, label: "new worktree…" }]
+            : held;
+    }, [known, starting]);
+
+    // A select whose value is none of its options shows the first one and holds
+    // the other, so the form read "ada-tree" while carrying the path of a
+    // checkout that had been deleted — and start sent the deleted one. The
+    // value is corrected to something actually offered instead.
+    useEffect(() => {
+        set_starting((held) => {
+            if (!held || cli_places.length === 0) {
+                return held;
+            }
+            const settled = settled_place(held.cwd, cli_places);
+            return settled === held.cwd ? held : { ...held, cwd: settled };
+        });
+    }, [cli_places]);
+
     const cli_form_open = starting !== null;
     useEffect(() => {
         if (!cli_form_open) {
@@ -276,12 +311,22 @@ export function TerminalsPanel({ active }: { active: boolean }) {
             return;
         }
         const wanted = starting;
-        open_cli({
-            engine_id: wanted.engine_id,
-            cwd: wanted.cwd,
-            authority: wanted.authority,
-            repository_id: wanted.repository_id,
-        })
+        set_starting_error(null);
+
+        const place =
+            wanted.cwd === A_NEW_WORKTREE
+                ? create_worktree(wanted.repository_id, wanted.name.trim()).then((made) => made.path)
+                : Promise.resolve(wanted.cwd);
+
+        place
+            .then((cwd) =>
+                open_cli({
+                    engine_id: wanted.engine_id,
+                    cwd,
+                    authority: wanted.authority,
+                    repository_id: wanted.repository_id,
+                }),
+            )
             .then((created) => {
                 set_starting(null);
                 services.adopt_session(created);
@@ -509,11 +554,13 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                             className="min-w-0 flex-1 rounded border border-reef bg-lagoon px-1.5 py-1 font-mono text-[11px] text-linen"
                             value={starting.repository_id}
                             onChange={(event) => {
-                                const repo = known.repos.find((held) => held.id === event.target.value);
+                                const wanted = event.target.value;
+                                const offered = places_in(known, wanted);
                                 set_starting({
                                     ...starting,
-                                    repository_id: event.target.value,
-                                    cwd: repo?.primary_path ?? starting.cwd,
+                                    repository_id: wanted,
+                                    cwd: offered[0]?.path ?? A_NEW_WORKTREE,
+                                    name: "",
                                 });
                             }}
                         >
@@ -527,18 +574,48 @@ export function TerminalsPanel({ active }: { active: boolean }) {
 
                     <label className="flex items-center gap-2">
                         <span className="w-16 shrink-0 font-mono text-[10px] text-shade">place</span>
-                        <select
-                            className="min-w-0 flex-1 rounded border border-reef bg-lagoon px-1.5 py-1 font-mono text-[11px] text-linen"
-                            value={starting.cwd}
-                            onChange={(event) => set_starting({ ...starting, cwd: event.target.value })}
-                        >
-                            {places_in(known, starting.repository_id).map((place) => (
-                                <option key={place.path} value={place.path}>
-                                    {place.label}
-                                </option>
-                            ))}
-                        </select>
+                        {cli_places.length === 0 ? (
+                            <span className="min-w-0 flex-1 font-mono text-[11px] text-coral">
+                                nowhere to open — its checkout is gone and it has no worktrees
+                            </span>
+                        ) : (
+                            <select
+                                className="min-w-0 flex-1 rounded border border-reef bg-lagoon px-1.5 py-1 font-mono text-[11px] text-linen"
+                                value={starting.cwd}
+                                onChange={(event) => set_starting({ ...starting, cwd: event.target.value })}
+                            >
+                                {cli_places.map((place) => (
+                                    <option key={place.path} value={place.path}>
+                                        {place.label}
+                                    </option>
+                                ))}
+                            </select>
+                        )}
                     </label>
+
+                    {starting.cwd === A_NEW_WORKTREE ? (
+                        <label className="flex items-center gap-2">
+                            <span className="w-16 shrink-0 font-mono text-[10px] text-shade">named</span>
+                            <input
+                                autoFocus
+                                className="min-w-0 flex-1 rounded border border-reef bg-lagoon px-2 py-1 font-mono text-[11px] text-linen"
+                                placeholder="a name, e.g. spike"
+                                value={starting.name}
+                                onChange={(event) => set_starting({ ...starting, name: event.target.value })}
+                                onKeyDown={(event) => {
+                                    if (event.key === "Enter") {
+                                        start_cli();
+                                    }
+                                }}
+                            />
+                        </label>
+                    ) : null}
+
+                    {known.repos.find((repo) => repo.id === starting.repository_id)?.missing ? (
+                        <span className="font-mono text-[10px] text-shade">
+                            its main checkout is gone from disk, so only its worktrees are offered
+                        </span>
+                    ) : null}
 
                     <label className="flex items-center gap-2">
                         <span className="w-16 shrink-0 font-mono text-[10px] text-shade">program</span>
@@ -591,7 +668,11 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                         </button>
                         <button
                             className="rounded border border-turquoise px-2 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40"
-                            disabled={!starting.engine_id}
+                            disabled={
+                                !starting.engine_id ||
+                                cli_places.length === 0 ||
+                                (starting.cwd === A_NEW_WORKTREE && !starting.name.trim())
+                            }
                             onClick={start_cli}
                         >
                             start
