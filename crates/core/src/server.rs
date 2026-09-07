@@ -286,6 +286,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/repos/{id}", delete(forget_repo))
         .route("/repos/{id}/worktrees", get(list_worktrees).post(create_worktree))
         .route("/repos/{id}/worktrees/{name}", delete(remove_worktree))
+        .route("/worktrees", get(list_places))
         .route("/ports", get(list_ports))
         .route("/services", get(list_services))
         .route("/engines", get(list_engines))
@@ -3513,6 +3514,11 @@ pub struct PaneView {
     pub holder: String,
     #[serde(default)]
     pub readable: bool,
+    /// What a person decided to call this pane, over whatever it would be
+    /// called otherwise. Kept for as long as the pane is: a title outliving the
+    /// session it named would land on whichever pane took the id next.
+    #[serde(default)]
+    pub title: String,
 }
 
 #[derive(Deserialize)]
@@ -3522,6 +3528,8 @@ struct SetPaneView {
     holder: Option<String>,
     #[serde(default)]
     readable: Option<bool>,
+    #[serde(default)]
+    title: Option<String>,
 }
 
 async fn list_windows(State(state): State<AppState>) -> Json<BTreeMap<String, PaneView>> {
@@ -3541,9 +3549,13 @@ async fn set_window(
     if let Some(readable) = body.readable {
         view.readable = readable;
     }
+    if let Some(title) = body.title {
+        view.title = title.trim().to_owned();
+    }
 
-    // A pane shown in the grid as a terminal is the default; it needs no entry.
-    if view.holder.is_empty() && !view.readable {
+    // A pane shown in the grid as a terminal under the name it already had is
+    // the default; it needs no entry.
+    if view.holder.is_empty() && !view.readable && view.title.is_empty() {
         held.remove(&body.session_id);
     }
 
@@ -3934,6 +3946,12 @@ async fn call_integration(
     Json(request): Json<CallRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(state.gateway.call(request).await?))
+}
+
+/// Every worktree across every project, for the interface that has to name the
+/// folder a pane is standing in without asking each project in turn.
+async fn list_places(State(state): State<AppState>) -> Json<Vec<crate::repo::WorktreePlace>> {
+    Json(state.repos.places())
 }
 
 async fn list_engines() -> Json<Vec<Engine>> {

@@ -9,10 +9,10 @@ import {
     create_worktree,
     is_tauri,
     list_engines,
+    list_places,
     list_repos,
     list_sessions,
     list_windows,
-    list_worktrees,
     open_cli,
     set_window,
     spawn_default_shell,
@@ -22,7 +22,7 @@ import {
     type PaneView,
     type Repository,
     type SessionInfo,
-    type WorktreeStatus,
+    type WorktreePlace,
 } from "@/lib/core";
 import {
     MOST_PANES,
@@ -37,7 +37,7 @@ import {
     tracks_for,
 } from "@/lib/grid";
 import { apply_order, move_onto, order_of, prune_order } from "@/lib/order";
-import { folder_name, places_in, settled_place, standing_of, type Place } from "@/lib/shells";
+import { folder_name, place_label, places_in, settled_place, standing_of, type Place } from "@/lib/shells";
 
 /// The place that is not a folder yet. No path is ever the empty string, so it
 /// can stand for "cut a new worktree" without colliding with a real one.
@@ -107,6 +107,12 @@ export function TerminalsPanel({ active }: { active: boolean }) {
         list_windows().then(set_views).catch(() => undefined);
     }, 3000, active);
 
+    // Worktrees are cut and removed by hand, so this is read slowly. It is the
+    // one reading behind both the label under a pane and the form's places.
+    use_poll(() => {
+        void refresh_places().catch(() => undefined);
+    }, 8000, active);
+
     // One reading a second for the whole grid: the panes want a liveness dot and
     // a byte count, and that is one request either way.
     use_poll(() => {
@@ -126,8 +132,9 @@ export function TerminalsPanel({ active }: { active: boolean }) {
     }, []);
 
     const name_of = useCallback(
-        (id: string) => services.crew.find((agent) => agent.session_id === id)?.name ?? id,
-        [services.crew],
+        (id: string) =>
+            views[id]?.title || services.crew.find((agent) => agent.session_id === id)?.name || id,
+        [services.crew, views],
     );
 
     // A shell opens where a person points: here, in another of the project's
@@ -136,7 +143,7 @@ export function TerminalsPanel({ active }: { active: boolean }) {
     // A CLI wants four answers where a shell wants one, which is a form rather
     // than a fourth level of menu. The places are the ones the menu just read,
     // so the form never disagrees with the menu it was opened from.
-    const [known, set_known] = useState<{ repos: Repository[]; trees: WorktreeStatus[] }>({
+    const [known, set_known] = useState<{ repos: Repository[]; trees: WorktreePlace[] }>({
         repos: [],
         trees: [],
     });
@@ -151,6 +158,20 @@ export function TerminalsPanel({ active }: { active: boolean }) {
         y: number;
     } | null>(null);
     const [starting_error, set_starting_error] = useState<string | null>(null);
+    const [renaming, set_renaming] = useState<{ id: string; title: string; x: number; y: number } | null>(null);
+
+    const refresh_places = useCallback(async () => {
+        const [repos, trees] = await Promise.all([list_repos(), list_places()]);
+        const mine = repos.filter(
+            (repo) => !services.repositories || services.repositories.includes(repo.id),
+        );
+        const held = {
+            repos: mine,
+            trees: trees.filter((tree) => mine.some((repo) => repo.id === tree.repository_id)),
+        };
+        set_known(held);
+        return held;
+    }, [services.repositories]);
 
     const open_shell_menu = useCallback(
         async (event: React.MouseEvent, cwd: string | null) => {
@@ -161,11 +182,7 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                 stopPropagation: () => undefined,
             } as unknown as React.MouseEvent;
 
-            const repos = (await list_repos()).filter(
-                (repo) => !services.repositories || services.repositories.includes(repo.id),
-            );
-            const trees = (await Promise.all(repos.map((repo) => list_worktrees(repo.id)))).flat();
-            set_known({ repos, trees });
+            const { repos, trees } = await refresh_places();
 
             const going = services.going;
             const from =
@@ -315,6 +332,19 @@ export function TerminalsPanel({ active }: { active: boolean }) {
             set_starting((held) => (held && !held.engine_id ? { ...held, engine_id: first.id } : held));
         }
     }, [engines]);
+
+    const rename_pane = useCallback(
+        (title: string) => {
+            if (!renaming) {
+                return;
+            }
+            set_window(renaming.id, { title })
+                .then(set_views)
+                .catch(() => undefined);
+            set_renaming(null);
+        },
+        [renaming],
+    );
 
     const start_cli = useCallback(() => {
         if (!starting || !starting.engine_id) {
@@ -496,6 +526,51 @@ export function TerminalsPanel({ active }: { active: boolean }) {
     // do nothing at all on an empty panel.
     const popovers = (
         <>
+            {renaming ? (
+                <div
+                    className="fixed z-50 flex flex-col gap-1.5 rounded-md border border-reef bg-lagoon-deep p-2 shadow-[0_10px_24px_rgba(0,0,0,0.45)]"
+                    style={{
+                        left: Math.min(renaming.x, window.innerWidth - 280),
+                        top: Math.min(renaming.y, window.innerHeight - 90),
+                    }}
+                    onPointerDown={(event) => event.stopPropagation()}
+                >
+                    <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-shade">
+                        rename this pane
+                    </span>
+                    <div className="flex items-center gap-1">
+                        <input
+                            autoFocus
+                            className="w-48 rounded border border-reef bg-lagoon px-2 py-1 font-mono text-[11px] text-linen"
+                            placeholder={name_of(renaming.id)}
+                            value={renaming.title}
+                            onChange={(event) => set_renaming({ ...renaming, title: event.target.value })}
+                            onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                    rename_pane(renaming.title.trim());
+                                }
+                                if (event.key === "Escape") {
+                                    set_renaming(null);
+                                }
+                            }}
+                        />
+                        <button
+                            className="rounded border border-turquoise px-2 py-1 font-mono text-[11px] text-turquoise"
+                            onClick={() => rename_pane(renaming.title.trim())}
+                        >
+                            name it
+                        </button>
+                        <button
+                            className="px-1 font-mono text-[11px] text-shade hover:text-linen"
+                            title="back to whatever it would be called otherwise"
+                            onClick={() => rename_pane("")}
+                        >
+                            ×
+                        </button>
+                    </div>
+                </div>
+            ) : null}
+
             {starting ? (
                 <div
                     className="fixed z-50 flex w-[300px] flex-col gap-2 rounded-md border border-reef bg-lagoon-deep p-2.5 shadow-[0_10px_24px_rgba(0,0,0,0.45)]"
@@ -818,8 +893,9 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                     session={session}
                     label={(() => {
                         const held = services.crew.find((agent) => agent.session_id === session.id);
-                        return held?.title ?? held?.name;
+                        return views[session.id]?.title || held?.title || held?.name;
                     })()}
+                    place={place_label(session.cwd, known.repos, known.trees)}
                     crowned={(() => {
                         const role = services.crew.find(
                             (agent) => agent.session_id === session.id,
@@ -873,6 +949,17 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                                 label: "Open in its own window",
                                 hint: "⧉",
                                 run: () => tear_out(session.id, name_of(session.id)),
+                            },
+                            {
+                                label: "Rename this pane…",
+                                hint: views[session.id]?.title ? "✎" : undefined,
+                                run: () =>
+                                    set_renaming({
+                                        id: session.id,
+                                        title: views[session.id]?.title ?? "",
+                                        x: event.clientX,
+                                        y: event.clientY,
+                                    }),
                             },
                             {
                                 label: "Another shell in this worktree",

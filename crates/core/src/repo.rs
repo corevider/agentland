@@ -95,6 +95,20 @@ pub struct Worktree {
     pub port: u16,
 }
 
+/// A worktree as something on screen names it: where it is, and whether it is
+/// still there.
+///
+/// Deliberately not `WorktreeStatus`. Reading how dirty a worktree is costs two
+/// git invocations apiece, which is a fair price for a page somebody opened and
+/// a poor one for a label under a terminal that is redrawn every few seconds.
+/// Whether the folder is there is one `stat`.
+#[derive(Clone, Debug, Serialize)]
+pub struct WorktreePlace {
+    #[serde(flatten)]
+    pub worktree: Worktree,
+    pub missing: bool,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct WorktreeStatus {
     #[serde(flatten)]
@@ -405,6 +419,18 @@ impl RepoRegistry {
 
     pub fn repositories(&self) -> Vec<Repository> {
         self.state.lock().repositories.values().cloned().collect()
+    }
+
+    /// Every worktree there is, named rather than examined.
+    pub fn places(&self) -> Vec<WorktreePlace> {
+        let held: Vec<Worktree> = self.state.lock().worktrees.values().cloned().collect();
+
+        held.into_iter()
+            .map(|worktree| WorktreePlace {
+                missing: !worktree.path.is_dir(),
+                worktree,
+            })
+            .collect()
     }
 
     pub fn worktrees(&self) -> Vec<WorktreeStatus> {

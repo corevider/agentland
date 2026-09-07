@@ -50,6 +50,9 @@ export interface PaneMetrics {
 interface Props {
     session: SessionInfo;
     label?: string;
+    /// The folder this pane stands in, said the short way: a project, or a
+    /// project and the worktree inside it.
+    place?: string | null;
     /// A commander: of a project, or of the whole workspace. Marked because it
     /// is the one to talk to — it hands the work out and everybody else is
     /// working to what it decided.
@@ -97,7 +100,7 @@ function collapse_to_tail(data: Uint8Array): Uint8Array {
     return result;
 }
 
-export function TerminalPane({ session, crowned, kept = false, focused, on_focus, on_metrics, label, on_close, on_zoom, zoomed, on_add, on_tear_out, readable = false, on_readable, on_menu, stats_from, now_from, on_pick_up, on_drop_on, wanted = false }: Props) {
+export function TerminalPane({ session, crowned, kept = false, focused, on_focus, on_metrics, label, place, on_close, on_zoom, zoomed, on_add, on_tear_out, readable = false, on_readable, on_menu, stats_from, now_from, on_pick_up, on_drop_on, wanted = false }: Props) {
     const host_ref = useRef<HTMLDivElement>(null);
     const screen_ref = useRef<Terminal | null>(null);
     const gpu_ref = useRef<WebglAddon | null>(null);
@@ -589,7 +592,13 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
                     {state}
                 </span>
                 {shown_stats ? <span className="tabular-nums">{format_elapsed(shown_now - shown_stats.last_output_at)}</span> : null}
-                <span className="ml-auto truncate">
+                <span
+                    className="min-w-0 flex-1 truncate text-center text-shell"
+                    title={session.cwd ?? undefined}
+                >
+                    {place ?? ""}
+                </span>
+                <span className="shrink-0 truncate">
                     {readable ? (
                         "readable · text only"
                     ) : (

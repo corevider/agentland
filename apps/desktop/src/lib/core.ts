@@ -266,6 +266,24 @@ export function clone_repo(url: string, into: string): Promise<Repository> {
     });
 }
 
+/// Every worktree there is, named rather than examined.
+///
+/// `list_worktrees` asks git how dirty each one is, which is two invocations
+/// apiece — right for the page that shows it, wrong for a label redrawn every
+/// few seconds. This one only says where a worktree is and whether it is there.
+export interface WorktreePlace {
+    name: string;
+    repository_id: string;
+    path: string;
+    branch: string;
+    port: number;
+    missing: boolean;
+}
+
+export function list_places(): Promise<WorktreePlace[]> {
+    return request<WorktreePlace[]>("/worktrees");
+}
+
 export function list_worktrees(repository_id: string): Promise<WorktreeStatus[]> {
     return request<WorktreeStatus[]>(`/repos/${repository_id}/worktrees`);
 }
@@ -1607,6 +1625,9 @@ export function supervisor_watches(): Promise<Watch[]> {
 export interface PaneView {
     holder: string;
     readable: boolean;
+    /// What a person decided to call this pane, over whatever it would be
+    /// called otherwise. Empty where nobody has said.
+    title: string;
 }
 
 export function list_windows(): Promise<Record<string, PaneView>> {
@@ -1615,7 +1636,7 @@ export function list_windows(): Promise<Record<string, PaneView>> {
 
 export function set_window(
     session_id: string,
-    change: { holder?: string; readable?: boolean },
+    change: { holder?: string; readable?: boolean; title?: string },
 ): Promise<Record<string, PaneView>> {
     return request<Record<string, PaneView>>("/ui/windows", {
         method: "POST",

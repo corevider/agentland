@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { folder_name, places_in, settled_place, standing_of } from "@/lib/shells";
+import { folder_name, place_label, places_in, settled_place, standing_of } from "@/lib/shells";
 
 const repos = [{ id: "svc", primary_path: "/home/ege/code/svc" }];
 const worktrees = [
@@ -76,5 +76,23 @@ describe("the place a form is holding", () => {
 
     it("leaves the value alone when there is nothing to offer instead", () => {
         expect(settled_place("/home/ege/code/gone", places_in(known, "gone"))).toBe("/home/ege/code/gone");
+    });
+});
+
+describe("what a footer calls the folder a pane is in", () => {
+    it("names a worktree with the project it was cut from", () => {
+        expect(place_label("/data/worktrees/svc/x-desk/src", repos, worktrees)).toBe("svc/x-desk");
+    });
+
+    it("names a main checkout by the project alone", () => {
+        expect(place_label("/home/ege/code/svc/src", repos, worktrees)).toBe("svc");
+    });
+
+    it("falls back to the folder's own name outside every project", () => {
+        expect(place_label("/tmp/somewhere/else", repos, worktrees)).toBe("else");
+    });
+
+    it("says nothing when the pane stands nowhere it knows of", () => {
+        expect(place_label(null, repos, worktrees)).toBeNull();
     });
 });

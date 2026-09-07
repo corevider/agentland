@@ -81,3 +81,25 @@ export function settled_place(wanted: string, offered: Place[]): string {
 
     return offered.some((place) => place.path === wanted) ? wanted : offered[0].path;
 }
+
+/// What to call the folder a pane is standing in, in the few characters a
+/// footer has.
+///
+/// A worktree is named with its project, because "ada-tree" alone says nothing
+/// about which project it was cut from once two of them have one. A main
+/// checkout is just the project. Anywhere else is the folder's own name — a
+/// shell can be opened outside every project, and that is worth saying rather
+/// than leaving blank.
+export function place_label(
+    cwd: string | null | undefined,
+    repos: { id: string; primary_path: string }[],
+    worktrees: { repository_id: string; name: string; path: string }[],
+): string | null {
+    const here = standing_of(cwd, repos, worktrees);
+
+    if (!here) {
+        return cwd ? folder_name(cwd) : null;
+    }
+
+    return here.worktree ? `${here.repository_id}/${here.worktree}` : here.repository_id;
+}
