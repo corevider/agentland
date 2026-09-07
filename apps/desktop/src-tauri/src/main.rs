@@ -429,6 +429,27 @@ fn on_tray_menu(endpoint: CoreEndpoint) -> impl Fn(&tauri::AppHandle, tauri::men
     }
 }
 
+/// The picture the tray wears, out of our own file.
+///
+/// A tray built without one asks the desktop's icon theme for a picture by
+/// name, and a name the theme does not have falls back to `image-missing`. On
+/// this machine Yaru has no `image-missing` at 16x16, and the fallback failing
+/// is not a missing icon — it is `Gtk:ERROR ... Bail out!`, the whole process
+/// gone before the window is drawn. `default_window_icon` is what the bundle
+/// hands the app and is None often enough in a dev build to make that a
+/// question of luck; the file is in the repository, so this is not.
+fn our_own_icon() -> Option<tauri::image::Image<'static>> {
+    const OURS: &[u8] = include_bytes!("../icons/128x128.png");
+
+    match tauri::image::Image::from_bytes(OURS) {
+        Ok(icon) => Some(icon),
+        Err(error) => {
+            eprintln!("the tray icon in the repository could not be read: {error}");
+            None
+        }
+    }
+}
+
 /// An icon in the tray, so closing the window puts it away rather than ending it.
 ///
 /// The crew goes on working in the core whether the window is there or not,
@@ -437,7 +458,7 @@ fn on_tray_menu(endpoint: CoreEndpoint) -> impl Fn(&tauri::AppHandle, tauri::men
 /// and who is waiting on a person, and offers two ways out, named for what
 /// they leave behind.
 fn put_an_icon_in_the_tray(app: &tauri::App, endpoint: CoreEndpoint) -> tauri::Result<()> {
-    let plain_icon = app.default_window_icon().map(|icon| icon.clone().to_owned());
+    let plain_icon = our_own_icon().or_else(|| app.default_window_icon().map(|icon| icon.clone().to_owned()));
     let marked = plain_icon.as_ref().map(marked_icon);
 
     let mut said = TraySaid {
@@ -875,7 +896,12 @@ fn main() {
             let moved_or_resized = Arc::new(AtomicBool::new(false));
             app.manage(MovedOrResized(moved_or_resized.clone()));
 
-            put_an_icon_in_the_tray(app, for_the_tray)?;
+            // A tray that cannot be made is a tray nobody gets, not a window
+            // nobody gets: the crew, the panes and everything a person came
+            // for are in the window, and the tray is a way back to it.
+            if let Err(error) = put_an_icon_in_the_tray(app, for_the_tray) {
+                eprintln!("no tray icon this time: {error}");
+            }
 
             if let Some(window) = app.get_webview_window("main") {
                 watch_the_window(&window, moved_or_resized.clone());
