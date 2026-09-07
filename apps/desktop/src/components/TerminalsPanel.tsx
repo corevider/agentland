@@ -15,6 +15,7 @@ import {
     list_worktrees,
     open_cli,
     set_window,
+    spawn_default_shell,
     stop_agent,
     type Authority,
     type Engine,
@@ -41,6 +42,10 @@ import { folder_name, places_in, settled_place, standing_of, type Place } from "
 /// The place that is not a folder yet. No path is ever the empty string, so it
 /// can stand for "cut a new worktree" without colliding with a real one.
 const A_NEW_WORKTREE = "";
+
+/// The program that is not an engine: a plain shell. No engine is called this,
+/// so it can sit in the same list as the engines without being mistaken for one.
+const A_TERMINAL = "terminal";
 import { use_services } from "@/workspace/registry";
 
 const SIZES_KEY = "agentland-pane-grid-2";
@@ -128,9 +133,6 @@ export function TerminalsPanel({ active }: { active: boolean }) {
     // A shell opens where a person points: here, in another of the project's
     // worktrees, in its main checkout, or in a worktree made on the spot. The
     // menu is read from the core when it opens, so it lists what exists now.
-    const [naming, set_naming] = useState<{ repository_id: string; name: string; x: number; y: number } | null>(null);
-    const [naming_error, set_naming_error] = useState<string | null>(null);
-
     // A CLI wants four answers where a shell wants one, which is a form rather
     // than a fourth level of menu. The places are the ones the menu just read,
     // so the form never disagrees with the menu it was opened from.
@@ -209,8 +211,16 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                     hint: repo.missing ? "its checkout is gone" : "+",
                     disabled: Boolean(repo.missing),
                     run: () => {
-                        set_naming_error(null);
-                        set_naming({ repository_id: repo.id, name: "", x: at.clientX, y: at.clientY });
+                        set_starting_error(null);
+                        set_starting({
+                            repository_id: repo.id,
+                            cwd: A_NEW_WORKTREE,
+                            name: "",
+                            engine_id: A_TERMINAL,
+                            authority: "own",
+                            x: at.clientX,
+                            y: at.clientY,
+                        });
                     },
                 },
             ];
@@ -320,12 +330,14 @@ export function TerminalsPanel({ active }: { active: boolean }) {
 
         place
             .then((cwd) =>
-                open_cli({
-                    engine_id: wanted.engine_id,
-                    cwd,
-                    authority: wanted.authority,
-                    repository_id: wanted.repository_id,
-                }),
+                wanted.engine_id === A_TERMINAL
+                    ? spawn_default_shell(cwd)
+                    : open_cli({
+                          engine_id: wanted.engine_id,
+                          cwd,
+                          authority: wanted.authority,
+                          repository_id: wanted.repository_id,
+                      }),
             )
             .then((created) => {
                 set_starting(null);
@@ -333,19 +345,6 @@ export function TerminalsPanel({ active }: { active: boolean }) {
             })
             .catch((cause) => set_starting_error(cause instanceof Error ? cause.message : String(cause)));
     }, [services, starting]);
-
-    const make_worktree = useCallback(() => {
-        if (!naming || !naming.name.trim()) {
-            return;
-        }
-        const wanted = naming;
-        create_worktree(wanted.repository_id, wanted.name.trim())
-            .then((created) => {
-                set_naming(null);
-                services.open_shell_in(created.path);
-            })
-            .catch((cause) => set_naming_error(cause instanceof Error ? cause.message : String(cause)));
-    }, [naming, services]);
 
     // With no explicit arrangement, the panel shows what it can show properly.
     const room = sizes.wanted_columns === null
@@ -497,44 +496,6 @@ export function TerminalsPanel({ active }: { active: boolean }) {
     // do nothing at all on an empty panel.
     const popovers = (
         <>
-            {naming ? (
-                <div
-                    className="fixed z-50 flex flex-col gap-1.5 rounded-md border border-reef bg-lagoon-deep p-2 shadow-[0_10px_24px_rgba(0,0,0,0.45)]"
-                    style={{ left: Math.min(naming.x, window.innerWidth - 260), top: Math.min(naming.y, window.innerHeight - 90) }}
-                    onPointerDown={(event) => event.stopPropagation()}
-                >
-                    <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-shade">new worktree</span>
-                    <div className="flex items-center gap-1">
-                        <input
-                            autoFocus
-                            className="w-44 rounded border border-reef bg-lagoon px-2 py-1 font-mono text-[11px] text-linen"
-                            placeholder="a name, e.g. spike"
-                            value={naming.name}
-                            onChange={(event) => set_naming({ ...naming, name: event.target.value })}
-                            onKeyDown={(event) => {
-                                if (event.key === "Enter") {
-                                    make_worktree();
-                                }
-                                if (event.key === "Escape") {
-                                    set_naming(null);
-                                }
-                            }}
-                        />
-                        <button
-                            className="rounded border border-turquoise px-2 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40"
-                            disabled={!naming.name.trim()}
-                            onClick={make_worktree}
-                        >
-                            open
-                        </button>
-                        <button className="px-1 font-mono text-[11px] text-shade hover:text-linen" onClick={() => set_naming(null)}>
-                            ×
-                        </button>
-                    </div>
-                    {naming_error ? <span className="max-w-[260px] font-mono text-[10px] text-coral">{naming_error}</span> : null}
-                </div>
-            ) : null}
-
             {starting ? (
                 <div
                     className="fixed z-50 flex w-[300px] flex-col gap-2 rounded-md border border-reef bg-lagoon-deep p-2.5 shadow-[0_10px_24px_rgba(0,0,0,0.45)]"
@@ -546,7 +507,7 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                         }
                     }}
                 >
-                    <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-shade">start a cli</span>
+                    <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-shade">open a pane</span>
 
                     <label className="flex items-center gap-2">
                         <span className="w-16 shrink-0 font-mono text-[10px] text-shade">project</span>
@@ -624,6 +585,7 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                             value={starting.engine_id}
                             onChange={(event) => set_starting({ ...starting, engine_id: event.target.value })}
                         >
+                            <option value={A_TERMINAL}>terminal · your own shell</option>
                             {engines.length === 0 ? <option value="">reading what is installed…</option> : null}
                             {engines
                                 .filter((engine) => engine.installed)
@@ -636,28 +598,34 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                         </select>
                     </label>
 
-                    <div className="flex flex-col gap-1">
-                        <span className="font-mono text-[10px] text-shade">authority</span>
-                        {(
-                            [
-                                ["own", "on its own", "your config, your connectors"],
-                                ["crew", "with the crew's tools", "Agentland's tools, this project's permits, the house rules"],
-                            ] as [Authority, string, string][]
-                        ).map(([value, label, hint]) => (
-                            <label key={value} className="flex cursor-pointer items-start gap-1.5">
-                                <input
-                                    type="radio"
-                                    className="mt-[3px] accent-turquoise"
-                                    checked={starting.authority === value}
-                                    onChange={() => set_starting({ ...starting, authority: value })}
-                                />
-                                <span className="min-w-0">
-                                    <span className="font-mono text-[11px] text-linen">{label}</span>
-                                    <span className="block font-mono text-[10px] leading-tight text-shade">{hint}</span>
-                                </span>
-                            </label>
-                        ))}
-                    </div>
+                    {starting.engine_id === A_TERMINAL ? null : (
+                        <div className="flex flex-col gap-1">
+                            <span className="font-mono text-[10px] text-shade">authority</span>
+                            {(
+                                [
+                                    ["own", "on its own", "your config, your connectors"],
+                                    [
+                                        "crew",
+                                        "with the crew's tools",
+                                        "Agentland's tools, this project's permits, the house rules",
+                                    ],
+                                ] as [Authority, string, string][]
+                            ).map(([value, label, hint]) => (
+                                <label key={value} className="flex cursor-pointer items-start gap-1.5">
+                                    <input
+                                        type="radio"
+                                        className="mt-[3px] accent-turquoise"
+                                        checked={starting.authority === value}
+                                        onChange={() => set_starting({ ...starting, authority: value })}
+                                    />
+                                    <span className="min-w-0">
+                                        <span className="font-mono text-[11px] text-linen">{label}</span>
+                                        <span className="block font-mono text-[10px] leading-tight text-shade">{hint}</span>
+                                    </span>
+                                </label>
+                            ))}
+                        </div>
+                    )}
 
                     <div className="flex items-center justify-end gap-1">
                         <button
@@ -680,7 +648,9 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                     </div>
 
                     {engines.length > 0 && !engines.some((engine) => engine.installed) ? (
-                        <span className="font-mono text-[10px] text-coral">No engine is on PATH.</span>
+                        <span className="font-mono text-[10px] text-shade">
+                            No engine is on PATH — a terminal is all there is to open.
+                        </span>
                     ) : null}
                     {starting_error ? (
                         <span className="font-mono text-[10px] text-coral">{starting_error}</span>
