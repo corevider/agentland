@@ -9,6 +9,41 @@ use serde::{Deserialize, Serialize};
 
 use crate::pty::{PtyManager, PtySpawnSpec};
 
+/// Whose standing a hand-started CLI runs under.
+///
+/// A person opening `claude` in a project sometimes wants the crew's footing —
+/// Agentland's tools, the project's permits, the house rules — and sometimes
+/// wants their own CLI, with their own connectors and their own answers. Neither
+/// is right for both, so it is asked rather than assumed, and a request that
+/// does not say means `Own`: handing something authority nobody asked it to have
+/// is the worse of the two mistakes.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Authority {
+    Crew,
+    #[default]
+    Own,
+}
+
+/// A CLI opened by hand: which engine, where, and under whose standing.
+#[derive(Clone, Debug, Deserialize)]
+pub struct CliRequest {
+    pub engine_id: String,
+    pub cwd: String,
+    #[serde(default)]
+    pub authority: Authority,
+    /// Which project's permits apply, when the crew's standing is asked for.
+    #[serde(default)]
+    pub repository_id: Option<String>,
+    #[serde(default)]
+    pub workspace_id: Option<String>,
+}
+
+/// The role a hand-started CLI is permitted as: what an implementer may do,
+/// under a name of its own so it never shares a permits file with somebody who
+/// was actually hired.
+const BY_HAND: &str = "shell";
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Engine {
     pub id: &'static str,
@@ -810,6 +845,109 @@ impl Crew {
         Ok(shaped)
     }
 
+    /// Open an engine's CLI in a folder somebody picked, under the standing they
+    /// picked for it.
+    ///
+    /// Hiring builds these arguments for an agent that has a role, a worktree
+    /// and a name. This has a person instead, so it borrows the same pieces —
+    /// the tools, the permits, the house rules — and leaves out everything that
+    /// only means something to a crew: no brief, no resume, no colour, no card.
+    /// Nothing is recorded either. A pane a person opened is theirs to close,
+    /// and an agent nobody hired should not appear in the crew.
+    pub fn open_cli(&self, request: &CliRequest) -> Result<crate::pty::SessionInfo> {
+        let engine = engine(&request.engine_id)
+            .ok_or_else(|| anyhow!("unknown engine: {}", request.engine_id))?;
+        if !engine.installed {
+            bail!("{} is not on PATH", engine.command);
+        }
+
+        // The same refusal the hiring path makes, for the same reason: a pane
+        // opened at a folder that is not there opens in the home directory
+        // instead, and an engine let loose on somebody's home is worse than an
+        // engine that did not start.
+        let cwd = crate::exec::plain(PathBuf::from(request.cwd.trim()));
+        if !cwd.is_dir() {
+            bail!("{} is not a folder to open one in", cwd.display());
+        }
+
+        let mut args = Vec::new();
+        let mut env = BTreeMap::new();
+
+        if request.authority == Authority::Crew {
+            args.extend(self.crew_standing(&request.engine_id, &cwd, request));
+            if let Some((port, token)) = self.endpoint.lock().clone() {
+                env.insert("AGENTLAND_PORT".to_owned(), port.to_string());
+                env.insert("AGENTLAND_TOKEN".to_owned(), token);
+            }
+        }
+
+        let session = self.manager.spawn(PtySpawnSpec {
+            command: engine.command.to_owned(),
+            args,
+            cwd: Some(cwd.to_string_lossy().into_owned()),
+            env,
+            cols: 120,
+            rows: 32,
+        })?;
+
+        Ok(session)
+    }
+
+    /// The arguments that put a hand-started CLI on the crew's footing.
+    ///
+    /// A worktree already carries the tools file Agentland wrote it; a main
+    /// checkout does not, because nothing was ever hired into one. Asking for
+    /// the crew's standing there and quietly getting a pane without tools is
+    /// the failure `tools_for` was written against, so the file is written
+    /// where it is missing — and kept out of git, the way the worktrees' copies
+    /// already are, so it is not a file somebody finds in their own diff.
+    fn crew_standing(&self, engine_id: &str, cwd: &Path, request: &CliRequest) -> Vec<String> {
+        let mut args = Vec::new();
+
+        let tools = cwd.join(".mcp.json");
+        if !tools.exists() {
+            crate::repo::write_mcp_config(cwd, &self.data_dir);
+        }
+
+        if tools.exists() {
+            let endpoint = self.endpoint_file();
+            args.extend(tools_for(engine_id, &tools, &endpoint));
+            approve_the_tools(engine_id, cwd);
+        }
+
+        let mode = permission_for_role(BY_HAND).to_owned();
+
+        if let Some(flag) = settings_flag(engine_id) {
+            let folder = self.data_dir.join("permits");
+            let mut declared = crate::permits::declared_in(cwd);
+            let home = home_of(
+                request.repository_id.as_deref().unwrap_or_default(),
+                request.workspace_id.as_deref(),
+            );
+            declared.extend(self.learned.lock().get(&home).cloned().unwrap_or_default());
+            let file = folder.join(format!("{BY_HAND}-{}.json", slugify(&home)));
+
+            if fs::create_dir_all(&folder).is_ok()
+                && fs::write(&file, crate::permits::settings_in(BY_HAND, &declared, &mode)).is_ok()
+            {
+                args.push((*flag).to_owned());
+                args.push(file.to_string_lossy().into_owned());
+            }
+        }
+
+        if let Some(flag) = standing_flag(engine_id) {
+            if let Some(file) = self.standing.lock().clone() {
+                if file.is_file() {
+                    args.push((*flag).to_owned());
+                    args.push(file.to_string_lossy().into_owned());
+                }
+            }
+        }
+
+        args.extend(permission_args(engine_id, &mode));
+        args
+    }
+
     pub fn start(
         &self,
         id: &str,
@@ -1156,7 +1294,32 @@ pub fn model_for_role(engine_id: &str, role: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod model_tests {
-    use super::{engine, free_colour, model_for_role, permission_args, tools_for, PromptStyle, PALETTE};
+    use super::{
+        engine, free_colour, model_for_role, permission_args, tools_for, Authority, CliRequest,
+        PromptStyle, PALETTE,
+    };
+
+    #[test]
+    fn a_cli_request_that_says_nothing_about_authority_is_given_none() {
+        let held: CliRequest =
+            serde_json::from_str(r#"{"engine_id":"claude","cwd":"/w"}"#).expect("a request");
+
+        assert_eq!(
+            held.authority,
+            Authority::Own,
+            "standing nobody asked for is standing nobody granted"
+        );
+    }
+
+    #[test]
+    fn the_crews_footing_is_had_by_asking_for_it_by_name() {
+        let held: CliRequest =
+            serde_json::from_str(r#"{"engine_id":"codex","cwd":"/w","authority":"crew"}"#)
+                .expect("a request");
+
+        assert_eq!(held.authority, Authority::Crew);
+    }
+
     use std::path::Path;
 
     #[test]

@@ -747,6 +747,11 @@ export default function App() {
         [menu, layout, focus_panel, update_out],
     );
 
+    const adopt_session = useCallback((created: SessionInfo) => {
+        set_sessions((held) => [...held, created]);
+        set_focused_id(created.id);
+    }, []);
+
     const services = useMemo<WorkspaceServices>(
         () => ({
             open_menu: menu.open,
@@ -758,17 +763,16 @@ export default function App() {
             close_session,
             open_shell_in: (cwd: string) => {
                 spawn_default_shell(cwd)
-                    .then((created) => {
-                        set_sessions((held) => [...held, created]);
-                        set_focused_id(created.id);
-                    })
+                    .then(adopt_session)
                     .catch((cause) => set_error(String(cause)));
             },
+            adopt_session,
             focus_pane: set_focused_id,
             focused_id,
             on_metrics,
         }),
         [
+            adopt_session,
             close_session,
             crew,
             focused_id,

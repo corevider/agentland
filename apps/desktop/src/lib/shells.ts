@@ -32,3 +32,37 @@ export function standing_of(
 export function folder_name(path: string): string {
     return path.replace(/\/+$/, "").split("/").pop() || path;
 }
+
+export interface Place {
+    path: string;
+    label: string;
+}
+
+/// The folders a CLI could open in, for one project: its main checkout first,
+/// then every worktree cut from it.
+///
+/// A place that is gone from disk is left out rather than offered and refused.
+/// A pane opened at a folder that is not there does not fail — it opens in the
+/// home folder instead, which is the one place an engine should never start.
+export function places_in(
+    known: {
+        repos: { id: string; primary_path: string; default_branch: string; missing?: boolean }[];
+        trees: { repository_id: string; name: string; path: string; branch: string; missing?: boolean }[];
+    },
+    repository_id: string,
+): Place[] {
+    const repo = known.repos.find((held) => held.id === repository_id);
+    const places: Place[] = [];
+
+    if (repo && !repo.missing) {
+        places.push({ path: repo.primary_path, label: `main checkout · ${repo.default_branch}` });
+    }
+
+    for (const tree of known.trees) {
+        if (tree.repository_id === repository_id && !tree.missing) {
+            places.push({ path: tree.path, label: `${tree.name} · ${tree.branch}` });
+        }
+    }
+
+    return places;
+}

@@ -705,7 +705,7 @@ fn mcp_binary(data_dir: &Path) -> String {
 /// nothing is written down. The other two are handed the path of Agentland's own
 /// endpoint file instead: these files live inside somebody's checkout, and a
 /// token in a checkout is a token one `git add -A` away from a remote.
-fn write_mcp_config(worktree: &Path, data_dir: &Path) {
+pub(crate) fn write_mcp_config(worktree: &Path, data_dir: &Path) {
     let program = mcp_binary(data_dir);
     let endpoint = data_dir.join("endpoint.json").to_string_lossy().into_owned();
 

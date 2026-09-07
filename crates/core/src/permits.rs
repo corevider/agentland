@@ -296,7 +296,10 @@ pub fn allowed_for(role: &str) -> Vec<&'static str> {
         // nothing to commit. It does get to run the tests, because a review
         // that takes the author's word for it is not a review.
         "reviewer" => allowed.extend_from_slice(PROVING),
-        "implementer" | "ops" | "gardener" => {
+        // "shell" is a CLI a person opened by hand and asked to run on the
+        // crew's footing. It is somebody working, so it works: it looks, it
+        // proves, and it records.
+        "implementer" | "ops" | "gardener" | "shell" => {
             allowed.extend_from_slice(PROVING);
             allowed.extend_from_slice(RECORDING);
         }
@@ -470,6 +473,20 @@ pub fn declared_in(worktree: &std::path::Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cli_started_by_hand_may_do_what_somebody_working_may_do() {
+        let by_hand = allowed_for("shell");
+
+        assert_eq!(
+            by_hand,
+            allowed_for("implementer"),
+            "a person who asked for the crew's footing gets the working set, not a stranger's"
+        );
+        assert!(by_hand.contains(&"Bash(git commit:*)"), "it records its work");
+        assert!(by_hand.contains(&"Bash(cargo test:*)"), "it proves its work");
+        assert!(!denied().is_empty() && !by_hand.iter().any(|rule| denied().contains(rule)));
+    }
 
     #[test]
     fn an_agent_a_person_put_in_bypass_is_not_asked_to_accept_it_again() {

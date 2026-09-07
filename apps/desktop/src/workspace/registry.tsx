@@ -53,6 +53,8 @@ export interface WorkspaceServices {
     open_session: (id: string) => void;
     close_session: (id: string) => void;
     open_shell_in: (cwd: string) => void;
+    /// Take a pane the panel opened for itself into the workspace, focused.
+    adopt_session: (created: SessionInfo) => void;
     focus_pane: (id: string) => void;
     focused_id: string | null;
     on_metrics: (id: string, value: PaneMetrics) => void;

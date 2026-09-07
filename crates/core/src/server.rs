@@ -279,6 +279,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/sessions/{id}/stream", get(stream_session))
         .route("/sessions/{id}/log", get(read_log))
         .route("/sessions/{id}/stats", get(read_stats))
+        .route("/shells", post(open_cli))
         .route("/bench", post(spawn_generator))
         .route("/metrics", get(read_metrics).post(record_metrics))
         .route("/repos", get(list_repos).post(add_repo))
@@ -2000,6 +2001,20 @@ async fn spawn_session(
     Json(spec): Json<PtySpawnSpec>,
 ) -> Result<Json<SessionReport>, ApiError> {
     let info = state.manager.spawn(spec)?;
+    Ok(Json(report_of(&state, info)?))
+}
+
+/// A CLI a person opened by hand, in a folder they picked.
+///
+/// Spawning it through the core rather than assembling a command line in the
+/// window is what lets it be offered the crew's standing at all: the tools
+/// file, the permits and the house rules are all things only the core knows
+/// where to find.
+async fn open_cli(
+    State(state): State<AppState>,
+    Json(request): Json<crate::crew::CliRequest>,
+) -> Result<Json<SessionReport>, ApiError> {
+    let info = state.crew.open_cli(&request)?;
     Ok(Json(report_of(&state, info)?))
 }
 

@@ -133,6 +133,23 @@ export function spawn_shell(command: string, cwd?: string): Promise<SessionInfo>
     });
 }
 
+/// Whose standing a hand-started CLI runs under: the crew's tools, permits and
+/// house rules, or nothing from Agentland at all.
+export type Authority = "crew" | "own";
+
+/// Open an engine's CLI in a folder, through the core.
+///
+/// The core assembles the command rather than the window, because only it knows
+/// where the tools file, the permits and the house rules live.
+export function open_cli(wanted: {
+    engine_id: string;
+    cwd: string;
+    authority: Authority;
+    repository_id?: string | null;
+}): Promise<SessionInfo> {
+    return request<SessionInfo>("/shells", { method: "POST", body: JSON.stringify(wanted) });
+}
+
 export function spawn_generator(spec: GeneratorSpec): Promise<SessionInfo> {
     return request<SessionInfo>("/bench", {
         method: "POST",

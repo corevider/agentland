@@ -8,14 +8,20 @@ import { TerminalPane } from "@/components/TerminalPane";
 import {
     create_worktree,
     is_tauri,
+    list_engines,
     list_repos,
     list_sessions,
     list_windows,
     list_worktrees,
+    open_cli,
     set_window,
     stop_agent,
+    type Authority,
+    type Engine,
     type PaneView,
+    type Repository,
     type SessionInfo,
+    type WorktreeStatus,
 } from "@/lib/core";
 import {
     MOST_PANES,
@@ -30,7 +36,7 @@ import {
     tracks_for,
 } from "@/lib/grid";
 import { apply_order, move_onto, order_of, prune_order } from "@/lib/order";
-import { folder_name, standing_of } from "@/lib/shells";
+import { folder_name, places_in, standing_of } from "@/lib/shells";
 import { use_services } from "@/workspace/registry";
 
 const SIZES_KEY = "agentland-pane-grid-2";
@@ -121,6 +127,24 @@ export function TerminalsPanel({ active }: { active: boolean }) {
     const [naming, set_naming] = useState<{ repository_id: string; name: string; x: number; y: number } | null>(null);
     const [naming_error, set_naming_error] = useState<string | null>(null);
 
+    // A CLI wants four answers where a shell wants one, which is a form rather
+    // than a fourth level of menu. The places are the ones the menu just read,
+    // so the form never disagrees with the menu it was opened from.
+    const [known, set_known] = useState<{ repos: Repository[]; trees: WorktreeStatus[] }>({
+        repos: [],
+        trees: [],
+    });
+    const [engines, set_engines] = useState<Engine[]>([]);
+    const [starting, set_starting] = useState<{
+        repository_id: string;
+        cwd: string;
+        engine_id: string;
+        authority: Authority;
+        x: number;
+        y: number;
+    } | null>(null);
+    const [starting_error, set_starting_error] = useState<string | null>(null);
+
     const open_shell_menu = useCallback(
         async (event: React.MouseEvent, cwd: string | null) => {
             const at = {
@@ -134,6 +158,7 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                 (repo) => !services.repositories || services.repositories.includes(repo.id),
             );
             const trees = (await Promise.all(repos.map((repo) => list_worktrees(repo.id)))).flat();
+            set_known({ repos, trees });
 
             const going = services.going;
             const from =
@@ -193,6 +218,29 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                 }
             }
 
+            if (repos.length > 0) {
+                const standing = here ?? {
+                    repository_id: repos[0].id,
+                    worktree: null,
+                    path: repos[0].primary_path,
+                };
+                items.push({
+                    label: "Start a CLI…",
+                    hint: "claude, codex, and the rest",
+                    run: () => {
+                        set_starting_error(null);
+                        set_starting({
+                            repository_id: standing.repository_id,
+                            cwd: standing.path,
+                            engine_id: "",
+                            authority: "own",
+                            x: at.clientX,
+                            y: at.clientY,
+                        });
+                    },
+                });
+            }
+
             if (items.length === 0) {
                 items.push({ label: "No project in this workspace yet", disabled: true });
             }
@@ -201,6 +249,45 @@ export function TerminalsPanel({ active }: { active: boolean }) {
         },
         [services],
     );
+
+    // The engines are probed by running each one, so they are read when the
+    // form opens rather than kept fresh against a poll nobody is watching.
+    const cli_form_open = starting !== null;
+    useEffect(() => {
+        if (!cli_form_open) {
+            return;
+        }
+        list_engines()
+            .then(set_engines)
+            .catch(() => undefined);
+    }, [cli_form_open]);
+
+    // The form opens before the engines are known, so the first installed one
+    // becomes the choice as soon as there is one to choose.
+    useEffect(() => {
+        const first = engines.find((engine) => engine.installed);
+        if (first) {
+            set_starting((held) => (held && !held.engine_id ? { ...held, engine_id: first.id } : held));
+        }
+    }, [engines]);
+
+    const start_cli = useCallback(() => {
+        if (!starting || !starting.engine_id) {
+            return;
+        }
+        const wanted = starting;
+        open_cli({
+            engine_id: wanted.engine_id,
+            cwd: wanted.cwd,
+            authority: wanted.authority,
+            repository_id: wanted.repository_id,
+        })
+            .then((created) => {
+                set_starting(null);
+                services.adopt_session(created);
+            })
+            .catch((cause) => set_starting_error(cause instanceof Error ? cause.message : String(cause)));
+    }, [services, starting]);
 
     const make_worktree = useCallback(() => {
         if (!naming || !naming.name.trim()) {
@@ -360,28 +447,11 @@ export function TerminalsPanel({ active }: { active: boolean }) {
         };
     }, []);
 
-    if (services.sessions.length === 0) {
-        return (
-            <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 p-4 text-center">
-                <p className="font-mono text-[11px] text-shell">No terminal is open.</p>
-                <p className="font-mono text-[10px] text-shade">
-                    Start an agent, or open a shell from the header.
-                </p>
-            </div>
-        );
-    }
-
-    const start_drag = (axis: "column" | "row", gap: number) => (event: React.PointerEvent) => {
-        event.preventDefault();
-        event.currentTarget.setPointerCapture?.(event.pointerId);
-        drag.current = { axis, gap };
-        set_resizing(true);
-        document.body.style.cursor = axis === "column" ? "col-resize" : "row-resize";
-        document.body.style.userSelect = "none";
-    };
-
-    return (
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+    // Both the empty panel and the grid can open these, so both render them.
+    // The form lived only in the grid's branch once, which made "New worktree…"
+    // do nothing at all on an empty panel.
+    const popovers = (
+        <>
             {naming ? (
                 <div
                     className="fixed z-50 flex flex-col gap-1.5 rounded-md border border-reef bg-lagoon-deep p-2 shadow-[0_10px_24px_rgba(0,0,0,0.45)]"
@@ -419,6 +489,160 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                     {naming_error ? <span className="max-w-[260px] font-mono text-[10px] text-coral">{naming_error}</span> : null}
                 </div>
             ) : null}
+
+            {starting ? (
+                <div
+                    className="fixed z-50 flex w-[300px] flex-col gap-2 rounded-md border border-reef bg-lagoon-deep p-2.5 shadow-[0_10px_24px_rgba(0,0,0,0.45)]"
+                    style={{ left: Math.min(starting.x, window.innerWidth - 316), top: Math.min(starting.y, window.innerHeight - 260) }}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => {
+                        if (event.key === "Escape") {
+                            set_starting(null);
+                        }
+                    }}
+                >
+                    <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-shade">start a cli</span>
+
+                    <label className="flex items-center gap-2">
+                        <span className="w-16 shrink-0 font-mono text-[10px] text-shade">project</span>
+                        <select
+                            className="min-w-0 flex-1 rounded border border-reef bg-lagoon px-1.5 py-1 font-mono text-[11px] text-linen"
+                            value={starting.repository_id}
+                            onChange={(event) => {
+                                const repo = known.repos.find((held) => held.id === event.target.value);
+                                set_starting({
+                                    ...starting,
+                                    repository_id: event.target.value,
+                                    cwd: repo?.primary_path ?? starting.cwd,
+                                });
+                            }}
+                        >
+                            {known.repos.map((repo) => (
+                                <option key={repo.id} value={repo.id}>
+                                    {repo.name}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+
+                    <label className="flex items-center gap-2">
+                        <span className="w-16 shrink-0 font-mono text-[10px] text-shade">place</span>
+                        <select
+                            className="min-w-0 flex-1 rounded border border-reef bg-lagoon px-1.5 py-1 font-mono text-[11px] text-linen"
+                            value={starting.cwd}
+                            onChange={(event) => set_starting({ ...starting, cwd: event.target.value })}
+                        >
+                            {places_in(known, starting.repository_id).map((place) => (
+                                <option key={place.path} value={place.path}>
+                                    {place.label}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+
+                    <label className="flex items-center gap-2">
+                        <span className="w-16 shrink-0 font-mono text-[10px] text-shade">program</span>
+                        <select
+                            className="min-w-0 flex-1 rounded border border-reef bg-lagoon px-1.5 py-1 font-mono text-[11px] text-linen"
+                            value={starting.engine_id}
+                            onChange={(event) => set_starting({ ...starting, engine_id: event.target.value })}
+                        >
+                            {engines.length === 0 ? <option value="">reading what is installed…</option> : null}
+                            {engines
+                                .filter((engine) => engine.installed)
+                                .map((engine) => (
+                                    <option key={engine.id} value={engine.id}>
+                                        {engine.name}
+                                        {engine.version ? ` · ${engine.version}` : ""}
+                                    </option>
+                                ))}
+                        </select>
+                    </label>
+
+                    <div className="flex flex-col gap-1">
+                        <span className="font-mono text-[10px] text-shade">authority</span>
+                        {(
+                            [
+                                ["own", "on its own", "your config, your connectors"],
+                                ["crew", "with the crew's tools", "Agentland's tools, this project's permits, the house rules"],
+                            ] as [Authority, string, string][]
+                        ).map(([value, label, hint]) => (
+                            <label key={value} className="flex cursor-pointer items-start gap-1.5">
+                                <input
+                                    type="radio"
+                                    className="mt-[3px] accent-turquoise"
+                                    checked={starting.authority === value}
+                                    onChange={() => set_starting({ ...starting, authority: value })}
+                                />
+                                <span className="min-w-0">
+                                    <span className="font-mono text-[11px] text-linen">{label}</span>
+                                    <span className="block font-mono text-[10px] leading-tight text-shade">{hint}</span>
+                                </span>
+                            </label>
+                        ))}
+                    </div>
+
+                    <div className="flex items-center justify-end gap-1">
+                        <button
+                            className="px-1.5 py-1 font-mono text-[11px] text-shade hover:text-linen"
+                            onClick={() => set_starting(null)}
+                        >
+                            cancel
+                        </button>
+                        <button
+                            className="rounded border border-turquoise px-2 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40"
+                            disabled={!starting.engine_id}
+                            onClick={start_cli}
+                        >
+                            start
+                        </button>
+                    </div>
+
+                    {engines.length > 0 && !engines.some((engine) => engine.installed) ? (
+                        <span className="font-mono text-[10px] text-coral">No engine is on PATH.</span>
+                    ) : null}
+                    {starting_error ? (
+                        <span className="font-mono text-[10px] text-coral">{starting_error}</span>
+                    ) : null}
+                </div>
+            ) : null}
+        </>
+    );
+
+    // The toolbar that carries "+ shell" only renders once a terminal is open,
+    // so the empty panel has to carry its own way out. It pointed at a control
+    // in the header that does not exist, which left the one state where a
+    // person most wants a terminal as the one state with no way to open one.
+    if (services.sessions.length === 0) {
+        return (
+            <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-4 text-center">
+                {popovers}
+                <p className="font-mono text-[11px] text-shell">No terminal is open.</p>
+                <button
+                    className="rounded border border-reef px-2 py-1 font-mono text-[11px] text-shell hover:border-turquoise hover:text-linen"
+                    onClick={(event) => void open_shell_menu(event, null)}
+                >
+                    + shell
+                </button>
+                <p className="font-mono text-[10px] text-shade">
+                    in a project's checkout, one of its worktrees, or a new one
+                </p>
+            </div>
+        );
+    }
+
+    const start_drag = (axis: "column" | "row", gap: number) => (event: React.PointerEvent) => {
+        event.preventDefault();
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+        drag.current = { axis, gap };
+        set_resizing(true);
+        document.body.style.cursor = axis === "column" ? "col-resize" : "row-resize";
+        document.body.style.userSelect = "none";
+    };
+
+    return (
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            {popovers}
             <div
                 data-chrome
                 className="flex shrink-0 items-center gap-2 border-b border-reef/60 px-2 py-1 font-mono text-[10px] text-shade"

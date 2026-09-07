@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { folder_name, standing_of } from "@/lib/shells";
+import { folder_name, places_in, standing_of } from "@/lib/shells";
 
 const repos = [{ id: "svc", primary_path: "/home/ege/code/svc" }];
 const worktrees = [
@@ -25,5 +25,40 @@ describe("where a pane stands", () => {
 
     it("names a folder by its last part", () => {
         expect(folder_name("/data/worktrees/svc/x-desk/")).toBe("x-desk");
+    });
+});
+
+const known = {
+    repos: [
+        { id: "svc", primary_path: "/home/ege/code/svc", default_branch: "main" },
+        { id: "gone", primary_path: "/home/ege/code/gone", default_branch: "main", missing: true },
+    ],
+    trees: [
+        { repository_id: "svc", name: "x-desk", path: "/data/worktrees/svc/x-desk", branch: "agent/x-desk" },
+        { repository_id: "svc", name: "old", path: "/data/worktrees/svc/old", branch: "agent/old", missing: true },
+        { repository_id: "other", name: "theirs", path: "/data/worktrees/other/theirs", branch: "agent/theirs" },
+    ],
+};
+
+describe("where a CLI can open", () => {
+    it("offers the main checkout first, then the project's own worktrees", () => {
+        expect(places_in(known, "svc").map((place) => place.path)).toEqual([
+            "/home/ege/code/svc",
+            "/data/worktrees/svc/x-desk",
+        ]);
+    });
+
+    it("names a place by what it is, not by its path", () => {
+        expect(places_in(known, "svc")[0].label).toBe("main checkout · main");
+        expect(places_in(known, "svc")[1].label).toBe("x-desk · agent/x-desk");
+    });
+
+    it("leaves out what is gone from disk, checkout and worktree alike", () => {
+        expect(places_in(known, "gone")).toEqual([]);
+        expect(places_in(known, "svc").some((place) => place.path.endsWith("/old"))).toBe(false);
+    });
+
+    it("offers nothing for a project it has never heard of", () => {
+        expect(places_in(known, "nobody")).toEqual([]);
     });
 });
