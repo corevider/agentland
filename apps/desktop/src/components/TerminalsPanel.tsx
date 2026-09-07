@@ -38,7 +38,15 @@ import {
     tracks_for,
 } from "@/lib/grid";
 import { apply_order, move_onto, order_of, prune_order } from "@/lib/order";
-import { folder_name, place_label, places_in, settled_place, standing_of, type Place } from "@/lib/shells";
+import {
+    folder_name,
+    out_of_sight,
+    place_label,
+    places_in,
+    settled_place,
+    standing_of,
+    type Place,
+} from "@/lib/shells";
 
 /// The place that is not a folder yet. No path is ever the empty string, so it
 /// can stand for "cut a new worktree" without colliding with a real one.
@@ -201,6 +209,33 @@ export function TerminalsPanel({ active }: { active: boolean }) {
             const here = standing_of(from, repos, trees);
 
             const items: MenuItem[] = [];
+
+            // What is still running with nothing on screen to reach it by. An
+            // agent whose pane was hidden keeps working, and this is the only
+            // way back to it.
+            const waiting = out_of_sight(
+                Object.values(live),
+                services.sessions,
+                (id) => views[id]?.holder,
+            ).filter((entry) => {
+                const held = agent_of(entry.id);
+                return (
+                    !held || !services.repositories || services.repositories.includes(held.repository_id)
+                );
+            });
+
+            if (waiting.length > 0) {
+                items.push({ label: "still running, not on screen", disabled: true });
+                for (const entry of waiting) {
+                    const held = agent_of(entry.id);
+                    items.push({
+                        label: held ? held.title || held.name : entry.command.split(/\s+/)[0],
+                        hint: place_label(entry.cwd, known.repos, known.trees) ?? undefined,
+                        run: () => services.open_session(entry.id),
+                    });
+                }
+            }
+
             if (from) {
                 items.push({
                     label: `Here · ${here?.worktree ?? (here ? "main checkout" : folder_name(from))}`,
@@ -286,7 +321,7 @@ export function TerminalsPanel({ active }: { active: boolean }) {
 
             services.open_menu(at, "Another shell", items);
         },
-        [services],
+        [agent_of, known, live, refresh_places, services, views],
     );
 
     // The engines are probed by running each one, so they are read when the

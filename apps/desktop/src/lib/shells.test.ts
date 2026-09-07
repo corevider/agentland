@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { folder_name, names_the_agent, place_label, places_in, settled_place, standing_of } from "@/lib/shells";
+import {
+    folder_name,
+    names_the_agent,
+    out_of_sight,
+    place_label,
+    places_in,
+    settled_place,
+    standing_of,
+} from "@/lib/shells";
 
 const repos = [{ id: "svc", primary_path: "/home/ege/code/svc" }];
 const worktrees = [
@@ -120,5 +128,23 @@ describe("whether a pane already says who is in it", () => {
     it("says no when there is nothing to compare", () => {
         expect(names_the_agent(null, "Vega")).toBe(false);
         expect(names_the_agent("auth refactor", null)).toBe(false);
+    });
+});
+
+describe("what is running with nothing on screen to reach it by", () => {
+    const running = [{ id: "a" }, { id: "b" }, { id: "c" }];
+    const nowhere = () => undefined;
+
+    it("offers what the grid is not showing", () => {
+        expect(out_of_sight(running, [{ id: "a" }], nowhere).map((held) => held.id)).toEqual(["b", "c"]);
+    });
+
+    it("offers nothing when everything is on screen", () => {
+        expect(out_of_sight(running, running, nowhere)).toEqual([]);
+    });
+
+    it("leaves out a pane a window of its own is already showing", () => {
+        const held = (id: string) => (id === "b" ? "window" : undefined);
+        expect(out_of_sight(running, [{ id: "a" }], held).map((entry) => entry.id)).toEqual(["c"]);
     });
 });

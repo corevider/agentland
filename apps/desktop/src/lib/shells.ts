@@ -121,3 +121,20 @@ export function names_the_agent(label: string | null | undefined, name: string |
     const loose = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return new RegExp(`(^|\\W)${loose}($|\\W)`, "i").test(label);
 }
+
+/// What the core is running that the panel is not showing.
+///
+/// Hiding an agent's pane leaves the agent working, which is the point of
+/// hiding rather than stopping it — but it also left no way back to it short of
+/// remembering it existed. A pane held by a window of its own is not out of
+/// sight; it is on screen somewhere else, and offering to open it again in the
+/// grid would be offering it twice.
+export function out_of_sight<T extends { id: string }>(
+    running: T[],
+    shown: { id: string }[],
+    holder_of: (id: string) => string | undefined,
+): T[] {
+    const on_screen = new Set(shown.map((entry) => entry.id));
+
+    return running.filter((entry) => !on_screen.has(entry.id) && !holder_of(entry.id));
+}
