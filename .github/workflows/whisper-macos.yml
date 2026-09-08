@@ -103,7 +103,7 @@ jobs:
         run: tar -czf "whisper-bin-macos-${{ matrix.arch }}.tar.gz" "whisper-bin-macos-${{ matrix.arch }}"
 
       - name: Put it where the app looks for it
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: whisper-${{ inputs.whisper }}
           name: whisper.cpp ${{ inputs.whisper }} for macOS
