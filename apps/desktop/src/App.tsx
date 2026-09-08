@@ -143,6 +143,7 @@ export default function App() {
     const [busy, set_busy] = useState(false);
     const [error, set_error] = useState<string | null>(null);
     const [can_record, set_can_record] = useState(true);
+    const [can_read_back, set_can_read_back] = useState(true);
     const metrics_ref = useRef(new Map<string, PaneMetrics>());
     const run_ref = useRef<{ id: string; started: number; panes: number; rate: number } | null>(null);
     const frame_ref = useRef({ fps: 0, worst_frame_ms: 0 });
@@ -184,18 +185,27 @@ export default function App() {
         return () => window.clearInterval(handle);
     }, []);
 
-    // Whether anything on this machine can record. Asked once: a recorder is
-    // installed by a person, not by the app, so it does not change under us.
+    // Whether anything here can record, and whether anything can read back what
+    // it recorded. Both, because speaking needs both: the window records on any
+    // machine, and until whisper has been fetched there is nothing to turn the
+    // recording into words — which used to be found out at the end of the first
+    // sentence somebody spoke, as a 400.
+    //
+    // Asked again whenever Settings closes, since Voice in there is what turns
+    // the second half from no to yes, and a button still grey after the
+    // download is a button somebody stops pressing.
     useEffect(() => {
-        if (can_listen()) {
-            set_can_record(true);
+        if (settings_open) {
             return;
         }
 
         voice_state()
-            .then((state) => set_can_record(Boolean(state.recorder)))
+            .then((state) => {
+                set_can_record(can_listen() || Boolean(state.recorder));
+                set_can_read_back(Boolean(state.transcriber));
+            })
             .catch(() => undefined);
-    }, []);
+    }, [settings_open]);
 
     const set_layout = useCallback((next: Layout) => {
         set_layout_state(next);
@@ -690,6 +700,15 @@ export default function App() {
             ? "marginal"
             : "fail";
 
+    // Why the button cannot be held, or nothing. Both halves of speaking are
+    // set up by a person — a recorder on the machine, whisper in Settings — so
+    // the one that is missing is the one worth naming.
+    const voice_trouble = !can_record
+        ? "no recorder on this machine — Settings says what voice needs"
+        : !can_read_back
+          ? "nothing can read a recording back yet — Settings, Voice fetches whisper for this machine"
+          : null;
+
     const update_settings = useCallback((next: Settings) => {
         set_settings(next);
         save_settings(next);
@@ -902,7 +921,7 @@ export default function App() {
                         // Held down, a button is a button and not a paragraph:
                         // without this, holding it starts selecting the label.
                         className={`select-none rounded border px-2 py-[3px] font-mono text-[11px] transition-colors ${
-                            !can_record
+                            voice_trouble
                                 ? "border-reef text-shade"
                                 : listening
                                   ? "animate-pulse border-coral bg-coral/15 text-coral"
@@ -912,11 +931,10 @@ export default function App() {
                         }`}
                         // A button that can only fail should say so before it is
                         // held, not after.
-                        disabled={!can_record}
+                        disabled={Boolean(voice_trouble)}
                         title={
-                            can_record
-                                ? "hold to speak — what you say is typed into the pane you are watching, not sent"
-                                : "no recorder on this machine — Settings says what voice needs"
+                            voice_trouble ??
+                            "hold to speak — what you say is typed into the pane you are watching, not sent"
                         }
                         onPointerDown={() => {
                             set_heard(null);

@@ -5658,7 +5658,7 @@ async fn heard_elsewhere(
     }
 
     let command = transcriber_of(&state)
-        .ok_or_else(|| anyhow::anyhow!("no transcriber set — Settings, then House rules' neighbour, Voice"))?;
+        .ok_or_else(|| anyhow::anyhow!("{}", crate::voice::no_transcriber()))?;
 
     let kind = headers
         .get(header::CONTENT_TYPE)

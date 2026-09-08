@@ -75,6 +75,29 @@ pub fn nothing_records() -> String {
     }
 }
 
+/// What to say when there is nothing to read a recording back with.
+///
+/// The old line was a riddle — *Settings, then House rules' neighbour, Voice* —
+/// which names no action, and on a machine where nothing has been fetched yet
+/// it reads as though something is broken rather than as something to set up.
+/// Voice, in Settings, fetches whisper.cpp and a model for this machine and
+/// writes the line itself; where nobody publishes a build for the machine, the
+/// honest answer is that it has to be installed by hand.
+pub fn no_transcriber() -> String {
+    if crate::whisper::build_here().is_some() {
+        "nothing can read a recording back yet — open Settings, Voice and pick a model: \
+         whisper is fetched there, and the command is written for you"
+            .to_owned()
+    } else {
+        format!(
+            "nothing can read a recording back yet — whisper.cpp publishes no build for {} on {}, \
+             so install whisper-cli yourself and name it in Settings, Voice",
+            std::env::consts::ARCH,
+            std::env::consts::OS
+        )
+    }
+}
+
 /// The first recorder on this machine, or nothing.
 pub fn pick_recorder(here: impl Fn(&str) -> bool) -> Option<&'static str> {
     RECORDERS.iter().copied().find(|tool| here(tool))
@@ -176,10 +199,7 @@ impl Voice {
         let _ = held.child.wait();
 
         let Some(command) = command.map(str::trim).filter(|held| !held.is_empty()) else {
-            anyhow::bail!(
-                "no transcriber set — put a command in Settings, such as \
-                 `whisper-cli -m models/ggml-base.en.bin -nt -f {{file}}`"
-            );
+            anyhow::bail!("{}", no_transcriber());
         };
 
         if !held.file.exists() {
@@ -291,6 +311,27 @@ mod tests {
             assert!(!says.contains("arecord"), "naming Linux tools leads nowhere here: {says}");
         } else {
             assert!(!says.contains("Windows"), "{says}");
+        }
+    }
+
+    #[test]
+    fn the_way_to_a_transcriber_is_named_rather_than_hinted_at() {
+        let says = no_transcriber();
+
+        assert!(says.contains("Settings"), "{says}");
+        assert!(says.contains("Voice"), "{says}");
+        assert!(
+            !says.contains("neighbour"),
+            "a person told where a panel sits relative to another panel has been told nothing: {says}"
+        );
+
+        // Where whisper.cpp publishes a build, Settings fetches it; where it
+        // does not, saying "pick a model" would send somebody to a button that
+        // cannot work. The two answers are different on purpose.
+        if crate::whisper::build_here().is_some() {
+            assert!(says.contains("pick a model"), "{says}");
+        } else {
+            assert!(says.contains(std::env::consts::OS), "{says}");
         }
     }
 
