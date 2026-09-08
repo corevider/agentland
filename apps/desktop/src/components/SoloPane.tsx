@@ -57,7 +57,11 @@ export function SoloPane({ session_id }: { session_id: string }) {
                 </button>
             </header>
 
-            <div className="flex min-h-0 flex-1 p-1.5">
+            {/* A grid of one rather than a flex row: a flex child with no
+                basis of its own is as wide as its content, which left the
+                terminal in a column down one side of the window it had just
+                been given. A lone grid cell stretches both ways. */}
+            <div className="grid min-h-0 flex-1 p-1.5">
                 {session ? (
                     <TerminalPane
                         session={session}

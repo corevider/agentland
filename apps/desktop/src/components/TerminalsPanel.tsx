@@ -254,22 +254,26 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                 (entry) => views[entry.id]?.holder === "window" && mine(entry),
             );
 
+            // A step of their own rather than a heading and a run of entries:
+            // the places below are what the menu is usually opened for, and a
+            // busy crew would have pushed them off the bottom.
             for (const [heading, group] of [
-                ["still running, not on screen", waiting.filter(mine)],
-                ["in a window of its own", elsewhere],
+                ["Still running, not on screen", waiting.filter(mine)],
+                ["In a window of its own", elsewhere],
             ] as [string, SessionInfo[]][]) {
                 if (group.length === 0) {
                     continue;
                 }
 
-                items.push({ label: heading, disabled: true });
-                for (const entry of group) {
-                    items.push({
+                items.push({
+                    label: heading,
+                    hint: `${group.length}`,
+                    items: group.map((entry) => ({
                         label: said(entry),
                         hint: place_label(entry.cwd, known.repos, known.trees) ?? undefined,
                         run: () => bring_back(entry.id),
-                    });
-                }
+                    })),
+                });
             }
 
             if (from) {
