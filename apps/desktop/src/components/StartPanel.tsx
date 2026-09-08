@@ -7,6 +7,7 @@ import {
     type Begun,
     type Engine,
     type Starter,
+    type StarterExtra,
     read_machine,
     spawn_default_shell,
     write_input,
@@ -25,6 +26,14 @@ const WHERE_LABEL: Record<Where, string> = {
     folder: "a folder on this machine",
     clone: "clone a repository",
 };
+
+/// What ticking this one unticks, by the name a person reads rather than by id.
+function instead_of(starter: Starter, extra: StarterExtra): string {
+    return starter.extras
+        .filter((held) => extra.instead_of.includes(held.id))
+        .map((held) => held.label)
+        .join(" and ");
+}
 
 /// Everything a project needs, in the order it needs it.
 ///
@@ -131,9 +140,19 @@ export function StartPanel({ active }: { active: boolean }) {
 
     // A box that looks like a checkbox and cannot be reached with a keyboard is
     // a box half the people who need it cannot tick.
-    const toggle_extra = useCallback((id: string) => {
-        set_extras((held) => (held.includes(id) ? held.filter((entry) => entry !== id) : [...held, id]));
-    }, []);
+    const toggle_extra = useCallback(
+        (id: string) => {
+            set_extras((held) => {
+                if (held.includes(id)) {
+                    return held.filter((entry) => entry !== id);
+                }
+
+                const replaced = chosen?.extras.find((entry) => entry.id === id)?.instead_of ?? [];
+                return [...held.filter((entry) => !replaced.includes(entry)), id];
+            });
+        },
+        [chosen],
+    );
 
     const start = useCallback(
         async (start_git: boolean) => {
@@ -468,6 +487,12 @@ export function StartPanel({ active }: { active: boolean }) {
                                                                     <span className="font-mono text-[10px] text-shade">
                                                                         {held.why}
                                                                     </span>
+                                                                    {instead_of(starter, held) ? (
+                                                                        <span className="font-mono text-[10px] text-sun">
+                                                                            picked instead of{" "}
+                                                                            {instead_of(starter, held)}
+                                                                        </span>
+                                                                    ) : null}
                                                                     {held.commands.map((line) => (
                                                                         <code
                                                                             key={line}

@@ -6314,6 +6314,9 @@ struct ExtraOffer {
     /// generates rather than leaves for a person to paste in.
     env: Vec<(&'static str, bool)>,
     env_file: &'static str,
+    /// The extras this one is picked instead of, so the panel can untick the
+    /// other one rather than send a pair the core is going to refuse.
+    instead_of: &'static [&'static str],
 }
 
 #[derive(Deserialize)]
@@ -6404,6 +6407,7 @@ async fn list_starters(
                         .collect(),
                     env: held.env.to_vec(),
                     env_file: held.env_file,
+                    instead_of: held.instead_of,
                     version,
                 });
             }
@@ -6552,7 +6556,7 @@ async fn begin(
 
         // Refused before the scaffolder runs: an extra that does not fit is a
         // mistake worth catching while nothing has been written yet.
-        let mut wanted = Vec::new();
+        let mut wanted: Vec<&'static crate::stacks::Extra> = Vec::new();
         for id in &body.extras {
             let id = id.trim();
             if id.is_empty() {
@@ -6567,6 +6571,14 @@ async fn begin(
                     "{} does not go on {}",
                     held.label,
                     starter.label
+                )));
+            }
+
+            if let Some(other) = wanted.iter().copied().find(|already| held.replaces(already)) {
+                return Err(ApiError(anyhow::anyhow!(
+                    "{} goes instead of {}, not beside it",
+                    held.label,
+                    other.label
                 )));
             }
 

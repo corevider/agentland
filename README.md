@@ -592,6 +592,7 @@ before anything leaves this machine."*
 Verified from a live run: `r1 last_result="card t9 handed to Ada"`, and the agent's command line
 carried the draft-only sentence.
 
+
 ### The gateway
 
 Credentials live in the OS keychain, or in an environment variable named after the integration when
@@ -1372,9 +1373,47 @@ That route also caught a bug worth keeping: the catalog refused to write
 name Next.js requires as an attempt to escape the project. The rule is on path components now, and it
 moved out of the test and into the writer, so it guards rather than merely asserts.
 
+### Better Auth, the other way in, picked instead of the first
+
+Auth.js is not the only answer to the question, and the other one is different enough to be worth
+offering rather than arguing about: Better Auth puts the tables in your own database, so a session is
+a row you can read rather than something a library keeps to itself. Email and password work the
+minute it lands — nothing to register with anybody — and GitHub is two keys away.
+
+**It is picked *instead of* Auth.js, not beside it.** The two name each other in the catalog, the
+panel unticks one when the other is ticked, and the core refuses the pair before either has run:
+*Better Auth goes instead of Auth.js, not beside it*. That is not tidiness. Both claim `/api/auth/*`,
+and a Next project holding `[...all]` and `[...nextauth]` under one path does not build at all —
+*Ambiguous route pattern "/api/auth/[...\*]" matches multiple routes* — which is a thing to be told
+while ticking a box, not at the first build. Measured, then written down as the test that says why
+the two replace each other.
+
+**The CLI is pinned to the library, the same lesson as Prisma's.** The tables are written by
+`npx auth@{version} migrate --yes`, and `{version}` is filled from the `better-auth` that actually
+landed in `node_modules` rather than from a tag. The reason is on npm today: `@better-auth/cli`, which
+used to be that CLI, is `1.4.21` while the library is `1.7.3` — a project that reached for the obvious
+package name would migrate against a schema three minor versions from the one it is running.
+
+**Nothing writes a base URL.** Better Auth warns that it has none and derives the origin from the
+request, and that is the right answer here rather than a warning to silence: a worktree's port is
+decided after this runs, so `http://localhost:3000` in a generated `.env.local` would be a URL that is
+true of nothing. `BETTER_AUTH_SECRET` is generated the way `AUTH_SECRET` is, from `/dev/urandom`; the
+GitHub keys are written empty and named in the report.
+
+**What an extra brings is written before its steps run.** It used to be the other way round, which
+was invisible while every extra's steps were `npm install` — and then a migration that finds its
+database by importing `src/lib/auth.ts` had nothing to read. The file lands first, the install runs,
+the CLI reads what is there. Auth.js and Prisma were re-run under the new order and land as they did.
+
+Measured end to end through the real scaffolder: 54 seconds from an empty folder to a Next.js project
+with `better-auth`, `better-sqlite3`, four tables in `auth.db`, a generated secret, `npm audit` with
+nothing known against it, and `tsc --noEmit` clean. Then run: `POST /api/auth/sign-up/email` came back
+with a session cookie and `get-session` read it back — on port 3998, with no base URL set anywhere,
+which is the whole argument for not writing one.
+
 ### Prisma, and two halves of a tool that have to match
 
-Prisma is the second extra on Next.js: a typed database client, and migrations that are files
+Prisma is the extra that is not a way in: a typed database client, and migrations that are files
 somebody reviews rather than something that happened to a server. It starts on SQLite through a
 driver adapter, so the project runs before anybody has a database — moving to Postgres is a change of
 adapter, not a change of code.

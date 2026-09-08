@@ -124,6 +124,13 @@ pub struct Extra {
     /// offered on the starters that have a server and not on the ones that are
     /// a folder of files a browser downloads.
     pub fits: &'static [&'static str],
+    /// The extras this one is picked instead of. Two ways in on one project is
+    /// not a thing anybody meant, and it does not merely look untidy: both
+    /// claim `/api/auth/*`, and Next refuses to build a project holding
+    /// `[...all]` and `[...nextauth]` under one path — *Ambiguous app routes
+    /// detected*. So the pair is refused before either has run, rather than at
+    /// the first build after somebody ticked both.
+    pub instead_of: &'static [&'static str],
     /// Run inside the project, once the starter has finished with it.
     pub steps: &'static [Step],
     pub files: &'static [(&'static str, &'static str)],
@@ -151,6 +158,11 @@ pub struct Extra {
 impl Extra {
     pub fn fits_starter(&self, starter_id: &str) -> bool {
         self.fits.iter().any(|held| *held == starter_id)
+    }
+
+    /// Whether these two are two answers to the same question.
+    pub fn replaces(&self, other: &Extra) -> bool {
+        self.instead_of.contains(&other.id) || other.instead_of.contains(&self.id)
     }
 }
 
@@ -332,6 +344,33 @@ const AUTH_ROUTE: &str = r#"import { handlers } from "@/auth"
 export const { GET, POST } = handlers
 "#;
 
+const BETTER_AUTH_CONFIG: &str = r#"import Database from "better-sqlite3"
+import { betterAuth } from "better-auth"
+
+export const auth = betterAuth({
+    database: new Database("./auth.db"),
+    emailAndPassword: { enabled: true },
+    socialProviders: {
+        github: {
+            clientId: process.env.GITHUB_CLIENT_ID ?? "",
+            clientSecret: process.env.GITHUB_CLIENT_SECRET ?? "",
+        },
+    },
+})
+"#;
+
+const BETTER_AUTH_ROUTE: &str = r#"import { toNextJsHandler } from "better-auth/next-js"
+
+import { auth } from "@/lib/auth"
+
+export const { GET, POST } = toNextJsHandler(auth)
+"#;
+
+const BETTER_AUTH_CLIENT: &str = r#"import { createAuthClient } from "better-auth/react"
+
+export const { signIn, signUp, signOut, useSession } = createAuthClient()
+"#;
+
 const PRISMA_CLIENT: &str = r#"import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3"
 
 import { PrismaClient } from "@/generated/prisma/client"
@@ -353,6 +392,7 @@ pub const EXTRAS: &[Extra] = &[Extra {
     what: "sign-in, sessions and a provider you do not write yourself",
     why: "Authentication is the one part of a project where writing it yourself is the wrong answer, and Auth.js is what the Next.js documentation itself points at. The version installed is v5, which is a beta and is said so plainly: it is the line the App Router is documented against, while the stable v4 predates it. The secret is generated here from /dev/urandom rather than left as a placeholder somebody ships.",
     fits: &["next"],
+    instead_of: &["better-auth"],
     steps: &[Step {
         tool: "npm",
         argv: &["install", "next-auth@beta"],
@@ -373,11 +413,51 @@ pub const EXTRAS: &[Extra] = &[Extra {
     headline: Some((Registry::Npm, "next-auth@beta")),
 },
 Extra {
+    id: "better-auth",
+    label: "Better Auth",
+    what: "the same job as Auth.js, with the tables in your own database",
+    why: "The other answer to the same question, and the one to take when you want the session to be a row you can read rather than something a library keeps to itself. Email and password work the minute it lands — nothing to register with anybody — and GitHub is two keys away. It is a stable 1.x rather than a beta. Its CLI writes the tables, and is held to the version of the library that actually landed rather than to a tag: the package that used to be the CLI is three minor versions behind the library today, which is exactly how a project ends up migrating against a schema it is not running. Nothing writes a base URL, because the port a worktree gets is decided after this runs — the origin is taken from the request until you set BETTER_AUTH_URL for somewhere real.",
+    fits: &["next"],
+    instead_of: &["auth-js"],
+    steps: &[
+        Step {
+            tool: "npm",
+            argv: &["install", "better-auth", "better-sqlite3"],
+            inside: true,
+        },
+        Step {
+            tool: "npm",
+            argv: &["install", "--save-dev", "@types/better-sqlite3"],
+            inside: true,
+        },
+        Step {
+            tool: "npx",
+            argv: &["auth@{version}", "migrate", "--yes"],
+            inside: true,
+        },
+    ],
+    files: &[
+        ("src/lib/auth.ts", BETTER_AUTH_CONFIG),
+        ("src/lib/auth-client.ts", BETTER_AUTH_CLIENT),
+        ("src/app/api/auth/[...all]/route.ts", BETTER_AUTH_ROUTE),
+    ],
+    env: &[
+        ("BETTER_AUTH_SECRET", true),
+        ("GITHUB_CLIENT_ID", false),
+        ("GITHUB_CLIENT_SECRET", false),
+    ],
+    env_file: ".env.local",
+    ignore: &["*.db", "*.db-journal"],
+    lockstep: Some("better-auth"),
+    headline: Some((Registry::Npm, "better-auth")),
+},
+Extra {
     id: "prisma",
     label: "Prisma",
     what: "a typed database client, and migrations that are files in the repository",
     why: "A query you got wrong stops compiling instead of returning the wrong row at three in the morning, and every schema change is a file somebody reviews rather than something that happened to a server. It starts on SQLite through a driver adapter, which needs nothing running — swapping the adapter is what moves it to Postgres once you know what you are deploying onto. The CLI is held to the version of the client that actually landed rather than to a tag, because prisma@latest is a release candidate today while the client behind it is not. Prisma also installs its own agent skills into the project, which this crew reads.",
     fits: &["next"],
+    instead_of: &[],
     steps: &[
         Step {
             tool: "npm",
@@ -826,8 +906,18 @@ fn swap(argv: &[&str], key: &str, value: &str) -> Vec<String> {
 }
 
 /// Put an extra on a project that has already been made.
+///
+/// What it brings is written before its steps run, not after. A step that reads
+/// the project needs the configuration the extra brought — Better Auth's
+/// migration finds its database by importing `src/lib/auth.ts`, and with the
+/// file written afterwards it has nothing to read and no tables to write. No
+/// step here writes a file an extra brings, so nothing is lost by being early.
 pub async fn add(extra: &Extra, project: &Path) -> Result<Vec<String>> {
     let mut did = Vec::new();
+
+    for (where_it_goes, body) in extra.files {
+        write_into(project, where_it_goes, body)?;
+    }
 
     for step in extra.steps {
         let argv: Vec<String> = if step.argv.iter().any(|piece| piece.contains("{version}")) {
@@ -848,10 +938,6 @@ pub async fn add(extra: &Extra, project: &Path) -> Result<Vec<String>> {
         if !output.status.success() {
             bail!("{} {} failed: {}", step.tool, argv.join(" "), last_words(&output));
         }
-    }
-
-    for (where_it_goes, body) in extra.files {
-        write_into(project, where_it_goes, body)?;
     }
 
     did.push(format!("added {} to the project", extra.label));
@@ -1070,7 +1156,65 @@ mod tests {
 
         let on_next: Vec<&str> = extras_for("next").into_iter().map(|held| held.id).collect();
         assert!(on_next.contains(&"auth-js") && on_next.contains(&"prisma"), "{on_next:?}");
+        assert!(on_next.contains(&"better-auth"), "{on_next:?}");
         assert!(extras_for("go-http").is_empty());
+    }
+
+    #[test]
+    fn two_answers_to_the_same_question_are_picked_instead_of_each_other() {
+        let auth = extra("auth-js").expect("Auth.js is in the catalog");
+        let better = extra("better-auth").expect("Better Auth is in the catalog");
+
+        assert!(auth.replaces(better));
+        assert!(better.replaces(auth));
+
+        let prisma = extra("prisma").expect("Prisma is in the catalog");
+        assert!(!prisma.replaces(auth), "a database is not a way in");
+        assert!(!auth.replaces(prisma));
+    }
+
+    #[test]
+    fn what_an_extra_is_picked_instead_of_exists_and_says_the_same_back() {
+        for held in EXTRAS {
+            for id in held.instead_of {
+                let other = extra(id)
+                    .unwrap_or_else(|| panic!("{} goes instead of {id}, which is not an extra", held.id));
+
+                assert!(
+                    other.instead_of.contains(&held.id),
+                    "{} replaces {id} and {id} does not replace it back",
+                    held.id
+                );
+
+                assert!(
+                    held.fits.iter().any(|starter| other.fits_starter(starter)),
+                    "{} and {id} are never offered together, so neither replaces the other",
+                    held.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_two_ways_in_both_claim_the_route_that_makes_them_exclusive() {
+        // Measured rather than assumed: a Next project holding both
+        // `[...all]` and `[...nextauth]` does not build — *Ambiguous route
+        // pattern "/api/auth/[...*]" matches multiple routes*. That is what
+        // `instead_of` is for, so it is what this asserts.
+        let both = [
+            extra("auth-js").expect("Auth.js is in the catalog"),
+            extra("better-auth").expect("Better Auth is in the catalog"),
+        ];
+
+        for held in both {
+            assert!(
+                held.files
+                    .iter()
+                    .any(|(path, _)| path.starts_with("src/app/api/auth/")),
+                "{} no longer claims /api/auth, so it may not need to replace the other",
+                held.id
+            );
+        }
     }
 
     #[test]

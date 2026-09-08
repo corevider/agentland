@@ -342,6 +342,10 @@ export interface StarterExtra {
     /// a person to paste in.
     env: [string, boolean][];
     env_file: string;
+    /// The extras this one is picked instead of. Two ways in on one project is
+    /// a pair the core refuses, so the panel unticks the other one rather than
+    /// sending it.
+    instead_of: string[];
 }
 
 export function list_starters(name?: string): Promise<Starter[]> {
