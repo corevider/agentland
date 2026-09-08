@@ -38,6 +38,7 @@ import {
     tracks_for,
 } from "@/lib/grid";
 import { apply_order, move_onto, order_of, prune_order } from "@/lib/order";
+import { belongs_here } from "@/lib/places";
 import {
     folder_name,
     out_of_sight,
@@ -236,9 +237,7 @@ export function TerminalsPanel({ active }: { active: boolean }) {
 
             const mine = (entry: SessionInfo) => {
                 const held = agent_of(entry.id);
-                return (
-                    !held || !services.repositories || services.repositories.includes(held.repository_id)
-                );
+                return !held || belongs_here(held, services.workspace_id, services.repositories);
             };
 
             const said = (entry: SessionInfo) => {

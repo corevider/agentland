@@ -252,3 +252,22 @@ export function trail(world: World, repository_id: string | null, worktree: stri
 
     return crumbs;
 }
+
+/// Whether this agent belongs to the workspace on screen.
+///
+/// A chief commands a workspace rather than a project, so it carries a
+/// workspace and no repository at all. Judging every agent by its project left
+/// the chief belonging to nothing: its pane was filtered out of the grid, and
+/// "open its pane" looked like it did nothing at all while the chief sat there
+/// asking a question nobody could see.
+export function belongs_here(
+    agent: { repository_id: string; workspace_id: string | null },
+    workspace_id: string | null,
+    repository_ids: string[] | null,
+): boolean {
+    if (agent.workspace_id) {
+        return workspace_id === null || agent.workspace_id === workspace_id;
+    }
+
+    return repository_ids === null || repository_ids.includes(agent.repository_id);
+}

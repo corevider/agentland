@@ -58,6 +58,9 @@ export interface WorkspaceServices {
     /// Read the crew again now, rather than waiting for the next poll to show
     /// something the person just changed.
     refresh_crew: () => void;
+    /// The workspace on screen. A chief belongs to one of these rather than to
+    /// any project, so `repositories` alone cannot place it.
+    workspace_id: string | null;
     focus_pane: (id: string) => void;
     focused_id: string | null;
     on_metrics: (id: string, value: PaneMetrics) => void;

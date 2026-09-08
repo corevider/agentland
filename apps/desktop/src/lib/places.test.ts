@@ -1,14 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-    home_from,
-    needs_switch,
-    places_from,
-    score,
-    search_places,
-    trail,
-    type World,
-} from "@/lib/places";
+import { belongs_here, home_from, needs_switch, places_from, score, search_places, trail, type World } from "@/lib/places";
 
 const world: World = {
     workspaces: [
@@ -222,5 +214,25 @@ describe("a chief in the jumper", () => {
         expect(place?.workspace_id).toBe("w2");
         expect(place?.detail).toBe("X · chief · Errands");
         expect(place?.repository_id).toBeNull();
+    });
+});
+
+describe("which workspace an agent belongs to", () => {
+    const chief = { repository_id: "", workspace_id: "ws3" };
+    const commander = { repository_id: "svc", workspace_id: null };
+
+    it("places a chief by its workspace, having no project to be placed by", () => {
+        expect(belongs_here(chief, "ws3", ["svc"])).toBe(true);
+        expect(belongs_here(chief, "ws1", ["svc"])).toBe(false);
+    });
+
+    it("places everybody else by their project", () => {
+        expect(belongs_here(commander, "ws3", ["svc"])).toBe(true);
+        expect(belongs_here(commander, "ws3", ["other"])).toBe(false);
+    });
+
+    it("keeps everyone when nothing is being narrowed to", () => {
+        expect(belongs_here(chief, null, null)).toBe(true);
+        expect(belongs_here(commander, null, null)).toBe(true);
     });
 });

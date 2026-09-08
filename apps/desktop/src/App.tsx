@@ -3,6 +3,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 import { BoardPanel } from "@/components/BoardPanel";
 import { ContextMenu, useContextMenu } from "@/components/ContextMenu";
 import { photograph } from "@/lib/capture";
+import { belongs_here } from "@/lib/places";
 import { Workspace } from "@/workspace/Workspace";
 import {
     focus_panel as focus_panel_in,
@@ -674,9 +675,9 @@ export default function App() {
 
         return sessions.filter((entry) => {
             const owner = crew.find((agent) => agent.session_id === entry.id);
-            return owner ? workspace_repos.includes(owner.repository_id) : true;
+            return owner ? belongs_here(owner, workspace_id, workspace_repos) : true;
         });
-    }, [crew, sessions, workspace_repos, zoomed_id]);
+    }, [crew, sessions, workspace_id, workspace_repos, zoomed_id]);
     const grid_columns = useMemo(
         () => (shown_sessions.length > 4 ? 4 : Math.max(shown_sessions.length, 1)),
         [shown_sessions.length],
@@ -772,6 +773,7 @@ export default function App() {
             },
             adopt_session,
             refresh_crew,
+            workspace_id,
             focus_pane: set_focused_id,
             focused_id,
             on_metrics,
@@ -780,6 +782,7 @@ export default function App() {
             adopt_session,
             close_session,
             refresh_crew,
+            workspace_id,
             crew,
             focused_id,
             going,
