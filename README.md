@@ -592,6 +592,14 @@ before anything leaves this machine."*
 Verified from a live run: `r1 last_result="card t9 handed to Ada"`, and the agent's command line
 carried the draft-only sentence.
 
+**Each one says whose it is and where.** The card used to carry a bare agent id, which answers
+nothing about whether the routine has anything to do with what is on screen. It now names the agent
+and where that agent lives — the workspace a chief commands, or a project and worktree — and the list
+is split: the ones in the workspace you are in, then *elsewhere · n*. Split rather than filtered,
+because a routine that is not listed is one nobody can turn off, and the one most worth turning off
+is the one running somewhere you are not looking. A routine whose agent has been let go says *that
+agent is gone* where the place would be, which is what its failures were already telling the ticker.
+The box that adds one only offers agents from the workspace on screen.
 
 ### The gateway
 

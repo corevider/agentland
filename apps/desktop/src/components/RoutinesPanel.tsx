@@ -1,20 +1,23 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { due_in, exactly, when } from "@/lib/when";
 
 import {
     create_routine,
     delete_routine,
-    format_elapsed,
     list_routines,
+    list_workspaces,
     set_routine_enabled,
     type Routine,
+    type Workspace,
 } from "@/lib/core";
+import { belongs_here, place_routines, type PlacedRoutine } from "@/lib/places";
 import { use_services } from "@/workspace/registry";
 
 export function RoutinesPanel({ active }: { active: boolean }) {
-    const { crew } = use_services();
+    const { crew, repositories, workspace_id } = use_services();
     const [routines, set_routines] = useState<Routine[]>([]);
+    const [workspaces, set_workspaces] = useState<Workspace[]>([]);
     const [now, set_now] = useState(() => Math.floor(Date.now() / 1000));
     const [draft, set_draft] = useState({
         name: "",
@@ -28,6 +31,31 @@ export function RoutinesPanel({ active }: { active: boolean }) {
     const refresh = useCallback(async () => {
         set_routines(await list_routines());
     }, []);
+
+    // Names for the workspaces a routine's agent might command. A chief carries
+    // a workspace id and no project, and an id is not what anybody calls it.
+    useEffect(() => {
+        if (!active) {
+            return;
+        }
+
+        list_workspaces()
+            .then((listed) => set_workspaces(listed.workspaces))
+            .catch(() => undefined);
+    }, [active]);
+
+    // Only the agents in this workspace can be given a routine from here. The
+    // rest are somebody else's, and picking one by accident makes a routine
+    // that runs where nobody is looking.
+    const mine = useMemo(
+        () => crew.filter((agent) => belongs_here(agent, workspace_id, repositories)),
+        [crew, repositories, workspace_id],
+    );
+
+    const placed = useMemo(
+        () => place_routines(routines, crew, workspaces, workspace_id, repositories),
+        [crew, repositories, routines, workspace_id, workspaces],
+    );
 
     useEffect(() => {
         if (!active) {
@@ -55,10 +83,19 @@ export function RoutinesPanel({ active }: { active: boolean }) {
     const create = useCallback(() => {
         const name = draft.name.trim();
         const brief = draft.brief.trim();
-        const agent_id = draft.agent_id || crew[0]?.id;
+        // The drafted agent may be one this workspace no longer holds — the
+        // person switched after picking it, and the select fell back to its
+        // first option while the draft kept the old id.
+        const agent_id = mine.some((agent) => agent.id === draft.agent_id)
+            ? draft.agent_id
+            : mine[0]?.id;
 
         if (!name || !brief || !agent_id) {
-            set_notice("a routine needs a name, an agent and a brief");
+            set_notice(
+                mine.length === 0
+                    ? "no agent in this workspace yet — Crew is where one is hired"
+                    : "a routine needs a name, an agent and a brief",
+            );
             return;
         }
 
@@ -66,7 +103,80 @@ export function RoutinesPanel({ active }: { active: boolean }) {
             await create_routine({ ...draft, name, brief, agent_id });
             set_draft({ ...draft, name: "", brief: "" });
         });
-    }, [crew, draft, run]);
+    }, [draft, mine, run]);
+
+    const card = useCallback(
+        ({ routine, who, where, gone }: PlacedRoutine<Routine>) => {
+            const overdue =
+                routine.last_run > 0 && now - routine.last_run > routine.every_minutes * 60;
+
+            return (
+                <article
+                    key={routine.id}
+                    className={`rounded-md border bg-lagoon-deep px-2 py-1 ${
+                        routine.enabled ? "border-reef" : "border-shade/50"
+                    }`}
+                >
+                    <div className="flex flex-wrap items-baseline gap-2">
+                        <span className="text-[12px] text-linen">{routine.name}</span>
+                        <span className="font-mono text-[10px] text-shade">
+                            {who} · <span className={gone ? "text-coral" : "text-shade"}>{where}</span> ·
+                            every {routine.every_minutes} min
+                            {routine.draft_only ? " · draft only" : ""}
+                        </span>
+                        <span className="ml-auto flex items-center gap-1">
+                            <button
+                                className={`rounded border px-1.5 font-mono text-[10px] ${
+                                    routine.enabled ? "border-palm text-palm" : "border-shade text-shade"
+                                }`}
+                                onClick={() => run(() => set_routine_enabled(routine.id, !routine.enabled))}
+                            >
+                                {routine.enabled ? "on" : "off"}
+                            </button>
+                            <button
+                                className="rounded border border-reef px-1.5 font-mono text-[10px] hover:border-coral hover:text-coral"
+                                onClick={() => run(() => delete_routine(routine.id))}
+                            >
+                                delete
+                            </button>
+                        </span>
+                    </div>
+
+                    <div className="mt-0.5 text-[11px] text-driftwood">{routine.brief}</div>
+
+                    <div className="mt-0.5 flex flex-wrap gap-2 font-mono text-[10px] text-shade">
+                        <span title={exactly(routine.last_run)}>
+                            {routine.last_run === 0
+                                ? "never run"
+                                : `last ran ${when(routine.last_run, now)}`}
+                        </span>
+                        <span
+                            title={
+                                routine.last_run === 0
+                                    ? "it runs on the next tick"
+                                    : exactly(routine.last_run + routine.every_minutes * 60)
+                            }
+                        >
+                            {routine.enabled
+                                ? routine.last_run === 0
+                                    ? "due now"
+                                    : `next ${due_in(routine.last_run + routine.every_minutes * 60, now)}`
+                                : "paused"}
+                        </span>
+                        {overdue && routine.enabled ? <span className="text-sun">due</span> : null}
+                        {routine.consecutive_failures > 0 ? (
+                            <span className="text-coral">
+                                {routine.consecutive_failures} failure
+                                {routine.consecutive_failures === 1 ? "" : "s"} in a row
+                            </span>
+                        ) : null}
+                        {routine.last_result ? <span>{routine.last_result}</span> : null}
+                    </div>
+                </article>
+            );
+        },
+        [now, run],
+    );
 
     return (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-y-auto p-2.5">
@@ -79,10 +189,10 @@ export function RoutinesPanel({ active }: { active: boolean }) {
                 />
                 <select
                     className="rounded-md border border-reef bg-lagoon-deep font-mono text-[11px]"
-                    value={draft.agent_id || crew[0]?.id || ""}
+                    value={draft.agent_id || mine[0]?.id || ""}
                     onChange={(event) => set_draft({ ...draft, agent_id: event.target.value })}
                 >
-                    {crew.map((agent) => (
+                    {mine.map((agent) => (
                         <option key={agent.id} value={agent.id}>
                             {agent.name}
                         </option>
@@ -139,81 +249,29 @@ export function RoutinesPanel({ active }: { active: boolean }) {
                         No routine yet. A routine gives an agent the same brief on a timer, and disables
                         itself after two failures rather than running into the wall.
                     </p>
+                ) : placed.here.length === 0 ? (
+                    <p className="font-mono text-[10px] text-shade">
+                        Nothing runs on a timer in this workspace.
+                    </p>
                 ) : null}
 
                 <div className="flex flex-col gap-1">
-                    {routines.map((routine) => {
-                        const overdue =
-                            routine.last_run > 0 && now - routine.last_run > routine.every_minutes * 60;
+                    {placed.here.length > 0 && placed.elsewhere.length > 0 ? (
+                        <span className="mt-1 font-mono text-[9px] uppercase tracking-[0.14em] text-shade">
+                            here
+                        </span>
+                    ) : null}
+                    {placed.here.map(card)}
 
-                        return (
-                            <article
-                                key={routine.id}
-                                className={`rounded-md border bg-lagoon-deep px-2 py-1 ${
-                                    routine.enabled ? "border-reef" : "border-shade/50"
-                                }`}
-                            >
-                                <div className="flex flex-wrap items-baseline gap-2">
-                                    <span className="text-[12px] text-linen">{routine.name}</span>
-                                    <span className="font-mono text-[10px] text-shade">
-                                        {routine.agent_id} · every {routine.every_minutes} min
-                                        {routine.draft_only ? " · draft only" : ""}
-                                    </span>
-                                    <span className="ml-auto flex items-center gap-1">
-                                        <button
-                                            className={`rounded border px-1.5 font-mono text-[10px] ${
-                                                routine.enabled
-                                                    ? "border-palm text-palm"
-                                                    : "border-shade text-shade"
-                                            }`}
-                                            onClick={() =>
-                                                run(() => set_routine_enabled(routine.id, !routine.enabled))
-                                            }
-                                        >
-                                            {routine.enabled ? "on" : "off"}
-                                        </button>
-                                        <button
-                                            className="rounded border border-reef px-1.5 font-mono text-[10px] hover:border-coral hover:text-coral"
-                                            onClick={() => run(() => delete_routine(routine.id))}
-                                        >
-                                            delete
-                                        </button>
-                                    </span>
-                                </div>
-
-                                <div className="mt-0.5 text-[11px] text-driftwood">{routine.brief}</div>
-
-                                <div className="mt-0.5 flex flex-wrap gap-2 font-mono text-[10px] text-shade">
-                                    <span title={exactly(routine.last_run)}>
-                                        {routine.last_run === 0
-                                            ? "never run"
-                                            : `last ran ${when(routine.last_run, now)}`}
-                                    </span>
-                                    <span
-                                        title={
-                                            routine.last_run === 0
-                                                ? "it runs on the next tick"
-                                                : exactly(routine.last_run + routine.every_minutes * 60)
-                                        }
-                                    >
-                                        {routine.enabled
-                                            ? routine.last_run === 0
-                                                ? "due now"
-                                                : `next ${due_in(routine.last_run + routine.every_minutes * 60, now)}`
-                                            : "paused"}
-                                    </span>
-                                    {overdue && routine.enabled ? <span className="text-sun">due</span> : null}
-                                    {routine.consecutive_failures > 0 ? (
-                                        <span className="text-coral">
-                                            {routine.consecutive_failures} failure
-                                            {routine.consecutive_failures === 1 ? "" : "s"} in a row
-                                        </span>
-                                    ) : null}
-                                    {routine.last_result ? <span>{routine.last_result}</span> : null}
-                                </div>
-                            </article>
-                        );
-                    })}
+                    {placed.elsewhere.length > 0 ? (
+                        <span
+                            className="mt-1 font-mono text-[9px] uppercase tracking-[0.14em] text-shade"
+                            title="a routine you cannot see is one you cannot turn off, so the ones from other workspaces stay listed"
+                        >
+                            elsewhere · {placed.elsewhere.length}
+                        </span>
+                    ) : null}
+                    {placed.elsewhere.map(card)}
                 </div>
             </section>
         </div>

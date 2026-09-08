@@ -271,3 +271,65 @@ export function belongs_here(
 
     return repository_ids === null || repository_ids.includes(agent.repository_id);
 }
+
+/// A routine, and where the agent it runs lives.
+export interface PlacedRoutine<T> {
+    routine: T;
+    /// The agent's name, or the id nothing answers to any more.
+    who: string;
+    /// Where that agent is: the workspace it commands, or its project and
+    /// worktree. A routine used to show a bare agent id, which says nothing
+    /// about whether it has anything to do with what is on screen.
+    where: string;
+    /// Whether the agent it names is still on the crew. A routine whose agent
+    /// is gone fails every tick, so it is worth saying rather than leaving
+    /// somebody to read an id and wonder.
+    gone: boolean;
+}
+
+/// Routines split into the ones this workspace can act on and the rest.
+///
+/// Not filtered: a routine that is not listed is one nobody can turn off, and
+/// the one most worth turning off is the one running somewhere you are not
+/// looking. So the others stay, under a heading that says they are elsewhere.
+export function place_routines<T extends { agent_id: string }>(
+    routines: T[],
+    crew: Agent[],
+    workspaces: { id: string; name: string }[],
+    workspace_id: string | null,
+    repository_ids: string[] | null,
+): { here: PlacedRoutine<T>[]; elsewhere: PlacedRoutine<T>[] } {
+    const here: PlacedRoutine<T>[] = [];
+    const elsewhere: PlacedRoutine<T>[] = [];
+
+    for (const routine of routines) {
+        const agent = crew.find((held) => held.id === routine.agent_id) ?? null;
+
+        if (!agent) {
+            elsewhere.push({
+                routine,
+                who: routine.agent_id,
+                where: "that agent is gone",
+                gone: true,
+            });
+            continue;
+        }
+
+        const placed: PlacedRoutine<T> = {
+            routine,
+            who: agent.name,
+            where: agent.workspace_id
+                ? workspaces.find((held) => held.id === agent.workspace_id)?.name ?? agent.workspace_id
+                : `${agent.repository_id}/${agent.worktree}`,
+            gone: false,
+        };
+
+        if (belongs_here(agent, workspace_id, repository_ids)) {
+            here.push(placed);
+        } else {
+            elsewhere.push(placed);
+        }
+    }
+
+    return { here, elsewhere };
+}

@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { belongs_here, home_from, needs_switch, places_from, score, search_places, trail, type World } from "@/lib/places";
+import {
+    belongs_here,
+    home_from,
+    needs_switch,
+    place_routines,
+    places_from,
+    score,
+    search_places,
+    trail,
+    type World,
+} from "@/lib/places";
 
 const world: World = {
     workspaces: [
@@ -234,5 +244,61 @@ describe("which workspace an agent belongs to", () => {
     it("keeps everyone when nothing is being narrowed to", () => {
         expect(belongs_here(chief, null, null)).toBe(true);
         expect(belongs_here(commander, null, null)).toBe(true);
+    });
+});
+
+describe("where a routine's agent lives", () => {
+    const workspaces = [
+        { id: "w1", name: "Agentland" },
+        { id: "w2", name: "Errands" },
+    ];
+
+    const crew = [
+        { ...world.agents[0], id: "tor", name: "Tor", repository_id: "", worktree: "", workspace_id: "w1" },
+        { ...world.agents[0], id: "x", name: "X", repository_id: "svc-demo", worktree: "x-desk", workspace_id: null },
+    ];
+
+    const routines = [
+        { id: "r1", agent_id: "tor" },
+        { id: "r2", agent_id: "x" },
+        { id: "r3", agent_id: "long-gone" },
+    ];
+
+    it("says a chief's routine by the workspace it commands", () => {
+        const { here } = place_routines(routines, crew, workspaces, "w1", ["agentland"]);
+
+        expect(here.map((held) => held.routine.id)).toEqual(["r1"]);
+        expect(here[0].who).toBe("Tor");
+        expect(here[0].where).toBe("Agentland");
+    });
+
+    it("says everybody else's by project and worktree", () => {
+        const { here } = place_routines(routines, crew, workspaces, "w2", ["svc-demo"]);
+
+        expect(here.map((held) => held.routine.id)).toEqual(["r2"]);
+        expect(here[0].where).toBe("svc-demo/x-desk");
+    });
+
+    it("keeps the ones from elsewhere rather than hiding what cannot be turned off", () => {
+        const { here, elsewhere } = place_routines(routines, crew, workspaces, "w1", ["agentland"]);
+
+        expect(here).toHaveLength(1);
+        expect(elsewhere.map((held) => held.routine.id)).toEqual(["r2", "r3"]);
+    });
+
+    it("says so when the agent a routine names is gone", () => {
+        const { elsewhere } = place_routines(routines, crew, workspaces, "w1", ["agentland"]);
+        const orphan = elsewhere.find((held) => held.routine.id === "r3");
+
+        expect(orphan?.gone).toBe(true);
+        expect(orphan?.who).toBe("long-gone");
+        expect(orphan?.where).toBe("that agent is gone");
+    });
+
+    it("puts everything here when nothing is being narrowed to", () => {
+        const { here, elsewhere } = place_routines(routines, crew, workspaces, null, null);
+
+        expect(here.map((held) => held.routine.id)).toEqual(["r1", "r2"]);
+        expect(elsewhere.map((held) => held.routine.id)).toEqual(["r3"]);
     });
 });
