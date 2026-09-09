@@ -53,6 +53,25 @@ impl ServerConfig {
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("data"))
     }
+
+    /// Spell the data directory the way the filesystem does, once, before
+    /// anything is grown from it.
+    ///
+    /// Every folder Agentland hands another program is a join onto this path,
+    /// and the engine's trust file is keyed by the exact string. An environment
+    /// value and the folder as the filesystem spells it are the same path and
+    /// not the same string on Windows, so a chief was given a desk under one
+    /// spelling and the answer to "do you trust this folder?" was written under
+    /// the other, and every chief opened on a question nobody meant to ask. The
+    /// registry has always settled its own copy, which is why worktrees never
+    /// asked and desks did.
+    ///
+    /// The folder is made first: a path that is not there yet cannot be read,
+    /// and a first run would otherwise keep the spelling it was given.
+    pub fn settle_data_dir(&mut self) {
+        let _ = std::fs::create_dir_all(&self.data_dir);
+        self.data_dir = crate::exec::settled(&self.data_dir);
+    }
 }
 
 #[derive(Clone)]
@@ -143,7 +162,7 @@ struct ErrorBody {
     error: String,
 }
 
-pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()> {
+pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result<()> {
     let manager_for_services = manager.clone();
     let manager_for_crew = manager.clone();
     let port_for_crew = config.port;
@@ -164,7 +183,10 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
             HeaderName::from_static("x-auth-token"),
         ]);
 
+    config.settle_data_dir();
+
     let data_dir = config.data_dir.clone();
+    crate::repo::hand_the_tools_to_every_desk(&data_dir);
     let allowed_hosts = Arc::new(parking_lot::RwLock::new(config.allowed_hosts.clone()));
     let door_port = config.port;
     let door_by_config = crate::phone::reachable(&config.host);
@@ -7639,6 +7661,71 @@ mod memory_notice_tests {
         let shown = opening_of(&written, 10);
 
         assert_eq!(shown, format!("{}…", "ö".repeat(10)));
+    }
+}
+
+#[cfg(test)]
+mod desk_spelling_tests {
+    use super::ServerConfig;
+    use std::path::PathBuf;
+
+    fn a_config(data_dir: PathBuf) -> ServerConfig {
+        ServerConfig {
+            host: "127.0.0.1".to_owned(),
+            port: 0,
+            token: String::new(),
+            allowed_hosts: Vec::new(),
+            allowed_origins: Vec::new(),
+            data_dir,
+        }
+    }
+
+    /// The bug a chief on Windows sat in front of, in the shape it can be
+    /// reproduced anywhere: a data directory whose spelling is not the
+    /// filesystem's own. A desk is handed to the pane as a cwd and written to
+    /// the engine's config as a key, and the engine finds its own answer only
+    /// when those two are the same string.
+    #[test]
+    fn a_desk_is_keyed_by_the_same_path_the_pane_is_opened_at() {
+        let dir = std::env::temp_dir().join("agentland-desk-spelling");
+        let _ = std::fs::remove_dir_all(&dir);
+        let real = dir.join("real");
+        std::fs::create_dir_all(&real).unwrap();
+
+        let named = dir.join("named");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &named).unwrap();
+        #[cfg(not(unix))]
+        std::os::windows::fs::symlink_dir(&real, &named).unwrap();
+
+        let mut config = a_config(named.clone());
+        config.settle_data_dir();
+
+        let desk = config.data_dir.join("desks").join("ws2");
+        std::fs::create_dir_all(&desk).unwrap();
+
+        assert_ne!(
+            named.join("desks").join("ws2"),
+            desk,
+            "the two spellings differ, or this test proves nothing"
+        );
+        assert_eq!(
+            desk,
+            crate::exec::settled(&desk),
+            "the cwd a chief is given is the key its trust is written under"
+        );
+    }
+
+    #[test]
+    fn a_data_directory_that_is_not_there_yet_is_made_before_it_is_read() {
+        let dir = std::env::temp_dir().join("agentland-desk-spelling-fresh");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let mut config = a_config(dir.join("data"));
+        config.settle_data_dir();
+
+        assert!(config.data_dir.is_dir());
+        assert_eq!(config.data_dir, crate::exec::settled(&config.data_dir));
     }
 }
 

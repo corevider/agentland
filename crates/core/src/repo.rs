@@ -713,6 +713,25 @@ pub fn hand_the_tools_to(folder: &Path, data_dir: &Path) {
     trust_the_folder(folder);
 }
 
+/// Do the same for every desk already standing, at every start.
+///
+/// A worktree is handed its tools again each time the registry loads, so an
+/// answer the engine lost — its config rewritten by a pane that was holding an
+/// older copy of it — comes back on the next launch. A desk was only ever given
+/// its own when it was made, and had no such second chance.
+pub fn hand_the_tools_to_every_desk(data_dir: &Path) {
+    let Ok(entries) = fs::read_dir(data_dir.join("desks")) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let desk = entry.path();
+        if desk.is_dir() {
+            hand_the_tools_to(&desk, data_dir);
+        }
+    }
+}
+
 fn mcp_binary(data_dir: &Path) -> String {
     built_tool()
         .and_then(|built| kept_tool(&built, data_dir).or(Some(built)))
@@ -1688,6 +1707,31 @@ mod tests {
 
         let held: serde_json::Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(held["projects"]["/made/by/agentland"]["hasTrustDialogAccepted"], true);
+    }
+
+    #[test]
+    fn every_desk_already_standing_is_handed_the_tools_again() {
+        let data_dir = a_folder("desks-swept");
+        let desk = data_dir.join("desks").join("ws2");
+        fs::create_dir_all(&desk).unwrap();
+
+        hand_the_tools_to_every_desk(&data_dir);
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(desk.join(".claude/settings.local.json")).unwrap())
+                .unwrap();
+
+        assert_eq!(settings["enableAllProjectMcpServers"], serde_json::Value::Bool(true));
+        assert!(desk.join(".mcp.json").exists(), "the crew's tools are there");
+    }
+
+    #[test]
+    fn a_machine_with_no_desks_yet_sweeps_nothing_and_says_nothing() {
+        let data_dir = a_folder("desks-none");
+
+        hand_the_tools_to_every_desk(&data_dir);
+
+        assert!(!data_dir.join("desks").exists());
     }
 
     #[test]
