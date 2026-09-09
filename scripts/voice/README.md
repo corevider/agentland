@@ -30,13 +30,19 @@ MIT-licensed: no account, no key, and nothing leaves the machine.
 
 `AGENTLAND_WHISPER_MODEL` picks it, `small` by default.
 
-| model | size | good for |
-| --- | --- | --- |
-| `base.en` | 142 MB | English only, fastest |
-| `small` | 466 MB | many languages, including Turkish |
-| `medium` | 1.5 GB | noticeably better Turkish, slower |
+| model | size | good for | a short sentence, guessing | language named |
+| --- | --- | --- | --- | --- |
+| `tiny` | 75 MB | English at a pinch, nothing subtle | 0.70 s | 0.40 s |
+| `base.en` | 142 MB | English only, fastest | 1.28 s | 0.66 s |
+| `small` | 466 MB | many languages, including Turkish | 4.19 s | 2.51 s |
+| `medium` | 1.5 GB | noticeably better Turkish, slower | — | — |
 
 Models ending in `.en` hear English and nothing else.
+
+Measured on a four-core i7-7700 against the same 1.4-second recording, with the
+model already loaded. The two columns are the same work with and without the
+guess in the next section: guessing the language is a second pass over the
+audio, and on `small` it is the larger half of the wait.
 
 ## Which language
 
@@ -48,7 +54,10 @@ AGENTLAND_WHISPER_LANGUAGE=tr ~/.local/bin/agentland-transcribe {file}
 ```
 
 Unset, it guesses, which is right for somebody who moves between languages and
-wrong for short sentences.
+wrong for short sentences. The guess is not free: it runs the model over the
+audio once to decide, and then again to hear it. On `small` that is 4.19 seconds
+against 2.51 — so anybody who dictates in one language only should name it, and
+anybody who does not should know what the choice is buying.
 
 ## Why it stays running
 
@@ -57,8 +66,31 @@ seconds for every sentence is dictation nobody uses. The first call starts a
 small process that holds the model, warms everything lazy in it, and answers
 over a socket; it lets itself go after half an hour of silence.
 
-Measured on an eight-thread CPU with `small`: about 9.7 seconds for the first
-sentence and 2.4 for every one after it.
+`AGENTLAND_WHISPER_THREADS` sets how many threads it decodes on. Left alone it
+takes one per core rather than one per hyperthread: two threads sharing a core's
+arithmetic finish later than one, and the same sentence took 4.05 seconds on
+eight threads and 3.21 on four. The machine has a crew running on it besides.
+
+## Why it is loaded before you stop talking
+
+Half an hour of silence and the model is gone, so the next sentence pays for it
+again — and it used to pay at the worst moment, after the sentence was finished
+and somebody was watching. Agentland now nudges the transcriber when the button
+goes *down*: it hands it a second of silence, which for this script is the thing
+that starts the process above, and the loading happens while the sentence is
+still being said.
+
+Measured on the same machine, cold, against a real recording:
+
+| | a person waits |
+| --- | --- |
+| cold, nudged when the button went down | 3.8 s |
+| cold, loading only once the sentence was over | 6.8 s |
+| warm | 4.0 s |
+
+The first row is the second one with the loading moved off the end. It needs a
+sentence long enough to load under — about five seconds here — and a two-second
+sentence gets some of it rather than all.
 
 ## Speaking from a phone, or from Windows over a remote desktop
 

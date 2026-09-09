@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
@@ -9,8 +10,19 @@ use parking_lot::Mutex;
 /// the words are read by another one, named in the settings. Nothing is
 /// bundled and nothing is sent anywhere: a microphone is not something to be
 /// casual with, and a model is not something to ship by surprise.
+/// How long a transcriber is taken to still be warm.
+///
+/// A model that has to be loaded costs about eight seconds, so anything worth
+/// naming a transcriber keeps it in memory and lets go after a while. Twenty
+/// minutes is under every such timeout seen so far, and being wrong here is
+/// only one wasted second of somebody else's idle CPU.
+const STAYS_WARM: Duration = Duration::from_secs(20 * 60);
+
 pub struct Voice {
     holding: Mutex<Option<Held>>,
+    /// When something was last read back here, so a press knows whether the
+    /// transcriber is cold enough to be worth waking.
+    last_read: Mutex<Option<Instant>>,
     data_dir: PathBuf,
 }
 
@@ -98,6 +110,37 @@ pub fn no_transcriber() -> String {
     }
 }
 
+/// One second of silence, as a wav a speech model will read.
+///
+/// Written here rather than shipped as a file: 32 kilobytes of zeros in the
+/// repository is 32 kilobytes nobody can read, and the header is eleven fields
+/// long. Sixteen kilohertz, one channel, sixteen bits — what the recorders are
+/// asked for, and what every model wants.
+pub fn a_second_of_silence() -> Vec<u8> {
+    const RATE: u32 = 16_000;
+    const BITS: u16 = 16;
+    const CHANNELS: u16 = 1;
+
+    let audio = (RATE * u32::from(BITS / 8) * u32::from(CHANNELS)) as usize;
+    let mut wav = Vec::with_capacity(44 + audio);
+
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&((36 + audio) as u32).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&CHANNELS.to_le_bytes());
+    wav.extend_from_slice(&RATE.to_le_bytes());
+    wav.extend_from_slice(&(RATE * u32::from(CHANNELS) * u32::from(BITS / 8)).to_le_bytes());
+    wav.extend_from_slice(&(CHANNELS * BITS / 8).to_le_bytes());
+    wav.extend_from_slice(&BITS.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(audio as u32).to_le_bytes());
+    wav.resize(44 + audio, 0);
+
+    wav
+}
+
 /// The first recorder on this machine, or nothing.
 pub fn pick_recorder(here: impl Fn(&str) -> bool) -> Option<&'static str> {
     RECORDERS.iter().copied().find(|tool| here(tool))
@@ -151,8 +194,46 @@ impl Voice {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
             holding: Mutex::new(None),
+            last_read: Mutex::new(None),
             data_dir: crate::exec::settled(&data_dir),
         }
+    }
+
+    /// Something was read back just now, so whatever holds the model is awake.
+    pub fn read_something(&self) {
+        *self.last_read.lock() = Some(Instant::now());
+    }
+
+    /// Whether waking the transcriber now would be doing it a favour.
+    pub fn is_cold(&self) -> bool {
+        self.last_read
+            .lock()
+            .map(|when| when.elapsed() >= STAYS_WARM)
+            .unwrap_or(true)
+    }
+
+    /// Load the model while the person is still speaking.
+    ///
+    /// A transcriber that keeps a model in memory spends about eight seconds
+    /// putting it there, and it was spending them after the sentence was
+    /// finished — the one moment somebody is watching. A second of silence,
+    /// handed over the moment the button goes down, makes it happen while they
+    /// are still talking. Nothing is done with what comes back, and a
+    /// transcriber that keeps nothing in memory only reads a second of silence
+    /// it was going to be given anyway.
+    pub fn wake(&self, command: &str) -> anyhow::Result<()> {
+        let folder = self.data_dir.join("voice");
+        std::fs::create_dir_all(&folder)?;
+
+        let quiet = folder.join("quiet.wav");
+        if !quiet.is_file() {
+            std::fs::write(&quiet, a_second_of_silence())?;
+        }
+
+        self.read_something();
+        let _ = crate::exec::shell_line(&fill_in(command, &quiet)).output()?;
+
+        Ok(())
     }
 
     /// Whether anything here can record at all.
@@ -317,6 +398,33 @@ mod tests {
         } else {
             assert!(!says.contains("Windows"), "{says}");
         }
+    }
+
+    #[test]
+    fn the_silence_handed_over_early_is_a_wav_something_can_read() {
+        let wav = a_second_of_silence();
+
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        assert_eq!(&wav[36..40], b"data");
+        assert_eq!(wav.len(), 44 + 32_000, "a second at sixteen kilohertz, sixteen bits");
+        assert_eq!(u32::from_le_bytes(wav[24..28].try_into().unwrap()), 16_000);
+        assert!(wav[44..].iter().all(|byte| *byte == 0), "silence");
+        assert_eq!(
+            u32::from_le_bytes(wav[4..8].try_into().unwrap()) as usize,
+            wav.len() - 8,
+            "the size in the header is the size of the file"
+        );
+    }
+
+    #[test]
+    fn a_transcriber_is_only_worth_waking_once_it_has_gone_cold() {
+        let voice = Voice::new(std::env::temp_dir().join("agentland-voice-test"));
+
+        assert!(voice.is_cold(), "nothing has been read back yet");
+
+        voice.read_something();
+        assert!(!voice.is_cold(), "it answered a moment ago");
     }
 
     #[test]

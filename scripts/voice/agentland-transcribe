@@ -38,21 +38,56 @@ def warm_up(held) -> None:
         pass
 
 
+def threads() -> int:
+    """How many threads to hand the model.
+
+    Not `os.cpu_count()`, which counts hyperthreads: on a four-core i7-7700 the
+    same sentence took 4.05 seconds on eight threads and 3.21 on four. Two
+    threads fighting over one core's arithmetic is one thread's worth of work
+    and two threads' worth of waiting, and this machine has a crew running on it
+    besides.
+    """
+    named = os.environ.get("AGENTLAND_WHISPER_THREADS", "").strip()
+    if named.isdigit() and int(named) > 0:
+        return int(named)
+
+    cores = set()
+    root = "/sys/devices/system/cpu"
+    try:
+        for entry in os.listdir(root):
+            topology = os.path.join(root, entry, "topology")
+            try:
+                with open(os.path.join(topology, "core_id")) as file:
+                    core = file.read().strip()
+                with open(os.path.join(topology, "physical_package_id")) as file:
+                    package = file.read().strip()
+            except OSError:
+                continue
+            cores.add((package, core))
+    except OSError:
+        pass
+
+    if cores:
+        return len(cores)
+
+    return max(1, (os.cpu_count() or 4) // 2)
+
+
 def serve() -> int:
     from faster_whisper import WhisperModel
 
     if os.path.exists(SOCKET):
         os.unlink(SOCKET)
 
-    # Every thread this machine has, and greedy decoding: dictation is a
-    # sentence at a time, and a beam search over five candidates costs five
-    # times the work to pick the same words.
+    # A thread per core, and greedy decoding: dictation is a sentence at a time,
+    # and a beam search over five candidates costs five times the work to pick
+    # the same words.
     held = WhisperModel(
         MODEL,
         device="cpu",
         compute_type="int8",
         download_root=MODELS,
-        cpu_threads=os.cpu_count() or 4,
+        cpu_threads=threads(),
     )
 
     # Everything lazy is loaded now rather than on somebody's first sentence:

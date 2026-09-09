@@ -5,9 +5,10 @@ const can_listen = vi.hoisted(() => vi.fn());
 const read_back = vi.hoisted(() => vi.fn());
 const start_listening = vi.hoisted(() => vi.fn());
 const stop_listening = vi.hoisted(() => vi.fn());
+const warm_transcriber = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/listen", () => ({ can_listen, listen }));
-vi.mock("@/lib/core", () => ({ read_back, start_listening, stop_listening }));
+vi.mock("@/lib/core", () => ({ read_back, start_listening, stop_listening, warm_transcriber }));
 
 const { begin_speaking, end_speaking, listening_where } = await import("@/lib/speaking");
 
@@ -20,6 +21,27 @@ beforeEach(() => {
     read_back.mockResolvedValue({ text: "widen the scope matrix" });
     stop_listening.mockResolvedValue({ text: "from the machine" });
     start_listening.mockResolvedValue(undefined);
+    warm_transcriber.mockResolvedValue(undefined);
+});
+
+describe("waking the transcriber", () => {
+    it("nudges it at the start of the sentence, where the waiting is free", async () => {
+        can_listen.mockReturnValue(true);
+        listen.mockResolvedValue(a_recording(4000));
+
+        await begin_speaking();
+
+        expect(warm_transcriber).toHaveBeenCalledTimes(1);
+    });
+
+    it("is a nudge and not a step: a press still works when it fails", async () => {
+        can_listen.mockReturnValue(true);
+        listen.mockResolvedValue(a_recording(4000));
+        warm_transcriber.mockRejectedValue(new Error("no transcriber set"));
+
+        expect(await begin_speaking()).toBe("window");
+        expect(await end_speaking()).toBe("widen the scope matrix");
+    });
 });
 
 describe("where the microphone is read from", () => {

@@ -654,6 +654,14 @@ export function set_transcriber(command: string): Promise<VoiceState> {
     });
 }
 
+/// Load the model while the sentence is still being spoken.
+///
+/// Nothing is waited for and nothing comes back: it is a nudge, and the core
+/// leaves a transcriber alone that answered recently.
+export function warm_transcriber(): Promise<void> {
+    return request<void>("/voice/warm", { method: "POST" });
+}
+
 export function start_listening(): Promise<void> {
     return request<void>("/voice/start", { method: "POST" });
 }

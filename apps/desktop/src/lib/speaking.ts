@@ -1,5 +1,5 @@
 import { can_listen, listen, type Listening } from "@/lib/listen";
-import { read_back, start_listening, stop_listening } from "@/lib/core";
+import { read_back, start_listening, stop_listening, warm_transcriber } from "@/lib/core";
 
 /// Where the microphone is being read from for this press.
 ///
@@ -17,6 +17,12 @@ export function listening_where(): Where | null {
 }
 
 export async function begin_speaking(): Promise<Where> {
+    // The model is loaded while the sentence is being said rather than after
+    // it: the wait was never the sentence, it was the eight seconds a cold
+    // transcriber spends before it reads a word. Nobody waits for this — a
+    // failed nudge costs the press nothing.
+    void warm_transcriber().catch(() => undefined);
+
     if (can_listen()) {
         try {
             held = await listen();

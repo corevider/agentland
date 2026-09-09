@@ -343,6 +343,7 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/commander", get(commander_says))
         .route("/voice", get(read_voice).post(set_transcriber))
         .route("/voice/whisper", post(fetch_whisper))
+        .route("/voice/warm", post(wake_transcriber))
         .route("/voice/start", post(start_listening))
         .route("/voice/stop", post(stop_listening))
         .route("/voice/heard", post(heard_elsewhere))
@@ -5666,6 +5667,7 @@ async fn heard_elsewhere(
         .unwrap_or("audio/webm");
 
     let text = crate::voice::read_back(&state.config.data_dir, &body, kind, &command)?;
+    state.voice.read_something();
     note(&state, "voice.heard", "a person", "elsewhere", &text);
 
     Ok(Json(Said { text }))
@@ -6092,6 +6094,33 @@ async fn set_transcriber(
     })
 }
 
+/// Somebody has started speaking: load the model now rather than after.
+///
+/// The wait people complained about was never the sentence, it was the model
+/// being fetched off disk once the sentence was over — ten seconds against four
+/// on the same machine. A recording takes a second or two to make, and that is
+/// exactly the time the loading needs, so it is done there instead.
+///
+/// Nothing waits for it: the answer comes back as soon as the work is handed
+/// off, and a transcriber that is already warm is left alone rather than asked
+/// to read a second of silence on every press.
+async fn wake_transcriber(State(state): State<AppState>) -> StatusCode {
+    let Some(command) = transcriber_of(&state) else {
+        return StatusCode::NO_CONTENT;
+    };
+
+    if !state.voice.is_cold() {
+        return StatusCode::NO_CONTENT;
+    }
+
+    let voice = state.voice.clone();
+    tokio::task::spawn_blocking(move || {
+        let _ = voice.wake(&command);
+    });
+
+    StatusCode::ACCEPTED
+}
+
 async fn start_listening(State(state): State<AppState>) -> Result<StatusCode, ApiError> {
     state.voice.start()?;
     note(&state, "voice.listening", "a person", "", "");
@@ -6107,6 +6136,7 @@ struct Said {
 async fn stop_listening(State(state): State<AppState>) -> Result<Json<Said>, ApiError> {
     let command = transcriber_of(&state);
     let text = state.voice.stop(command.as_deref())?;
+    state.voice.read_something();
 
     note(&state, "voice.heard", "a person", "", &text);
     Ok(Json(Said { text }))
