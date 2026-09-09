@@ -45,6 +45,7 @@ import {
     write_input,
 } from "@/lib/core";
 import { island_frames } from "@/lib/frames";
+import { speak_into } from "@/lib/dictation";
 import { can_listen } from "@/lib/listen";
 import { begin_speaking, end_speaking } from "@/lib/speaking";
 import { probe_gpu, type GpuReport } from "@/lib/gpu";
@@ -142,6 +143,8 @@ export default function App() {
     const [heard, set_heard] = useState<string | null>(null);
     const [busy, set_busy] = useState(false);
     const [error, set_error] = useState<string | null>(null);
+    // What had the focus when the button went down: the box the words are for.
+    const speaking_into = useRef<Element | null>(null);
     const [can_record, set_can_record] = useState(true);
     const [can_read_back, set_can_read_back] = useState(true);
     const metrics_ref = useRef(new Map<string, PaneMetrics>());
@@ -936,8 +939,16 @@ export default function App() {
                             voice_trouble ??
                             "hold to speak — what you say is typed into the pane you are watching, not sent"
                         }
+                        // Holding a button takes the focus, and with it whatever
+                        // was selected in the box a person was standing in. The
+                        // press is not a place to be, so it does not become one.
+                        onMouseDown={(event) => event.preventDefault()}
                         onPointerDown={() => {
                             set_heard(null);
+                            // Where the words will go, decided when the sentence
+                            // starts rather than when it ends: by then a person
+                            // may have clicked somewhere else to watch it work.
+                            speaking_into.current = document.activeElement;
                             begin_speaking()
                                 .then(() => set_listening(true))
                                 .catch((cause) => set_error(String(cause)));
@@ -951,19 +962,28 @@ export default function App() {
                             set_reading(true);
                             end_speaking()
                                 .then((text) => {
+                                    const into = speaking_into.current;
+                                    speaking_into.current = null;
+
                                     if (!text) {
                                         set_heard("nothing was said");
                                         return;
                                     }
 
-                                    const pane = focused_id ?? shown_sessions[0]?.id;
-                                    if (!pane) {
-                                        set_heard(text);
+                                    set_heard(text);
+
+                                    // The box it was said into, if it is still
+                                    // there. A terminal is not one of these: its
+                                    // textarea catches keystrokes and holds
+                                    // nothing, so a pane is written to below.
+                                    if (into?.isConnected && speak_into(into, text)) {
                                         return;
                                     }
 
-                                    set_heard(text);
-                                    void write_input(pane, text);
+                                    const pane = focused_id ?? shown_sessions[0]?.id;
+                                    if (pane) {
+                                        void write_input(pane, text);
+                                    }
                                 })
                                 .catch((cause) => set_error(String(cause)))
                                 .finally(() => set_reading(false));
