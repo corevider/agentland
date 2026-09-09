@@ -337,6 +337,10 @@ pub async fn serve(manager: Arc<PtyManager>, config: ServerConfig) -> Result<()>
         .route("/journal", get(read_journal))
         .route("/goals", get(read_goals))
         .route("/standards", get(read_standards).post(set_standards))
+        .route(
+            "/standards/saved/{id}",
+            get(read_saved_standards).post(restore_standards).delete(forget_standards),
+        )
         .route("/phone", get(phone_way_in))
         .route("/phone/door", post(set_phone_door))
         .route("/stop", post(stop_everything))
@@ -5894,14 +5898,100 @@ struct HouseRules {
     text: String,
     /// Whether they are on disk for an engine to read.
     held: bool,
+    /// Every save that changed something, newest first — without the pages
+    /// themselves. Twenty pages of rules is a payload nobody asked for on a
+    /// panel that only wanted to know what happened when.
+    saved: Vec<SavedRules>,
+}
+
+#[derive(Serialize)]
+struct SavedRules {
+    id: String,
+    at: u64,
+    characters: usize,
+    /// The first line with anything in it, which is what a person recognises a
+    /// version by. A page whose first line is a heading says the heading.
+    opens: String,
+    /// Whether this is the page in force right now.
+    current: bool,
+}
+
+fn saved_rules(state: &AppState) -> Vec<SavedRules> {
+    let now = state.standards.read();
+
+    state
+        .standards
+        .versions()
+        .into_iter()
+        .map(|held| SavedRules {
+            id: held.id,
+            at: held.at,
+            characters: held.text.chars().count(),
+            opens: held
+                .text
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .unwrap_or("nothing at all")
+                .chars()
+                .take(80)
+                .collect(),
+            current: held.text == now,
+        })
+        .collect()
+}
+
+fn house_rules(state: &AppState) -> HouseRules {
+    HouseRules {
+        text: state.standards.read(),
+        held: state.standards.file().is_some(),
+        saved: saved_rules(state),
+    }
 }
 
 /// How the house works, for every agent, in every project.
 async fn read_standards(State(state): State<AppState>) -> Json<HouseRules> {
-    Json(HouseRules {
-        text: state.standards.read(),
-        held: state.standards.file().is_some(),
-    })
+    Json(house_rules(&state))
+}
+
+/// One saved page, in full. Asked for only when somebody opens it.
+async fn read_saved_standards(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::standards::Version>, ApiError> {
+    state
+        .standards
+        .version(&id)
+        .map(Json)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("there is no saved version called {id}")))
+}
+
+/// Put a saved page back. It becomes the newest save rather than replacing the
+/// history, so going back is itself a step somebody can go back from.
+async fn restore_standards(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<HouseRules>, ApiError> {
+    let held = state
+        .standards
+        .version(&id)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("there is no saved version called {id}")))?;
+
+    state.standards.set(&held.text)?;
+    state.crew.set_standing(state.standards.file());
+    note(&state, "standards.set", "a person", "", &format!("put {id} back"));
+
+    Ok(Json(house_rules(&state)))
+}
+
+/// Forget a saved page. The rules in force are not touched: this is the record
+/// of a save going away, not the save being undone.
+async fn forget_standards(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<HouseRules>, ApiError> {
+    state.standards.forget(&id)?;
+    Ok(Json(house_rules(&state)))
 }
 
 #[derive(Deserialize)]
@@ -5924,10 +6014,7 @@ async fn set_standards(
         if body.text.trim().is_empty() { "cleared" } else { "written" },
     );
 
-    Ok(Json(HouseRules {
-        text: state.standards.read(),
-        held: state.standards.file().is_some(),
-    }))
+    Ok(Json(house_rules(&state)))
 }
 
 #[derive(Serialize)]

@@ -10,8 +10,31 @@ use parking_lot::Mutex;
 /// hold for every agent, in every project, without being said again each time.
 pub struct Standards {
     text: Mutex<String>,
+    kept: Mutex<Vec<Version>>,
+    numbered: Mutex<u32>,
     data_dir: PathBuf,
 }
+
+/// A page of rules as it stood when somebody saved it.
+///
+/// Rules are edited by hand, in a box, at the moment somebody is annoyed about
+/// something — which is exactly when a paragraph that was holding the crew
+/// together gets deleted along with the one that was not. Every save keeps what
+/// was saved, so the way back is a click rather than a memory.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct Version {
+    pub id: String,
+    /// When it was saved, in seconds since the epoch.
+    pub at: u64,
+    pub text: String,
+}
+
+/// How many saves back it remembers.
+///
+/// Twenty is more than anybody scrolls and less than anything that makes the
+/// state file worth worrying about: a page of rules is a few kilobytes, and the
+/// oldest is dropped rather than kept forever.
+pub const KEPT: usize = 20;
 
 /// Long enough for a page of house rules, short enough that it cannot quietly
 /// become the whole prompt.
@@ -68,6 +91,13 @@ These hold for every agent, in every project, on every turn.
 - Fail in a way that says what to do next.
 ";
 
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|held| held.as_secs())
+        .unwrap_or_default()
+}
+
 impl Standards {
     pub fn new(data_dir: PathBuf) -> Self {
         // The path of the rules file is handed to the engine, which reads it
@@ -78,6 +108,8 @@ impl Standards {
 
         let standing = Self {
             text: Mutex::new(text.trim().to_owned()),
+            numbered: Mutex::new(held.numbered),
+            kept: Mutex::new(held.kept),
             data_dir,
         };
         standing.write_out();
@@ -88,6 +120,37 @@ impl Standards {
         self.text.lock().clone()
     }
 
+    /// Every save that changed something, newest first.
+    pub fn versions(&self) -> Vec<Version> {
+        self.kept.lock().clone()
+    }
+
+    pub fn version(&self, id: &str) -> Option<Version> {
+        self.kept.lock().iter().find(|held| held.id == id).cloned()
+    }
+
+    /// Forget one of them. A person who wrote something they would rather not
+    /// have kept should be able to take it back out.
+    pub fn forget(&self, id: &str) -> anyhow::Result<()> {
+        let mut kept = self.kept.lock();
+        let before = kept.len();
+        kept.retain(|held| held.id != id);
+
+        if kept.len() == before {
+            anyhow::bail!("there is no saved version called {id}");
+        }
+
+        let held = Held {
+            text: Some(self.text.lock().clone()),
+            kept: kept.clone(),
+            numbered: *self.numbered.lock(),
+        };
+        drop(kept);
+
+        crate::db::save_state(&self.data_dir, "standards", &held);
+        Ok(())
+    }
+
     /// Refuses an essay. Everything else, including nothing at all, is somebody
     /// deciding what the house rules are.
     pub fn set(&self, text: &str) -> anyhow::Result<()> {
@@ -96,12 +159,35 @@ impl Standards {
             anyhow::bail!("house rules are a page, not a book: {MOST} characters at most");
         }
 
+        // A save that changed nothing is not a version of anything: pressing
+        // save twice would otherwise fill the history with the same page.
+        let changed = *self.text.lock() != trimmed;
+
         *self.text.lock() = trimmed.to_owned();
+
+        if changed {
+            let mut numbered = self.numbered.lock();
+            *numbered += 1;
+
+            let mut kept = self.kept.lock();
+            kept.insert(
+                0,
+                Version {
+                    id: format!("v{numbered}"),
+                    at: now(),
+                    text: trimmed.to_owned(),
+                },
+            );
+            kept.truncate(KEPT);
+        }
+
         crate::db::save_state(
             &self.data_dir,
             "standards",
             &Held {
                 text: Some(trimmed.to_owned()),
+                kept: self.kept.lock().clone(),
+                numbered: *self.numbered.lock(),
             },
         );
         self.write_out();
@@ -144,6 +230,13 @@ impl Standards {
 struct Held {
     #[serde(default)]
     text: Option<String>,
+    /// What was saved before, newest first. Absent in a file written before
+    /// there was a history, which is not the same as a history somebody
+    /// emptied — both read back as nothing to go back to.
+    #[serde(default)]
+    kept: Vec<Version>,
+    #[serde(default)]
+    numbered: u32,
 }
 
 /// What an engine that cannot be handed a file is told instead.
@@ -239,6 +332,104 @@ mod tests {
 
         assert!(held.set(&"x".repeat(MOST + 1)).is_err());
         assert_eq!(held.read(), "Four spaces.", "and what stood before it still stands");
+    }
+
+    #[test]
+    fn every_save_that_changed_something_is_kept() {
+        let dir = scratch("kept");
+        let held = Standards::new(dir);
+
+        held.set("Four spaces.").unwrap();
+        held.set("Four spaces. Say why.").unwrap();
+
+        let kept = held.versions();
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0].text, "Four spaces. Say why.", "newest first");
+        assert_eq!(kept[1].text, "Four spaces.");
+        assert_ne!(kept[0].id, kept[1].id);
+    }
+
+    #[test]
+    fn pressing_save_twice_does_not_keep_the_same_page_twice() {
+        let dir = scratch("unchanged");
+        let held = Standards::new(dir);
+
+        held.set("Four spaces.").unwrap();
+        held.set("Four spaces.").unwrap();
+        held.set("  Four spaces.  ").unwrap();
+
+        assert_eq!(held.versions().len(), 1, "nothing changed, so nothing was saved");
+    }
+
+    #[test]
+    fn putting_an_old_one_back_is_saving_it_again() {
+        let dir = scratch("put-back");
+        let held = Standards::new(dir);
+
+        held.set("The first way").unwrap();
+        held.set("The second way").unwrap();
+
+        let first = held.versions().pop().expect("the oldest");
+        held.set(&first.text).unwrap();
+
+        assert_eq!(held.read(), "The first way");
+        assert_eq!(held.versions().len(), 3, "going back is a save like any other");
+        assert_eq!(held.versions()[0].text, "The first way");
+    }
+
+    #[test]
+    fn a_version_can_be_taken_back_out() {
+        let dir = scratch("forget");
+        let held = Standards::new(dir);
+
+        held.set("Kept").unwrap();
+        held.set("Regretted").unwrap();
+
+        let regretted = held.versions()[0].id.clone();
+        held.forget(&regretted).unwrap();
+
+        assert_eq!(held.versions().len(), 1);
+        assert_eq!(held.versions()[0].text, "Kept");
+        assert_eq!(
+            held.read(),
+            "Regretted",
+            "forgetting the record of a save does not undo the save"
+        );
+        assert!(held.forget("v99").is_err(), "nothing to forget is worth saying");
+    }
+
+    #[test]
+    fn it_remembers_a_page_of_saves_and_lets_the_oldest_go() {
+        let dir = scratch("cap");
+        let held = Standards::new(dir);
+
+        for number in 0..(KEPT + 5) {
+            held.set(&format!("rule {number}")).unwrap();
+        }
+
+        let kept = held.versions();
+        assert_eq!(kept.len(), KEPT);
+        assert_eq!(kept[0].text, format!("rule {}", KEPT + 4), "the newest is still here");
+        assert_eq!(kept[KEPT - 1].text, format!("rule 5"), "and the oldest five are gone");
+    }
+
+    #[test]
+    fn what_was_saved_is_still_there_after_a_restart() {
+        let dir = scratch("kept-restart");
+
+        {
+            let held = Standards::new(dir.clone());
+            held.set("The first way").unwrap();
+            held.set("The second way").unwrap();
+        }
+
+        let reopened = Standards::new(dir);
+        let kept = reopened.versions();
+
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0].text, "The second way");
+        assert!(reopened.version(&kept[1].id).is_some(), "and each is still reachable by id");
+        assert!(reopened.version("v404").is_none());
     }
 
     #[test]

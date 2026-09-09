@@ -535,10 +535,41 @@ export function set_phone_door(open: boolean): Promise<PhoneWayIn> {
 export interface HouseRules {
     text: string;
     held: boolean;
+    /// Every save that changed something, newest first.
+    saved: SavedRules[];
+}
+
+/// One save of the house rules, without the page itself.
+export interface SavedRules {
+    id: string;
+    /// When it was saved, in seconds since the epoch.
+    at: number;
+    characters: number;
+    /// The first line with anything in it — what a person recognises it by.
+    opens: string;
+    /// Whether this is the page in force right now.
+    current: boolean;
 }
 
 export function read_standards(): Promise<HouseRules> {
     return request<HouseRules>("/standards");
+}
+
+/// One saved page in full, asked for when somebody opens it rather than with
+/// the list.
+export function read_saved_standards(id: string): Promise<{ id: string; at: number; text: string }> {
+    return request<{ id: string; at: number; text: string }>(`/standards/saved/${encodeURIComponent(id)}`);
+}
+
+/// Put a saved page back. It becomes the newest save, so this is a step that
+/// can itself be gone back from.
+export function restore_standards(id: string): Promise<HouseRules> {
+    return request<HouseRules>(`/standards/saved/${encodeURIComponent(id)}`, { method: "POST" });
+}
+
+/// Forget one save. What is in force is not touched.
+export function forget_standards(id: string): Promise<HouseRules> {
+    return request<HouseRules>(`/standards/saved/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export function set_standards(text: string): Promise<HouseRules> {
