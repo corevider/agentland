@@ -9,6 +9,7 @@ import {
     sign_in_account,
     type AccountsReport,
 } from "@/lib/core";
+import { Picker } from "@/components/Picker";
 
 /// The logins this machine holds.
 ///
@@ -146,17 +147,16 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
 
             {held.engines.length > 0 ? (
                 <div className="flex flex-wrap items-center gap-2">
-                    <select
+                    <Picker
                         className="rounded-lg border border-reef bg-lagoon px-2 py-1 font-mono text-[11px]"
                         value={engine}
-                        onChange={(event) => set_engine(event.target.value)}
-                    >
-                        {held.engines.map((held_engine) => (
-                            <option key={held_engine.id} value={held_engine.id}>
-                                {held_engine.name}
-                            </option>
-                        ))}
-                    </select>
+                        placeholder="which engine"
+                        choices={held.engines.map((held_engine) => ({
+                            value: held_engine.id,
+                            label: held_engine.name,
+                        }))}
+                        on_pick={set_engine}
+                    />
 
                     <input
                         className="min-w-[10rem] flex-1 rounded-lg border border-reef bg-lagoon px-2 py-1 font-mono text-[11px]"

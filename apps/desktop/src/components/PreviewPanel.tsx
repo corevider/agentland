@@ -2,6 +2,7 @@ import { use_poll } from "@/lib/poll";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { list_services, type Service } from "@/lib/core";
+import { Picker } from "@/components/Picker";
 
 interface Props {
     active: boolean;
@@ -38,18 +39,16 @@ export function PreviewPanel({ active }: Props) {
     return (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div className="flex shrink-0 items-center gap-2 border-b border-reef/70 px-2 py-1.5">
-                <select
+                <Picker
                     className="min-w-0 max-w-[240px] rounded-lg border border-reef bg-lagoon-deep px-2 py-1 font-mono text-[10px]"
                     value={selected ?? ""}
-                    onChange={(event) => set_selected(event.target.value || null)}
-                >
-                    {services.length === 0 ? <option value="">nothing is running</option> : null}
-                    {services.map((service) => (
-                        <option key={service.key} value={service.key}>
-                            {service.repository_id}/{service.worktree} :{service.port}
-                        </option>
-                    ))}
-                </select>
+                    placeholder={services.length === 0 ? "nothing is running" : "pick one"}
+                    choices={services.map((service) => ({
+                        value: service.key,
+                        label: `${service.repository_id}/${service.worktree} :${service.port}`,
+                    }))}
+                    on_pick={(held) => set_selected(held || null)}
+                />
 
                 <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-shade">
                     {current?.url ?? ""}

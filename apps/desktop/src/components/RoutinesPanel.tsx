@@ -13,6 +13,7 @@ import {
 } from "@/lib/core";
 import { belongs_here, place_routines, type PlacedRoutine } from "@/lib/places";
 import { use_services } from "@/workspace/registry";
+import { Picker } from "@/components/Picker";
 
 export function RoutinesPanel({ active }: { active: boolean }) {
     const { crew, repositories, workspace_id } = use_services();
@@ -187,17 +188,13 @@ export function RoutinesPanel({ active }: { active: boolean }) {
                     value={draft.name}
                     onChange={(event) => set_draft({ ...draft, name: event.target.value })}
                 />
-                <select
-                    className="rounded-md border border-reef bg-lagoon-deep font-mono text-[11px]"
+                <Picker
+                    className="rounded-md border border-reef bg-lagoon-deep px-[7px] py-[3px] font-mono text-[11px]"
                     value={draft.agent_id || mine[0]?.id || ""}
-                    onChange={(event) => set_draft({ ...draft, agent_id: event.target.value })}
-                >
-                    {mine.map((agent) => (
-                        <option key={agent.id} value={agent.id}>
-                            {agent.name}
-                        </option>
-                    ))}
-                </select>
+                    placeholder="nobody here yet"
+                    choices={mine.map((agent) => ({ value: agent.id, label: agent.name }))}
+                    on_pick={(held) => set_draft({ ...draft, agent_id: held })}
+                />
                 <input
                     className="min-w-[140px] flex-1 rounded-md border border-reef bg-lagoon-deep font-mono text-[11px]"
                     placeholder="what it should do each time"

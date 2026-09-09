@@ -7,6 +7,7 @@ import { StandardsSection } from "@/components/StandardsSection";
 import { VoiceSection } from "@/components/VoiceSection";
 import type { GpuReport } from "@/lib/gpu";
 import { RENDERERS, resolve_renderer, type Renderer, type Settings } from "@/lib/settings";
+import { Picker } from "@/components/Picker";
 
 const PANE_CHOICES = [1, 2, 4, 8, 12];
 const RATE_CHOICES = [1_000, 5_000, 10_000, 20_000, 50_000];
@@ -61,17 +62,15 @@ function Select({
     on_change: (value: number) => void;
 }) {
     return (
-        <select
-            className="border border-reef bg-lagoon-deep px-2 py-1 font-mono text-xs rounded-lg"
-            value={value}
-            onChange={(event) => on_change(Number(event.target.value))}
-        >
-            {options.map((option) => (
-                <option key={option} value={option}>
-                    {format ? format(option) : option}
-                </option>
-            ))}
-        </select>
+        <Picker
+            className="rounded-lg border border-reef bg-lagoon-deep px-2 py-1 font-mono text-xs"
+            value={String(value)}
+            choices={options.map((option) => ({
+                value: String(option),
+                label: format ? format(option) : String(option),
+            }))}
+            on_pick={(held) => on_change(Number(held))}
+        />
     );
 }
 
@@ -202,19 +201,14 @@ export function SettingsPage({
                                 label="Renderer"
                                 hint={`auto is ${resolve_renderer("auto", surface)} here: webgl is fastest under load, dom shows every frame as it is drawn`}
                             >
-                                <select
+                                <Picker
                                     className="rounded-md border border-reef bg-lagoon px-2 py-1 font-mono text-xs text-linen"
                                     value={settings.renderer}
-                                    onChange={(event) =>
-                                        on_change({ ...settings, renderer: event.target.value as Renderer })
+                                    choices={RENDERERS.map((held) => ({ value: held, label: held }))}
+                                    on_pick={(held) =>
+                                        on_change({ ...settings, renderer: held as Renderer })
                                     }
-                                >
-                                    {RENDERERS.map((held) => (
-                                        <option key={held} value={held}>
-                                            {held}
-                                        </option>
-                                    ))}
-                                </select>
+                                />
                             </Row>
                             <Row label="Focused pane" hint="writes once per animation frame">
                                 <span className="font-mono text-xs text-shell">live</span>

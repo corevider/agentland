@@ -12,6 +12,7 @@ import {
     type MailPolicy,
 } from "@/lib/core";
 import { use_services } from "@/workspace/registry";
+import { Picker } from "@/components/Picker";
 
 export function MailPanel({ active }: { active: boolean }) {
     const { crew } = use_services();
@@ -103,29 +104,21 @@ export function MailPanel({ active }: { active: boolean }) {
             ) : null}
 
             <section className="flex flex-wrap items-center gap-1.5">
-                <select
-                    className="rounded-md border border-reef bg-lagoon-deep font-mono text-[11px]"
+                <Picker
+                    className="rounded-md border border-reef bg-lagoon-deep px-[7px] py-[3px] font-mono text-[11px]"
                     value={draft.from || names[0] || ""}
-                    onChange={(event) => set_draft({ ...draft, from: event.target.value })}
-                >
-                    {names.map((name) => (
-                        <option key={name} value={name}>
-                            {name}
-                        </option>
-                    ))}
-                </select>
+                    placeholder="from"
+                    choices={names.map((name) => ({ value: name, label: name }))}
+                    on_pick={(held) => set_draft({ ...draft, from: held })}
+                />
                 <span className="font-mono text-[11px] text-shade">→</span>
-                <select
-                    className="rounded-md border border-reef bg-lagoon-deep font-mono text-[11px]"
+                <Picker
+                    className="rounded-md border border-reef bg-lagoon-deep px-[7px] py-[3px] font-mono text-[11px]"
                     value={draft.to || names[1] || names[0] || ""}
-                    onChange={(event) => set_draft({ ...draft, to: event.target.value })}
-                >
-                    {names.map((name) => (
-                        <option key={name} value={name}>
-                            {name}
-                        </option>
-                    ))}
-                </select>
+                    placeholder="to"
+                    choices={names.map((name) => ({ value: name, label: name }))}
+                    on_pick={(held) => set_draft({ ...draft, to: held })}
+                />
                 <input
                     className="min-w-[140px] flex-1 rounded-md border border-reef bg-lagoon-deep font-mono text-[11px]"
                     placeholder="the port is 4103, not 3000"

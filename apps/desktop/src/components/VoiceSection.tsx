@@ -9,6 +9,7 @@ import {
     type VoiceState,
 } from "@/lib/core";
 import { can_listen } from "@/lib/listen";
+import { Picker } from "@/components/Picker";
 
 /// The languages offered, and the guess.
 ///
@@ -173,17 +174,12 @@ export function VoiceSection() {
                 <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-shade">
                     The language you dictate in
                 </span>
-                <select
+                <Picker
                     className="rounded-lg border border-reef bg-lagoon px-2 py-1 font-mono text-[11px]"
                     value={state.language ?? "auto"}
-                    onChange={(event) => void pick_language(event.target.value)}
-                >
-                    {LANGUAGES.map(([code, name]) => (
-                        <option key={code} value={code}>
-                            {name}
-                        </option>
-                    ))}
-                </select>
+                    choices={LANGUAGES.map(([code, name]) => ({ value: code, label: name }))}
+                    on_pick={(held) => void pick_language(held)}
+                />
                 <span className="font-mono text-[10px] text-shade">
                     Naming it is the difference between one pass over the recording and two: on this
                     machine's model, 2.5 seconds against 4.2. Guessing is right for somebody who

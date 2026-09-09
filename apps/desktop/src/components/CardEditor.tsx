@@ -18,6 +18,7 @@ import { derived_name, marked_copy_of, originals } from "@/lib/marks";
 
 import { AttachmentTile, Lightbox } from "./Attachments";
 import { MarkupView } from "./Markup";
+import { Picker } from "@/components/Picker";
 
 /// A file staged in the window, with a key of its own so two files with one
 /// name can both be taken off again.
@@ -242,17 +243,13 @@ export function CardEditor({
                 ) : (
                     <label className="flex items-center gap-2 font-mono text-[10px] text-shade">
                         project
-                        <select
+                        <Picker
                             className="rounded-lg border border-reef bg-lagoon px-2 py-1 font-mono text-[11px] text-linen"
                             value={repository_id}
-                            onChange={(event) => set_repository(event.target.value)}
-                        >
-                            {repos.map((repo) => (
-                                <option key={repo.id} value={repo.id}>
-                                    {repo.name}
-                                </option>
-                            ))}
-                        </select>
+                            placeholder="which project"
+                            choices={repos.map((repo) => ({ value: repo.id, label: repo.name }))}
+                            on_pick={set_repository}
+                        />
                     </label>
                 )}
 

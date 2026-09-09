@@ -26,6 +26,16 @@ import {
 } from "@/lib/core";
 import { what_is_held } from "@/lib/leaving";
 import { hiring_targets, target_value, worktree_for, type Target } from "@/lib/hiring";
+import { Picker } from "@/components/Picker";
+
+/// How much an agent does without asking, in the engine's own words.
+const PERMISSIONS = [
+    { value: "", label: "role default" },
+    { value: "plan", label: "plan", hint: "reads" },
+    { value: "default", label: "default", hint: "asks first" },
+    { value: "acceptEdits", label: "acceptEdits", hint: "writes, asks to run" },
+    { value: "bypassPermissions", label: "bypassPermissions", hint: "never asks" },
+];
 
 const ROLES = ["implementer", "reviewer", "tester", "researcher", "ops", "commander"];
 
@@ -196,42 +206,29 @@ export function CrewPanel({ active, on_open_session }: Props) {
                             value={draft.name}
                             onChange={(event) => set_draft({ ...draft, name: event.target.value })}
                         />
-                        <select
-                            className="border border-reef bg-lagoon-deep px-2 py-1 font-mono text-[11px] rounded-lg"
+                        <Picker
+                            className="rounded-lg border border-reef bg-lagoon-deep px-2 py-1 font-mono text-[11px]"
                             value={draft.role}
-                            onChange={(event) => set_draft({ ...draft, role: event.target.value })}
-                        >
-                            {ROLES.map((role) => (
-                                <option key={role} value={role}>
-                                    {role}
-                                </option>
-                            ))}
-                        </select>
-                        <select
-                            className="border border-reef bg-lagoon-deep px-2 py-1 font-mono text-[11px] rounded-lg"
+                            choices={ROLES.map((role) => ({ value: role, label: role }))}
+                            on_pick={(held) => set_draft({ ...draft, role: held })}
+                        />
+                        <Picker
+                            className="rounded-lg border border-reef bg-lagoon-deep px-2 py-1 font-mono text-[11px]"
                             value={draft.engine_id}
-                            onChange={(event) => set_draft({ ...draft, engine_id: event.target.value })}
-                        >
-                            {installed.map((engine) => (
-                                <option key={engine.id} value={engine.id}>
-                                    {engine.name}
-                                </option>
-                            ))}
-                        </select>
-                        <select
-                            className="border border-reef bg-lagoon-deep px-2 py-1 font-mono text-[11px] rounded-lg"
+                            placeholder="which engine"
+                            choices={installed.map((engine) => ({ value: engine.id, label: engine.name }))}
+                            on_pick={(held) => set_draft({ ...draft, engine_id: held })}
+                        />
+                        <Picker
+                            className="rounded-lg border border-reef bg-lagoon-deep px-2 py-1 font-mono text-[11px]"
                             value={draft.target}
-                            onChange={(event) => set_draft({ ...draft, target: event.target.value })}
-                        >
-                            {targets.map((target) => {
-                                const value = target_value(target);
-                                return (
-                                    <option key={value} value={value}>
-                                        {target.label}
-                                    </option>
-                                );
-                            })}
-                        </select>
+                            placeholder="where it works"
+                            choices={targets.map((target) => ({
+                                value: target_value(target),
+                                label: target.label,
+                            }))}
+                            on_pick={(held) => set_draft({ ...draft, target: held })}
+                        />
                         <button
                             className="border border-turquoise px-2 py-0.5 font-mono text-[11px] text-turquoise disabled:opacity-40 rounded-lg"
                             disabled={busy || !draft.name.trim() || !draft.target}
@@ -310,45 +307,40 @@ export function CrewPanel({ active, on_open_session }: Props) {
                             {agent.engine_id}
                             {agent.model ? ` · ${agent.model}` : ""}
                         </span>
-                        <select
+                        <Picker
                             className={`rounded border border-reef bg-lagoon-deep px-1 py-[1px] font-mono text-[10px] ${
                                 agent.permissions === "bypassPermissions" ? "text-coral" : "text-shade"
                             }`}
                             title="how much this agent does without asking — yours to set"
                             value={agent.permissions ?? ""}
-                            onChange={(event) => {
-                                shape_agent(agent.id, { permissions: event.target.value })
+                            choices={PERMISSIONS}
+                            on_pick={(held) => {
+                                shape_agent(agent.id, { permissions: held })
                                     .then(() => refresh())
                                     .catch((cause) => set_error(String(cause)));
                             }}
-                        >
-                            <option value="">role default</option>
-                            <option value="plan">plan · reads</option>
-                            <option value="default">default · asks first</option>
-                            <option value="acceptEdits">acceptEdits · writes, asks to run</option>
-                            <option value="bypassPermissions">bypassPermissions · never asks</option>
-                        </select>
+                        />
                         {logins.filter((login) => login.engine_id === agent.engine_id).length > 0 ? (
-                            <select
+                            <Picker
                                 className="rounded border border-reef bg-lagoon-deep px-1 py-[1px] font-mono text-[10px] text-shade"
                                 title="which login this agent spends from — it takes effect the next time it starts, because a running pane keeps the account it began with"
                                 value={agent.account ?? ""}
-                                onChange={(event) => {
-                                    shape_agent(agent.id, { account: event.target.value })
+                                choices={[
+                                    { value: "", label: "this machine's login" },
+                                    ...logins
+                                        .filter((login) => login.engine_id === agent.engine_id)
+                                        .map((login) => ({
+                                            value: login.label,
+                                            label: login.label,
+                                            hint: login.signed_in ? undefined : "signed out",
+                                        })),
+                                ]}
+                                on_pick={(held) => {
+                                    shape_agent(agent.id, { account: held })
                                         .then(() => refresh())
                                         .catch((cause) => set_error(String(cause)));
                                 }}
-                            >
-                                <option value="">this machine's login</option>
-                                {logins
-                                    .filter((login) => login.engine_id === agent.engine_id)
-                                    .map((login) => (
-                                        <option key={login.label} value={login.label}>
-                                            {login.label}
-                                            {login.signed_in ? "" : " · signed out"}
-                                        </option>
-                                    ))}
-                            </select>
+                            />
                         ) : null}
                         <span className="text-shell">
                             {agent.workspace_id

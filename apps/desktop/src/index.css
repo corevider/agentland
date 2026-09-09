@@ -96,7 +96,11 @@ input[type="radio"] {
     accent-color: var(--color-turquoise);
 }
 
-/* A dropdown is a native control, and a native control is painted by the
+/* Nothing in the app opens one of these any more — every dropdown is the
+   picker, which is drawn rather than asked for — but the day a plain one comes
+   back it should not arrive wearing the desktop's colours.
+
+   A dropdown is a native control, and a native control is painted by the
    platform rather than by us. WebKit — which is what the window is — draws the
    machine's own widget and ignores the background it was asked for, so every
    dropdown in the app stood next to inputs in this app's colours wearing the

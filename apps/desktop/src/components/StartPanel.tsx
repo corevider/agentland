@@ -18,6 +18,7 @@ import { recipe_for } from "@/lib/installs";
 import { name_trouble } from "@/lib/naming";
 import { as_url, clone_target, is_clonable, pick_folder } from "@/lib/pick";
 import { use_services } from "@/workspace/registry";
+import { Picker } from "@/components/Picker";
 
 type Where = "new" | "folder" | "clone";
 
@@ -618,18 +619,15 @@ export function StartPanel({ active }: { active: boolean }) {
                                 value={commander}
                                 onChange={(event) => set_commander(event.target.value)}
                             />
-                            <select
+                            <Picker
                                 className="min-w-[10rem] flex-1 rounded-lg border border-reef bg-lagoon px-2 py-1 font-mono text-[11px]"
                                 value={engine_id}
-                                onChange={(event) => set_engine(event.target.value)}
-                            >
-                                <option value="">engine — whichever takes the crew's tools</option>
-                                {engines.map((engine) => (
-                                    <option key={engine.id} value={engine.id}>
-                                        {engine.name}
-                                    </option>
-                                ))}
-                            </select>
+                                choices={[
+                                    { value: "", label: "engine — whichever takes the crew's tools" },
+                                    ...engines.map((engine) => ({ value: engine.id, label: engine.name })),
+                                ]}
+                                on_pick={set_engine}
+                            />
                         </div>
                     </div>
                 ) : null}

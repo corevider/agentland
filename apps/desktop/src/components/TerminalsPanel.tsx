@@ -57,6 +57,7 @@ const A_NEW_WORKTREE = "";
 /// so it can sit in the same list as the engines without being mistaken for one.
 const A_TERMINAL = "terminal";
 import { use_services } from "@/workspace/registry";
+import { Picker } from "@/components/Picker";
 
 const SIZES_KEY = "agentland-pane-grid-2";
 const ORDER_KEY = "agentland-pane-order";
@@ -683,11 +684,12 @@ export function TerminalsPanel({ active }: { active: boolean }) {
 
                     <label className="flex items-center gap-2">
                         <span className="w-16 shrink-0 font-mono text-[10px] text-shade">project</span>
-                        <select
+                        <Picker
                             className="min-w-0 flex-1 rounded border border-reef bg-lagoon px-1.5 py-1 font-mono text-[11px] text-linen"
                             value={starting.repository_id}
-                            onChange={(event) => {
-                                const wanted = event.target.value;
+                            placeholder="which project"
+                            choices={known.repos.map((repo) => ({ value: repo.id, label: repo.name }))}
+                            on_pick={(wanted) => {
                                 const offered = places_in(known, wanted);
                                 set_starting({
                                     ...starting,
@@ -696,13 +698,7 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                                     name: "",
                                 });
                             }}
-                        >
-                            {known.repos.map((repo) => (
-                                <option key={repo.id} value={repo.id}>
-                                    {repo.name}
-                                </option>
-                            ))}
-                        </select>
+                        />
                     </label>
 
                     <label className="flex items-center gap-2">
@@ -712,17 +708,13 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                                 nowhere to open — its checkout is gone and it has no worktrees
                             </span>
                         ) : (
-                            <select
+                            <Picker
                                 className="min-w-0 flex-1 rounded border border-reef bg-lagoon px-1.5 py-1 font-mono text-[11px] text-linen"
                                 value={starting.cwd}
-                                onChange={(event) => set_starting({ ...starting, cwd: event.target.value })}
-                            >
-                                {cli_places.map((place) => (
-                                    <option key={place.path} value={place.path}>
-                                        {place.label}
-                                    </option>
-                                ))}
-                            </select>
+                                placeholder="where it opens"
+                                choices={cli_places.map((place) => ({ value: place.path, label: place.label }))}
+                                on_pick={(held) => set_starting({ ...starting, cwd: held })}
+                            />
                         )}
                     </label>
 
@@ -752,22 +744,24 @@ export function TerminalsPanel({ active }: { active: boolean }) {
 
                     <label className="flex items-center gap-2">
                         <span className="w-16 shrink-0 font-mono text-[10px] text-shade">program</span>
-                        <select
+                        <Picker
                             className="min-w-0 flex-1 rounded border border-reef bg-lagoon px-1.5 py-1 font-mono text-[11px] text-linen"
                             value={starting.engine_id}
-                            onChange={(event) => set_starting({ ...starting, engine_id: event.target.value })}
-                        >
-                            <option value={A_TERMINAL}>terminal · your own shell</option>
-                            {engines.length === 0 ? <option value="">reading what is installed…</option> : null}
-                            {engines
-                                .filter((engine) => engine.installed)
-                                .map((engine) => (
-                                    <option key={engine.id} value={engine.id}>
-                                        {engine.name}
-                                        {engine.version ? ` · ${engine.version}` : ""}
-                                    </option>
-                                ))}
-                        </select>
+                            choices={[
+                                { value: A_TERMINAL, label: "terminal · your own shell" },
+                                ...(engines.length === 0
+                                    ? [{ value: "", label: "reading what is installed…", disabled: true }]
+                                    : []),
+                                ...engines
+                                    .filter((engine) => engine.installed)
+                                    .map((engine) => ({
+                                        value: engine.id,
+                                        label: engine.name,
+                                        hint: engine.version ?? undefined,
+                                    })),
+                            ]}
+                            on_pick={(held) => set_starting({ ...starting, engine_id: held })}
+                        />
                     </label>
 
                     {starting.engine_id === A_TERMINAL ? null : (

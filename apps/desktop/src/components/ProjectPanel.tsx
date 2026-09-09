@@ -24,6 +24,7 @@ import {
     size_word,
     sort_entries,
 } from "@/lib/tree";
+import { Picker } from "@/components/Picker";
 
 const DIFF_TINT: Record<string, string> = {
     added: "text-palm",
@@ -145,36 +146,32 @@ export function ProjectPanel({ active, repositories, going }: Props) {
     return (
         <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-2 p-2.5">
             <header className="flex flex-wrap items-center gap-2">
-                <select
+                <Picker
                     className="rounded-md border border-reef bg-lagoon-deep px-2 py-1 font-mono text-[11px] text-linen"
                     value={repository_id ?? ""}
-                    onChange={(event) => set_repository(event.target.value || null)}
-                >
-                    {shown.map((repo) => (
-                        <option key={repo.id} value={repo.id}>
-                            {repo.name}
-                        </option>
-                    ))}
-                </select>
+                    placeholder="which project"
+                    choices={shown.map((repo) => ({ value: repo.id, label: repo.name }))}
+                    on_pick={(held) => set_repository(held || null)}
+                />
 
-                <select
+                <Picker
                     className="rounded-md border border-reef bg-lagoon-deep px-2 py-1 font-mono text-[11px] text-linen"
                     value={worktree ?? ""}
                     title="the project's own folder, or the folder an agent works in"
-                    onChange={(event) => {
-                        set_worktree(event.target.value || null);
+                    choices={[
+                        { value: "", label: "the project itself" },
+                        ...worktrees.map((tree) => ({
+                            value: tree.name,
+                            label: `${tree.name} · ${tree.branch}`,
+                            hint: tree.dirty_files > 0 ? `${tree.dirty_files} dirty` : undefined,
+                        })),
+                    ]}
+                    on_pick={(held) => {
+                        set_worktree(held || null);
                         set_path("");
                         set_opened(null);
                     }}
-                >
-                    <option value="">the project itself</option>
-                    {worktrees.map((tree) => (
-                        <option key={tree.name} value={tree.name}>
-                            {tree.name} · {tree.branch}
-                            {tree.dirty_files > 0 ? ` · ${tree.dirty_files} dirty` : ""}
-                        </option>
-                    ))}
-                </select>
+                />
 
                 <div className="flex rounded-md border border-reef">
                     {(["files", "git"] as const).map((tab) => (

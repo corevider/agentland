@@ -39,6 +39,7 @@ import {
     type Review,
     type Task,
 } from "@/lib/core";
+import { Picker } from "@/components/Picker";
 
 const COLUMNS: Column[] = ["backlog", "assigned", "working", "review", "ready", "done"];
 
@@ -1159,25 +1160,18 @@ function BoardCard({
                                         {task.assignee}
                                     </span>
                                 ) : (
-                                    <select
-                                        className="border border-reef bg-lagoon-deep px-1 font-mono text-[10px] rounded-lg"
+                                    <Picker
+                                        className="rounded-lg border border-reef bg-lagoon-deep px-1 py-[1px] font-mono text-[10px]"
                                         value=""
-                                        onChange={(event) =>
-                                            on_assign(event.target.value)
-                                        }
-                                    >
-                                        <option value="">assign…</option>
-                                        {agents
+                                        placeholder="assign…"
+                                        choices={agents
                                             .filter(
                                                 (agent) =>
                                                     agent.repository_id === task.repository_id,
                                             )
-                                            .map((agent) => (
-                                                <option key={agent.id} value={agent.id}>
-                                                    {agent.name}
-                                                </option>
-                                            ))}
-                                    </select>
+                                            .map((agent) => ({ value: agent.id, label: agent.name }))}
+                                        on_pick={on_assign}
+                                    />
                                 )}
         
                                 {task.worktree ? (

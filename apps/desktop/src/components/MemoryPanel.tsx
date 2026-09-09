@@ -16,6 +16,7 @@ import {
 } from "@/lib/core";
 import { use_services } from "@/workspace/registry";
 import { exactly, when } from "@/lib/when";
+import { Picker } from "@/components/Picker";
 
 /// Where a memory can be filed, in the vault's own words. A scope is also told
 /// everything above it, so the crew's own shelf reaches every project.
@@ -244,19 +245,12 @@ export function MemoryPanel({ active }: { active: boolean }) {
                     onChange={(event) => set_draft({ ...draft, text: event.target.value })}
                     onKeyDown={(event) => event.key === "Enter" && propose()}
                 />
-                <select
-                    className="rounded-md border border-reef bg-lagoon-deep font-mono text-[11px]"
+                <Picker
+                    className="rounded-md border border-reef bg-lagoon-deep px-[7px] py-[3px] font-mono text-[11px]"
                     value={draft.scope}
-                    onChange={(event) =>
-                        set_draft({ ...draft, scope: event.target.value as MemoryScope })
-                    }
-                >
-                    {SCOPES.map((scope) => (
-                        <option key={scope.value} value={scope.value}>
-                            {scope.label}
-                        </option>
-                    ))}
-                </select>
+                    choices={SCOPES.map((scope) => ({ value: scope.value, label: scope.label }))}
+                    on_pick={(held) => set_draft({ ...draft, scope: held as MemoryScope })}
+                />
                 {draft.scope === "project" ? (
                     <input
                         className="w-36 rounded-md border border-reef bg-lagoon-deep font-mono text-[11px]"
