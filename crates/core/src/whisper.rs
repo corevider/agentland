@@ -138,7 +138,7 @@ pub fn tool_in(folder: &Path) -> Option<PathBuf> {
 /// because a data directory has a person's name in it, and names have spaces.
 pub fn transcriber_line(tool: &Path, model: &Path) -> String {
     format!(
-        "\"{}\" -m \"{}\" -l auto -nt -np -f {{file}}",
+        "\"{}\" -m \"{}\" -l auto -nt -np -f \"{{file}}\"",
         tool.display(),
         model.display()
     )
@@ -394,7 +394,10 @@ mod tests {
         assert!(line.contains("-nt"), "no timestamps: {line}");
         assert!(line.contains("-np"), "nothing but the words: {line}");
         assert!(line.contains("-l auto"), "whichever language it is spoken in: {line}");
-        assert!(line.ends_with("-f {file}"), "{line}");
+        assert!(
+            line.ends_with("-f \"{file}\""),
+            "the recording's own path is under a person's home too, and names have spaces: {line}"
+        );
     }
 
     #[test]

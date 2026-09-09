@@ -113,15 +113,20 @@ pub fn on_path(tool: &str) -> bool {
 
 /// The command that reads the words, with the recording's path put in.
 ///
-/// `{file}` is where the recording goes. A command without it gets the path on
-/// the end, because that is what most of them expect anyway.
+/// `{file}` is where the recording goes, and a command without it gets the path
+/// on the end, because that is what most of them expect anyway. The one put on
+/// the end is quoted: the recording lives under the data directory, which on
+/// Windows is under `C:\Users\<name>`, and a person whose name has a space in
+/// it would otherwise hand the transcriber two arguments. A path written into
+/// `{file}` is left exactly as the person wrote it, quotes and all — the line
+/// Agentland writes for itself quotes it.
 pub fn fill_in(command: &str, file: &Path) -> String {
     let path = file.to_string_lossy();
 
     if command.contains("{file}") {
         command.replace("{file}", &path)
     } else {
-        format!("{command} {path}")
+        format!("{command} \"{path}\"")
     }
 }
 
@@ -366,7 +371,7 @@ mod tests {
             fill_in("whisper -f {file} --model base", file),
             "whisper -f /tmp/said.wav --model base"
         );
-        assert_eq!(fill_in("my-transcriber", file), "my-transcriber /tmp/said.wav");
+        assert_eq!(fill_in("my-transcriber", file), "my-transcriber \"/tmp/said.wav\"");
     }
 
     #[test]

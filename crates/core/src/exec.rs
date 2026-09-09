@@ -123,17 +123,42 @@ pub fn home_from(read: impl Fn(&str) -> Option<String>, windows: bool) -> Option
     held("HOME").map(PathBuf::from)
 }
 
+/// A line PowerShell will run rather than read as a value.
+///
+/// PowerShell takes a leading quoted string as a string expression, not as the
+/// program to run, and then has nowhere to put the flags after it: a
+/// transcriber written as `"C:\...\whisper-cli.exe" -m "C:\...\ggml-small.bin"`
+/// came back *Unexpected token '-m' in expression or statement*. `&` is how it
+/// is told the string is a command. A path with a space in it has to stay
+/// quoted — every Windows data directory is under `C:\Users\<name>`, and names
+/// have spaces — so the quotes are not the thing to drop.
+///
+/// Only a line that begins with a quote needs it. Everything else already
+/// begins with a command name, `Expand-Archive` included.
+pub fn powershell_call(line: &str) -> String {
+    let trimmed = line.trim_start();
+
+    if trimmed.starts_with('"') || trimmed.starts_with('\'') {
+        return format!("& {trimmed}");
+    }
+
+    line.to_owned()
+}
+
 /// A command that runs one written line through a shell.
 ///
 /// `sh -c` is not a thing on Windows, so a transcriber set in Settings never
 /// ran there — the failure was the shell missing, not the transcriber. The
-/// flag differs too: cmd takes `/C`, PowerShell takes `-Command`.
+/// flag differs too: cmd takes `/C`, PowerShell takes `-Command`, and what
+/// PowerShell will do with the line differs as well.
 pub fn shell_line(line: &str) -> Command {
     if cfg!(windows) {
         let shell = default_shell();
-        let flag = if shell.to_lowercase().contains("cmd") { "/C" } else { "-Command" };
+        let cmd = shell.to_lowercase().contains("cmd");
         let mut command = command(&shell);
-        command.arg(flag).arg(line);
+        command
+            .arg(if cmd { "/C" } else { "-Command" })
+            .arg(if cmd { line.to_owned() } else { powershell_call(line) });
         return command;
     }
 
@@ -272,6 +297,26 @@ mod tests {
         }
 
         assert!(args.iter().any(|arg| arg.contains("whisper")), "{args:?}");
+    }
+
+    #[test]
+    fn powershell_is_told_a_quoted_path_is_a_program_and_not_a_value() {
+        assert_eq!(
+            powershell_call(r#""C:\bin\whisper-cli.exe" -m "C:\models\small.bin" -nt"#),
+            r#"& "C:\bin\whisper-cli.exe" -m "C:\models\small.bin" -nt"#
+        );
+        assert_eq!(powershell_call("'C:\\bin\\x.exe' -f said.wav"), "& 'C:\\bin\\x.exe' -f said.wav");
+    }
+
+    #[test]
+    fn a_line_that_is_already_a_command_is_left_alone() {
+        // The archive is unpacked through the same helper, and `& Expand-Archive`
+        // is not a thing anybody wrote.
+        assert_eq!(
+            powershell_call("Expand-Archive -LiteralPath 'a.zip' -DestinationPath 'b' -Force"),
+            "Expand-Archive -LiteralPath 'a.zip' -DestinationPath 'b' -Force"
+        );
+        assert_eq!(powershell_call("whisper-cli -f said.wav"), "whisper-cli -f said.wav");
     }
 
     #[test]
