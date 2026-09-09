@@ -58,11 +58,6 @@ button {
     border-radius: 8px;
 }
 
-select option {
-    background-color: var(--color-lagoon);
-    color: var(--color-linen);
-}
-
 input::placeholder {
     color: var(--color-shade);
 }
@@ -90,6 +85,48 @@ select,
 textarea {
     font-size: 12px;
     padding: 3px 7px;
+}
+
+/* The other two the platform draws for itself. A checkbox cannot have its
+   appearance given up without drawing the tick as well, and the tick is not
+   worth owning — but `accent-color` is the one thing it does take, and it is
+   the difference between the desktop's blue and this app's own. */
+input[type="checkbox"],
+input[type="radio"] {
+    accent-color: var(--color-turquoise);
+}
+
+/* A dropdown is a native control, and a native control is painted by the
+   platform rather than by us. WebKit — which is what the window is — draws the
+   machine's own widget and ignores the background it was asked for, so every
+   dropdown in the app stood next to inputs in this app's colours wearing the
+   desktop's. Giving up the platform's drawing is the whole fix; the arrow it
+   drew is then ours to draw too, in the colour used for a thing that is there
+   and not being spoken to.
+
+   Below the padding above rather than beside it: the arrow is drawn inside the
+   box, so the words need room not to run under it, and a first version that
+   asked for that room four rules earlier lost to it. */
+select {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%2363797a' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.45rem center;
+    background-size: 0.6rem;
+    padding-right: 20px;
+    cursor: pointer;
+}
+
+select:disabled {
+    cursor: default;
+    opacity: 0.6;
+}
+
+/* The list that opens is still the platform's, and this is all the say there is
+   over it. `color-scheme: dark` at the top is the other half. */
+select option {
+    background-color: var(--color-lagoon);
+    color: var(--color-linen);
 }
 
 button {
