@@ -15,12 +15,23 @@ import time
 HOME = os.path.expanduser("~/.local/share/agentland-voice")
 SOCKET = os.path.join(HOME, "warm.sock")
 MODEL = os.environ.get("AGENTLAND_WHISPER_MODEL", "small")
-# Unset, the model works out which language it is hearing, which is what
-# somebody who speaks two of them wants: say it in English and it comes back in
-# English. Naming one takes the guess away, for anybody who only ever uses one.
-LANGUAGE = os.environ.get("AGENTLAND_WHISPER_LANGUAGE") or None
+# Which language to hear, sent with every recording rather than read once at
+# startup: it is picked in Settings, and a process that read it when it began
+# would go on hearing the old one until somebody restarted it.
+# `AGENTLAND_VOICE_LANGUAGE` is what Agentland sets; the older name still works
+# for anybody who put it in front of the command themselves. Unset, or `auto`,
+# the model works out which language it is hearing — which is what somebody who
+# speaks two of them wants, at the cost of reading the recording twice.
+LANGUAGE = os.environ.get("AGENTLAND_VOICE_LANGUAGE") or os.environ.get("AGENTLAND_WHISPER_LANGUAGE")
 MODELS = os.path.join(HOME, "models")
 IDLE_SECONDS = 30 * 60
+
+
+def named(language):
+    """The language to hear, or None where it is to be guessed."""
+    held = (language or "").strip().lower()
+
+    return None if held in ("", "auto") else held
 
 
 def warm_up(held) -> None:
@@ -33,7 +44,7 @@ def warm_up(held) -> None:
         file.setframerate(16000)
         file.writeframes(b"\x00\x00" * 16000)
 
-    parts, _ = held.transcribe(quiet, vad_filter=True, beam_size=1, language=LANGUAGE)
+    parts, _ = held.transcribe(quiet, vad_filter=True, beam_size=1, language=named(LANGUAGE))
     for _ in parts:
         pass
 
@@ -107,7 +118,10 @@ def serve() -> int:
             break
 
         with client:
-            wanted = client.recv(4096).decode("utf8").strip()
+            # "<language>\t<path>", from a client that may have been handed a
+            # different language than the one this process started with.
+            asked = client.recv(4096).decode("utf8").strip()
+            language, _, wanted = asked.rpartition("\t")
             said = ""
 
             if wanted and os.path.exists(wanted):
@@ -116,7 +130,7 @@ def serve() -> int:
                     vad_filter=True,
                     beam_size=1,
                     condition_on_previous_text=False,
-                    language=LANGUAGE,
+                    language=named(language or LANGUAGE),
                     # A guess made from one half-second of a short sentence is a
                     # coin toss: listen to more of it, and take the guess only
                     # when the model is reasonably sure.
@@ -140,7 +154,7 @@ def ask(wav: str) -> str | None:
         return None
 
     with client:
-        client.sendall(wav.encode("utf8") + b"\n")
+        client.sendall(f"{named(LANGUAGE) or 'auto'}\t{wav}".encode("utf8") + b"\n")
         return client.recv(65536).decode("utf8").strip()
 
 

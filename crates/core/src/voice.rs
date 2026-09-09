@@ -154,6 +154,11 @@ pub fn on_path(tool: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// The language a transcriber is being asked to hear, when nobody has picked
+/// one. It is whisper's own word for the guess, and the word every transcriber
+/// here is told to expect.
+pub const GUESS: &str = "auto";
+
 /// The command that reads the words, with the recording's path put in.
 ///
 /// `{file}` is where the recording goes, and a command without it gets the path
@@ -163,14 +168,45 @@ pub fn on_path(tool: &str) -> bool {
 /// it would otherwise hand the transcriber two arguments. A path written into
 /// `{file}` is left exactly as the person wrote it, quotes and all — the line
 /// Agentland writes for itself quotes it.
-pub fn fill_in(command: &str, file: &Path) -> String {
+///
+/// `{language}` is the language picked in Settings, or `auto`. It is a
+/// placeholder rather than a flag because every transcriber spells the flag
+/// differently, and the same value reaches the ones that read an environment
+/// instead — see `run_transcriber`.
+pub fn fill_in(command: &str, file: &Path, language: &str) -> String {
     let path = file.to_string_lossy();
+    let language = spoken_language(language);
 
-    if command.contains("{file}") {
+    let with_file = if command.contains("{file}") {
         command.replace("{file}", &path)
     } else {
         format!("{command} \"{path}\"")
+    };
+
+    with_file.replace("{language}", language)
+}
+
+/// The language, as a transcriber is told it. Nothing picked is the guess.
+pub fn spoken_language(language: &str) -> &str {
+    let held = language.trim();
+
+    if held.is_empty() {
+        GUESS
+    } else {
+        held
     }
+}
+
+/// Run the transcriber over one recording.
+///
+/// The language is handed over twice on purpose, because transcribers differ:
+/// one takes it as a flag, and `{language}` in the command is where that goes;
+/// another reads it out of its environment, and never has to be told to. Both
+/// carry the same word, so neither has to be configured around the other.
+fn run_transcriber(command: &str, file: &Path, language: &str) -> std::io::Result<std::process::Output> {
+    crate::exec::shell_line(&fill_in(command, file, language))
+        .env("AGENTLAND_VOICE_LANGUAGE", spoken_language(language))
+        .output()
 }
 
 /// What a transcriber printed, tidied.
@@ -221,7 +257,7 @@ impl Voice {
     /// are still talking. Nothing is done with what comes back, and a
     /// transcriber that keeps nothing in memory only reads a second of silence
     /// it was going to be given anyway.
-    pub fn wake(&self, command: &str) -> anyhow::Result<()> {
+    pub fn wake(&self, command: &str, language: &str) -> anyhow::Result<()> {
         let folder = self.data_dir.join("voice");
         std::fs::create_dir_all(&folder)?;
 
@@ -231,7 +267,7 @@ impl Voice {
         }
 
         self.read_something();
-        let _ = crate::exec::shell_line(&fill_in(command, &quiet)).output()?;
+        let _ = run_transcriber(command, &quiet, language)?;
 
         Ok(())
     }
@@ -273,7 +309,7 @@ impl Voice {
 
     /// Stop, and say what was said. An empty answer is not an error: somebody
     /// pressed the key and thought better of it.
-    pub fn stop(&self, command: Option<&str>) -> anyhow::Result<String> {
+    pub fn stop(&self, command: Option<&str>, language: &str) -> anyhow::Result<String> {
         let held = self
             .holding
             .lock()
@@ -292,7 +328,7 @@ impl Voice {
             anyhow::bail!("the recorder wrote nothing");
         }
 
-        let spoken = crate::exec::shell_line(&fill_in(command, &held.file)).output()?;
+        let spoken = run_transcriber(command, &held.file, language)?;
 
         if !spoken.status.success() {
             anyhow::bail!(
@@ -316,6 +352,7 @@ pub fn read_back(
     audio: &[u8],
     kind: &str,
     command: &str,
+    language: &str,
 ) -> anyhow::Result<String> {
     let folder = data_dir.join("voice");
     std::fs::create_dir_all(&folder)?;
@@ -327,7 +364,7 @@ pub fn read_back(
     // goes straight there. The window records one on purpose: no encoder, no
     // decoder, and no process spawned only to fail on a machine with no ffmpeg.
     if kind.contains("wav") {
-        return read_aloud(&arrived, command);
+        return read_aloud(&arrived, command, language);
     }
 
     // A name of its own: a wav that arrived is already called arrived.wav, and
@@ -353,12 +390,12 @@ pub fn read_back(
         Err(error) => anyhow::bail!("ffmpeg is needed to read a recording from a browser: {error}"),
     };
 
-    read_aloud(&file, command)
+    read_aloud(&file, command, language)
 }
 
 /// Hand one recording to the transcriber and keep what it said.
-fn read_aloud(file: &Path, command: &str) -> anyhow::Result<String> {
-    let spoken = crate::exec::shell_line(&fill_in(command, file)).output()?;
+fn read_aloud(file: &Path, command: &str, language: &str) -> anyhow::Result<String> {
+    let spoken = run_transcriber(command, file, language)?;
 
     if !spoken.status.success() {
         anyhow::bail!(
@@ -472,14 +509,45 @@ mod tests {
     }
 
     #[test]
+    fn the_language_goes_in_where_the_command_asks_for_it() {
+        let file = Path::new("/tmp/said.wav");
+
+        assert_eq!(
+            fill_in("whisper -l {language} -f {file}", file, "tr"),
+            "whisper -l tr -f /tmp/said.wav"
+        );
+
+        // Nothing picked is the guess, in the word whisper itself uses.
+        assert_eq!(
+            fill_in("whisper -l {language} -f {file}", file, ""),
+            "whisper -l auto -f /tmp/said.wav"
+        );
+
+        // A command written before there was a picker asks for no language, and
+        // is left as it is: it gets the choice through its environment instead.
+        assert_eq!(
+            fill_in("my-transcriber {file}", file, "tr"),
+            "my-transcriber /tmp/said.wav"
+        );
+    }
+
+    #[test]
+    fn nothing_picked_is_the_guess_and_a_pick_is_taken_as_it_is() {
+        assert_eq!(spoken_language(""), "auto");
+        assert_eq!(spoken_language("   "), "auto");
+        assert_eq!(spoken_language("tr"), "tr");
+        assert_eq!(spoken_language(" en "), "en");
+    }
+
+    #[test]
     fn the_recording_goes_where_the_command_says_or_on_the_end() {
         let file = Path::new("/tmp/said.wav");
 
         assert_eq!(
-            fill_in("whisper -f {file} --model base", file),
+            fill_in("whisper -f {file} --model base", file, GUESS),
             "whisper -f /tmp/said.wav --model base"
         );
-        assert_eq!(fill_in("my-transcriber", file), "my-transcriber \"/tmp/said.wav\"");
+        assert_eq!(fill_in("my-transcriber", file, GUESS), "my-transcriber \"/tmp/said.wav\"");
     }
 
     #[test]

@@ -132,13 +132,14 @@ pub fn tool_in(folder: &Path) -> Option<PathBuf> {
 
 /// How the transcriber is asked for what was said, and nothing else.
 ///
-/// `-nt` drops the timestamps, `-np` everything that is not the words, and
-/// `auto` lets it hear which language it is being spoken to in — a person who
-/// dictates in two languages should not have to say which each time. Quoted
+/// `-nt` drops the timestamps and `-np` everything that is not the words.
+/// `{language}` is filled in when the line is run, from the one picked in
+/// Settings — `auto` until somebody picks, which lets it hear which language it
+/// is being spoken to at the cost of reading the recording twice. Quoted
 /// because a data directory has a person's name in it, and names have spaces.
 pub fn transcriber_line(tool: &Path, model: &Path) -> String {
     format!(
-        "\"{}\" -m \"{}\" -l auto -nt -np -f \"{{file}}\"",
+        "\"{}\" -m \"{}\" -l {{language}} -nt -np -f \"{{file}}\"",
         tool.display(),
         model.display()
     )
@@ -393,7 +394,10 @@ mod tests {
         assert!(line.contains("\"/home/a person/data/whisper/whisper-cli\""), "{line}");
         assert!(line.contains("-nt"), "no timestamps: {line}");
         assert!(line.contains("-np"), "nothing but the words: {line}");
-        assert!(line.contains("-l auto"), "whichever language it is spoken in: {line}");
+        assert!(
+            line.contains("-l {language}"),
+            "the language is picked in Settings, and put in when the line is run: {line}"
+        );
         assert!(
             line.ends_with("-f \"{file}\""),
             "the recording's own path is under a person's home too, and names have spaces: {line}"

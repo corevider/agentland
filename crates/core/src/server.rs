@@ -5666,7 +5666,8 @@ async fn heard_elsewhere(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("audio/webm");
 
-    let text = crate::voice::read_back(&state.config.data_dir, &body, kind, &command)?;
+    let language = language_of(&state);
+    let text = crate::voice::read_back(&state.config.data_dir, &body, kind, &command, &language)?;
     state.voice.read_something();
     note(&state, "voice.heard", "a person", "elsewhere", &text);
 
@@ -5937,6 +5938,8 @@ struct VoiceState {
     /// The command that reads the words back, as somebody set it.
     #[serde(skip_serializing_if = "Option::is_none")]
     transcriber: Option<String>,
+    /// The language it is asked to hear: a code, or `auto` for the guess.
+    language: String,
     listening: bool,
     /// Whisper as it stands here: what has been fetched, what can be, and what
     /// is being fetched right now.
@@ -5973,6 +5976,23 @@ fn whisper_state(state: &AppState) -> WhisperState {
     }
 }
 
+/// The language somebody picked in Settings, or the guess.
+///
+/// One setting rather than a word buried in the command: a person who dictates
+/// in Turkish should not have to know that whisper spells it `-l tr`, and the
+/// guess is not free — it reads the recording once to decide and again to hear
+/// it, which on this machine's model is the larger half of the wait.
+fn language_of(state: &AppState) -> String {
+    let held = state
+        .settings
+        .lock()
+        .get("voice_language")
+        .cloned()
+        .unwrap_or_default();
+
+    crate::voice::spoken_language(&held).to_owned()
+}
+
 fn transcriber_of(state: &AppState) -> Option<String> {
     state
         .settings
@@ -5988,6 +6008,7 @@ async fn read_voice(State(state): State<AppState>) -> Json<VoiceState> {
     Json(VoiceState {
         recorder: state.voice.recorder(),
         transcriber: transcriber_of(&state),
+        language: language_of(&state),
         listening: state.voice.listening(),
         whisper: whisper_state(&state),
     })
@@ -6071,7 +6092,13 @@ async fn fetch_whisper(
 
 #[derive(Deserialize)]
 struct SetTranscriber {
-    command: String,
+    /// Left out, the command is left as it is — the panel sends the language on
+    /// its own when somebody picks one, and a language change is not a reason
+    /// to rewrite a line a person wrote by hand.
+    #[serde(default)]
+    command: Option<String>,
+    #[serde(default)]
+    language: Option<String>,
 }
 
 /// The command that reads a recording back. A person's to set: it names a
@@ -6080,15 +6107,26 @@ async fn set_transcriber(
     State(state): State<AppState>,
     Json(body): Json<SetTranscriber>,
 ) -> Json<VoiceState> {
-    state
-        .settings
-        .lock()
-        .insert("transcriber".to_owned(), body.command.trim().to_owned());
+    if let Some(command) = body.command.as_deref() {
+        state
+            .settings
+            .lock()
+            .insert("transcriber".to_owned(), command.trim().to_owned());
+    }
+
+    if let Some(language) = body.language.as_deref() {
+        state.settings.lock().insert(
+            "voice_language".to_owned(),
+            crate::voice::spoken_language(language).to_owned(),
+        );
+    }
+
     crate::db::save_state(&state.config.data_dir, "settings", &*state.settings.lock());
 
     Json(VoiceState {
         recorder: state.voice.recorder(),
         transcriber: transcriber_of(&state),
+        language: language_of(&state),
         listening: state.voice.listening(),
         whisper: whisper_state(&state),
     })
@@ -6113,9 +6151,10 @@ async fn wake_transcriber(State(state): State<AppState>) -> StatusCode {
         return StatusCode::NO_CONTENT;
     }
 
+    let language = language_of(&state);
     let voice = state.voice.clone();
     tokio::task::spawn_blocking(move || {
-        let _ = voice.wake(&command);
+        let _ = voice.wake(&command, &language);
     });
 
     StatusCode::ACCEPTED
@@ -6135,7 +6174,7 @@ struct Said {
 /// Stop recording and say what was said.
 async fn stop_listening(State(state): State<AppState>) -> Result<Json<Said>, ApiError> {
     let command = transcriber_of(&state);
-    let text = state.voice.stop(command.as_deref())?;
+    let text = state.voice.stop(command.as_deref(), &language_of(&state))?;
     state.voice.read_something();
 
     note(&state, "voice.heard", "a person", "", &text);

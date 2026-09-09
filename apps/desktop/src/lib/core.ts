@@ -630,6 +630,10 @@ export interface WhisperState {
 export interface VoiceState {
     recorder?: string;
     transcriber?: string;
+    /// The language it is asked to hear: a two-letter code, or "auto" for the
+    /// guess. The guess reads the recording twice — once to decide, once to
+    /// hear it — so it is a choice worth making.
+    language: string;
     listening: boolean;
     whisper: WhisperState;
 }
@@ -651,6 +655,14 @@ export function set_transcriber(command: string): Promise<VoiceState> {
     return request<VoiceState>("/voice", {
         method: "POST",
         body: JSON.stringify({ command }),
+    });
+}
+
+/// The language the transcriber is asked to hear. "auto" is the guess.
+export function set_voice_language(language: string): Promise<VoiceState> {
+    return request<VoiceState>("/voice", {
+        method: "POST",
+        body: JSON.stringify({ language }),
     });
 }
 

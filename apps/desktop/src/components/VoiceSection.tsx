@@ -1,8 +1,38 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { Waiting } from "@/components/Spinner";
-import { fetch_whisper, set_transcriber, voice_state, type VoiceState } from "@/lib/core";
+import {
+    fetch_whisper,
+    set_transcriber,
+    set_voice_language,
+    voice_state,
+    type VoiceState,
+} from "@/lib/core";
 import { can_listen } from "@/lib/listen";
+
+/// The languages offered, and the guess.
+///
+/// Not all ninety-nine whisper knows: a list nobody can read is not a choice,
+/// and the command below is still there for anybody who needs a hundredth one.
+/// Guessing is kept at the top because it is what a new machine does, and named
+/// plainly as what it costs.
+const LANGUAGES: [string, string][] = [
+    ["auto", "guess it each time — reads the recording twice"],
+    ["tr", "Türkçe"],
+    ["en", "English"],
+    ["de", "Deutsch"],
+    ["fr", "Français"],
+    ["es", "Español"],
+    ["it", "Italiano"],
+    ["pt", "Português"],
+    ["nl", "Nederlands"],
+    ["pl", "Polski"],
+    ["ru", "Русский"],
+    ["ar", "العربية"],
+    ["zh", "中文"],
+    ["ja", "日本語"],
+    ["ko", "한국어"],
+];
 
 /// Speaking to the crew.
 ///
@@ -50,6 +80,18 @@ export function VoiceSection() {
             }
         },
         [refresh],
+    );
+
+    const pick_language = useCallback(
+        async (language: string) => {
+            try {
+                set_notice(null);
+                set_state(await set_voice_language(language));
+            } catch (cause) {
+                set_notice(cause instanceof Error ? cause.message : String(cause));
+            }
+        },
+        [],
     );
 
     const save = useCallback(
@@ -129,6 +171,36 @@ export function VoiceSection() {
 
             <label className="flex flex-col gap-1">
                 <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-shade">
+                    The language you dictate in
+                </span>
+                <select
+                    className="rounded-lg border border-reef bg-lagoon px-2 py-1 font-mono text-[11px]"
+                    value={state.language ?? "auto"}
+                    onChange={(event) => void pick_language(event.target.value)}
+                >
+                    {LANGUAGES.map(([code, name]) => (
+                        <option key={code} value={code}>
+                            {name}
+                        </option>
+                    ))}
+                </select>
+                <span className="font-mono text-[10px] text-shade">
+                    Naming it is the difference between one pass over the recording and two: on this
+                    machine's model, 2.5 seconds against 4.2. Guessing is right for somebody who
+                    moves between languages, and a short sentence is where it guesses wrong.
+                </span>
+                {state.language && state.language !== "auto" && state.transcriber && !state.transcriber.includes("{language}") ? (
+                    <span className="font-mono text-[10px] text-shade">
+                        Your command has no {"{language}"} in it. It is handed{" "}
+                        <span className="text-linen">AGENTLAND_VOICE_LANGUAGE</span> as well, which
+                        the transcriber in this repository reads — one that takes a flag instead
+                        wants {"{language}"} written where the flag goes.
+                    </span>
+                ) : null}
+            </label>
+
+            <label className="flex flex-col gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-shade">
                     The command that reads a recording back — written for you above, or your own
                 </span>
                 <input
@@ -147,10 +219,8 @@ export function VoiceSection() {
                     runs on this machine and nothing is sent anywhere.
                 </span>
                 <span className="font-mono text-[10px] text-shade">
-                    The line written above asks for <span className="text-linen">-l auto</span>, so
-                    it hears whichever language it is spoken to in. Say{" "}
-                    <span className="text-linen">-l tr</span> instead if you only ever dictate in
-                    one: a short sentence is easier to place when it does not have to be guessed.
+                    The line written above carries {"{language}"} where the flag goes, so the choice
+                    made here reaches it without anybody editing this box.
                 </span>
             </label>
 

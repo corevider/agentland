@@ -33,6 +33,9 @@ async fn it_fetches_whisper_and_reads_a_sentence_back() {
         &std::fs::read(&spoken).expect("the recording"),
         "audio/wav",
         &line,
+        // The language a person would have picked in Settings; `auto` is what
+        // the line carries until somebody does.
+        &std::env::var("SPOKEN_LANGUAGE").unwrap_or_else(|_| agentland_core::voice::GUESS.to_owned()),
     )
     .expect("read back");
 

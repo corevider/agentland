@@ -46,18 +46,26 @@ audio, and on `small` it is the larger half of the wait.
 
 ## Which language
 
+Settings → Voice has a picker, and it is the whole answer: pick the language you
+dictate in, and every recording after that is heard as that language.
+
 Left to guess, a model hears a short sentence as English — three Turkish words
-came back as English ones. Name it in front of the command:
+came back as English ones. And the guess is not free: it runs the model over the
+recording once to decide and again to hear it. On `small` that is 4.19 seconds
+against 2.51, so the picker is worth using for anybody who dictates in one
+language, and guessing is still right for anybody who moves between two.
 
-```
-AGENTLAND_WHISPER_LANGUAGE=tr ~/.local/bin/agentland-transcribe {file}
-```
+The choice reaches a transcriber two ways, because transcribers differ:
 
-Unset, it guesses, which is right for somebody who moves between languages and
-wrong for short sentences. The guess is not free: it runs the model over the
-audio once to decide, and then again to hear it. On `small` that is 4.19 seconds
-against 2.51 — so anybody who dictates in one language only should name it, and
-anybody who does not should know what the choice is buying.
+- **`{language}` in the command**, filled in when it runs, the way `{file}` is.
+  The line Agentland writes for whisper.cpp carries it already.
+- **`AGENTLAND_VOICE_LANGUAGE` in its environment**, always set. This script
+  reads it, so the command stays `~/.local/bin/agentland-transcribe {file}` and
+  the picker works without anybody editing it.
+
+Either way the value is a two-letter code, or `auto` for the guess. It is sent
+with every recording rather than read once at startup, so changing it in
+Settings takes effect on the next sentence — the loaded model is not restarted.
 
 ## Why it stays running
 
