@@ -766,7 +766,32 @@ fn waits_for(endpoint: &agentland_core::service::Endpoint, patience: std::time::
     false
 }
 
+/// Keep WebKit off the renderer that the NVIDIA driver dies in.
+///
+/// Measured on this machine, eight times over two days, always the same three
+/// values: `segfault at 1230`, always at offset `a5f05f`, always inside
+/// `libnvidia-eglcore`. The window went down on its own while nobody was
+/// touching it, and the resident size at the moment it went was 360 MB — so
+/// nothing was exhausted, the driver was simply read at an address it does not
+/// map. WebKitGTK's DMABUF renderer is what walks into it.
+///
+/// Set here rather than asked of the person who starts the app: a variable that
+/// only works from a shell is a variable that does nothing when the window is
+/// opened from the desktop, which is how it is opened. An answer already given
+/// is left alone, so this can still be turned back on to test a driver that has
+/// been fixed.
+#[cfg(target_os = "linux")]
+fn keep_off_the_broken_renderer() {
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn keep_off_the_broken_renderer() {}
+
 fn main() {
+    keep_off_the_broken_renderer();
     tracing_subscriber::fmt().with_target(false).init();
 
     let port = std::env::var("AGENTLAND_PORT")
