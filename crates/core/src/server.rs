@@ -68,6 +68,20 @@ impl ServerConfig {
     ///
     /// The folder is made first: a path that is not there yet cannot be read,
     /// and a first run would otherwise keep the spelling it was given.
+    /// Say which cipher implementation TLS is to use, before anything asks.
+    ///
+    /// Two of them end up in the build — one arrives with the server's TLS, the
+    /// other with the HTTP client's — and rustls will not choose between them.
+    /// Asked to, without being told, it panics; the release profile aborts on a
+    /// panic, so the whole window went down the moment the phone's door was
+    /// made, with a message about crate features and nothing about a phone.
+    ///
+    /// Installed once. A second call is somebody else having got there first,
+    /// which is not a failure and is not worth a word.
+    fn pick_the_cipher_suite() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+
     pub fn settle_data_dir(&mut self) {
         let _ = std::fs::create_dir_all(&self.data_dir);
         self.data_dir = crate::exec::settled(&self.data_dir);
@@ -183,6 +197,7 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
             HeaderName::from_static("x-auth-token"),
         ]);
 
+    ServerConfig::pick_the_cipher_suite();
     config.settle_data_dir();
 
     let data_dir = config.data_dir.clone();
@@ -7661,6 +7676,24 @@ mod memory_notice_tests {
         let shown = opening_of(&written, 10);
 
         assert_eq!(shown, format!("{}…", "ö".repeat(10)));
+    }
+}
+
+#[cfg(test)]
+mod cipher_suite_tests {
+    use super::ServerConfig;
+
+    /// Without this, the first thing to want TLS panics — and the release
+    /// profile aborts on a panic, so the whole app goes down as the phone's
+    /// door is made. Installing twice is somebody else having got there first,
+    /// which is not a failure.
+    #[test]
+    fn tls_is_told_which_cipher_implementation_to_use() {
+        ServerConfig::pick_the_cipher_suite();
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+
+        ServerConfig::pick_the_cipher_suite();
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
     }
 }
 

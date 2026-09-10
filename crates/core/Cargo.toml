@@ -18,6 +18,7 @@ crossterm.workspace = true
 qrcode.workspace = true
 vt100.workspace = true
 axum-server.workspace = true
+rustls.workspace = true
 rcgen.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
