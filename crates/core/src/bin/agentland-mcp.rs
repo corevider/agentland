@@ -503,6 +503,21 @@ fn tools() -> Value {
             }
         },
         {
+            "name": "pr_open",
+            "description": "Open a pull request for the work in your worktree, and put the card up for review. Do this when your step is finished and committed — it is how the work leaves your hands: the card moves to review, the pull request is recorded on it under your name, and somebody who is not you reads it. Title it the way a commit is titled. Say in the body what changed and how you know it works.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "repository_id": { "type": "string" },
+                    "worktree": { "type": "string", "description": "the worktree your work is in" },
+                    "task_id": { "type": "string", "description": "the card this finishes" },
+                    "title": { "type": "string" },
+                    "body": { "type": "string", "description": "what changed, and the evidence it works" }
+                },
+                "required": ["repository_id", "worktree", "task_id", "title"]
+            }
+        },
+        {
             "name": "pr_review",
             "description": "Pass judgement on a card's work after reading its diff. The verdict is recorded on the card and said on the pull request under your name. approve, request_changes or comment. Asking for changes puts the card back in working and tells whoever wrote it what you said, so say what has to change rather than that something does. You cannot review a card you are holding: nobody reviews their own work.",
             "inputSchema": {
@@ -760,6 +775,20 @@ fn call_tool(core: &Core, name: &str, arguments: &Value) -> Result<Value, String
             "GET",
             &format!("/repos/{}/worktrees", text("repository_id")?),
             None,
+        ),
+        "pr_open" => core.call(
+            "POST",
+            &format!(
+                "/repos/{}/worktrees/{}/pr",
+                text("repository_id")?,
+                text("worktree")?
+            ),
+            Some(json!({
+                "title": text("title")?,
+                "body": arguments.get("body").and_then(Value::as_str).unwrap_or_default(),
+                "task_id": text("task_id")?,
+                "by": std::env::var("AGENTLAND_AGENT").unwrap_or_else(|_| "unknown".to_owned()),
+            })),
         ),
         "pr_review" => core.call(
             "POST",

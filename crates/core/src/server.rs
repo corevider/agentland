@@ -3449,7 +3449,7 @@ async fn open_pull_request(
             Evidence::PullRequest {
                 url: request.url.clone(),
             },
-            "a person",
+            body.by.as_deref().unwrap_or("a person"),
             now_secs(),
         );
 
@@ -3477,6 +3477,11 @@ struct PullRequestBody {
     body: String,
     #[serde(default)]
     task_id: Option<String>,
+    /// Who opened it. A person clicking the button in the window says nothing
+    /// and stays "a person"; an agent opening its own work says its name, so
+    /// the card records which of them it was.
+    #[serde(default)]
+    by: Option<String>,
 }
 
 #[derive(Deserialize)]

@@ -442,6 +442,15 @@ impl Task {
             }
         }
 
+        // How the work leaves your hands. An implementer finished a card,
+        // committed it and stopped, and the card sat in working with a green
+        // test beside it: it had been told what to do and never told what done
+        // looks like.
+        brief.push_str(&format!(
+            "\n\nWhen this is finished: commit it, then pr_open with task_id {} and the worktree you worked in. That is what puts it up for review — somebody who is not you reads it, and the card leaves your hands. Do not merge it yourself.",
+            self.id
+        ));
+
         brief
     }
 }
