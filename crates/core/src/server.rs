@@ -353,6 +353,7 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
         .route("/dispatch", get(dispatch_status))
         .route("/dispatch/pause", post(pause_dispatch))
         .route("/dispatch/caps", post(set_caps))
+        .route("/dispatch/merge-policy", post(set_merge_policy))
         .route("/memories", get(list_memories).post(propose_memory))
         .route("/memories/search", get(search_memories))
         .route("/memories/embedder", get(read_embedder).post(set_embedder))
@@ -3062,6 +3063,26 @@ async fn set_caps(
     Json(state.dispatch.set_caps(caps))
 }
 
+/// Whether a card that has passed every check merges itself.
+///
+/// A person's switch. It is off until somebody turns it on, and turning it on
+/// is the whole of the decision — after that the crew merges its own work.
+#[derive(Deserialize)]
+struct MergePolicyBody {
+    merge_when_checks_pass: bool,
+}
+
+async fn set_merge_policy(
+    State(state): State<AppState>,
+    Json(body): Json<MergePolicyBody>,
+) -> Json<DispatchState> {
+    Json(
+        state
+            .dispatch
+            .set_merge_when_checks_pass(body.merge_when_checks_pass),
+    )
+}
+
 #[derive(Default, Deserialize)]
 struct DispatchBody {
     /// Where this work has to happen. Naming it pins the card: only an agent
@@ -3401,7 +3422,83 @@ async fn submit_review(
         return Ok(Json(updated));
     }
 
-    Ok(Json(updated))
+    // An approval used to land on the card and change nothing: the card sat in
+    // review with a yes on it and waited for somebody to notice. A card owes a
+    // check for every judging role the crew actually holds, and when it owes
+    // none it is a person's turn rather than an agent's.
+    let crew: Vec<(String, String)> = state
+        .crew
+        .list()
+        .into_iter()
+        .filter(|agent| agent.repository_id == task.repository_id)
+        .map(|agent| (agent.id, agent.role))
+        .collect();
+
+    let role_of = |who: &str| {
+        crew.iter()
+            .find(|(id, _)| id == who)
+            .map(|(_, role)| role.clone())
+    };
+
+    let approvals: Vec<(String, String)> = updated
+        .evidence
+        .iter()
+        .filter_map(|entry| match &entry.what {
+            Evidence::Reviewed { verdict, .. } if verdict == crate::pulls::Verdict::Approved.word() => {
+                role_of(&entry.by).map(|role| (entry.by.clone(), role))
+            }
+            _ => None,
+        })
+        .collect();
+
+    let owed = crate::pulls::checks_outstanding(&crew, &approvals);
+    if !owed.is_empty() {
+        return Ok(Json(updated));
+    }
+
+    let ready = state.board.move_to(&task.id, Column::Ready)?;
+    note(&state, "card.ready", &reviewer, &task.id, "every check the crew can do has passed");
+
+    if !state.dispatch.merges_when_checks_pass() {
+        return Ok(Json(ready));
+    }
+
+    // The switch is a person's and was thrown before any of this: from here the
+    // crew merges its own work. A merge that will not go through is not a
+    // failure of the review — the card keeps its yes and waits in `ready`,
+    // which is where it would have been anyway.
+    match state.repos.merge_pull_request(&id, &name) {
+        Ok(said) => {
+            state.board.attach(
+                &task.id,
+                Evidence::Note {
+                    text: said
+                        .lines()
+                        .next()
+                        .filter(|line| !line.trim().is_empty())
+                        .unwrap_or("merged")
+                        .to_owned(),
+                },
+                "the crew",
+                now,
+            )?;
+            note(&state, "card.merged", "the crew", &task.id, &format!("{id}/{name}"));
+            Ok(Json(state.board.move_to(&task.id, Column::Done)?))
+        }
+        Err(error) => {
+            let said = error.to_string();
+            tracing::warn!(%said, card = %task.id, "the card passed but would not merge");
+            let held = state.board.attach(
+                &task.id,
+                Evidence::Note {
+                    text: format!("passed every check but would not merge: {said}"),
+                },
+                "the crew",
+                now,
+            )?;
+            Ok(Json(held))
+        }
+    }
 }
 
 async fn merge_worktree(

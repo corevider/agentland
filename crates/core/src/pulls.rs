@@ -796,3 +796,69 @@ mod tests {
         assert!(matches!(where_it_stands(&pull, LONG_ENOUGH), Standing::Waiting { .. }));
     }
 }
+
+/// The roles that judge somebody else's work, in the order a person reads them.
+///
+/// A check is required when the crew has somebody to do it. Hire a security
+/// agent and security gates the card; hire none and it does not. That way the
+/// gate is the crew a person built rather than a list this file insists on.
+pub const CHECKS: &[&str] = &["reviewer", "tester", "security"];
+
+/// Which checks a card still owes, given who is on the crew and who has
+/// approved it so far.
+///
+/// Approving is per role, not per agent: two reviewers do not make two checks,
+/// and one agent approving does not answer for a role nobody has filled.
+pub fn checks_outstanding(
+    on_the_crew: &[(String, String)],
+    approvals: &[(String, String)],
+) -> Vec<String> {
+    CHECKS
+        .iter()
+        .filter(|role| on_the_crew.iter().any(|(_, held)| held == *role))
+        .filter(|role| !approvals.iter().any(|(_, held)| held == *role))
+        .map(|role| (*role).to_owned())
+        .collect()
+}
+
+#[cfg(test)]
+mod check_tests {
+    use super::checks_outstanding;
+
+    fn crew(roles: &[(&str, &str)]) -> Vec<(String, String)> {
+        roles
+            .iter()
+            .map(|(id, role)| ((*id).to_owned(), (*role).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn a_check_nobody_was_hired_for_does_not_gate_the_card() {
+        let on_the_crew = crew(&[("rex", "reviewer"), ("ada", "implementer")]);
+        let approvals = crew(&[("rex", "reviewer")]);
+
+        assert!(checks_outstanding(&on_the_crew, &approvals).is_empty());
+    }
+
+    #[test]
+    fn every_check_the_crew_can_do_is_owed_until_it_is_done() {
+        let on_the_crew = crew(&[("rex", "reviewer"), ("tess", "tester"), ("sec", "security")]);
+        let approvals = crew(&[("rex", "reviewer")]);
+
+        assert_eq!(checks_outstanding(&on_the_crew, &approvals), vec!["tester", "security"]);
+    }
+
+    #[test]
+    fn one_agent_approving_does_not_answer_for_a_role_it_does_not_hold() {
+        let on_the_crew = crew(&[("rex", "reviewer"), ("sec", "security")]);
+        let approvals = crew(&[("rex", "reviewer"), ("rex", "reviewer")]);
+
+        assert_eq!(checks_outstanding(&on_the_crew, &approvals), vec!["security"]);
+    }
+
+    #[test]
+    fn a_crew_with_nobody_to_check_owes_nothing() {
+        let on_the_crew = crew(&[("ada", "implementer")]);
+        assert!(checks_outstanding(&on_the_crew, &[]).is_empty());
+    }
+}

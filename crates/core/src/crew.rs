@@ -1232,7 +1232,10 @@ pub const DEFAULT_PERMISSION: &str = "default";
 /// before it runs anything.
 pub fn permission_for_role(role: &str) -> &'static str {
     match role {
-        "reviewer" => "plan",
+        // Everybody who judges somebody else's work reads and reports. None of
+        // them edits: a check that can change the thing it is checking is not a
+        // check.
+        "reviewer" | "tester" | "security" => "plan",
         "implementer" | "ops" | "commander" | "chief" => "acceptEdits",
         _ => DEFAULT_PERMISSION,
     }
@@ -1286,7 +1289,7 @@ pub fn model_for_role(engine_id: &str, role: &str) -> Option<&'static str> {
 
     match role {
         "chief" | "commander" => Some("opus"),
-        "reviewer" | "ops" => Some("sonnet"),
+        "reviewer" | "tester" | "security" | "ops" => Some("sonnet"),
         "implementer" => Some("haiku"),
         _ => None,
     }

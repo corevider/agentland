@@ -236,7 +236,7 @@ fn tools() -> Value {
                     "name": { "type": "string" },
                     "role": {
                         "type": "string",
-                        "description": "implementer, reviewer, ops or commander"
+                        "description": "implementer, reviewer, tester, security, ops or commander. reviewer, tester and security read and report rather than edit, and a card waits for every one of them the crew holds before a person is asked to merge it — hire the checks this work actually needs rather than all of them."
                     },
                     "engine_id": { "type": "string", "description": "claude, codex, gemini and so on — see crew_engines" },
                     "repository_id": { "type": "string" },

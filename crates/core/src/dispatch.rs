@@ -48,6 +48,14 @@ pub struct DispatchState {
     pub paused: bool,
     #[serde(default)]
     pub caps: Caps,
+    /// Merge a card the moment every check the crew can do has passed.
+    ///
+    /// Off unless a person turns it on, and it stays a person's switch: merging
+    /// puts code where everyone gets it and no button takes it back. With it
+    /// off a passing card waits in `ready` with its reports attached, which is
+    /// the same place — only the last step is theirs.
+    #[serde(default)]
+    pub merge_when_checks_pass: bool,
     #[serde(default)]
     pub queue: VecDeque<String>,
     #[serde(default)]
@@ -95,6 +103,7 @@ fn role_affinity(role: &str, task: &Task, came_from_a_step: bool) -> u8 {
     let hints: &[(&str, &str)] = &[
         ("reviewer", "review"),
         ("tester", "test"),
+        ("security", "security"),
         ("researcher", "research"),
         ("ops", "deploy"),
     ];
@@ -299,6 +308,17 @@ impl Dispatch {
         state.caps = caps;
         self.persist(&state);
         state.clone()
+    }
+
+    pub fn set_merge_when_checks_pass(&self, wanted: bool) -> DispatchState {
+        let mut state = self.state.lock();
+        state.merge_when_checks_pass = wanted;
+        self.persist(&state);
+        state.clone()
+    }
+
+    pub fn merges_when_checks_pass(&self) -> bool {
+        self.state.lock().merge_when_checks_pass
     }
 
     pub fn decide(&self, task: &Task, crew: &[Agent], came_from_a_step: bool) -> Decision {
