@@ -21,6 +21,7 @@ import {
     assign_task,
     attachment_object_url,
     delete_task,
+    dispatch_status,
     dispatch_task,
     list_agents,
     list_repos,
@@ -30,9 +31,11 @@ import {
     open_pull_request,
     release_task,
     review_worktree,
+    set_merge_policy,
     shelved_file,
     type Agent,
     type Column,
+    type DispatchState,
     type Entry,
     type Evidence,
     type Repository,
@@ -40,6 +43,7 @@ import {
     type Task,
 } from "@/lib/core";
 import { Picker } from "@/components/Picker";
+import { checks_for, type CheckState } from "@/lib/checks";
 
 const COLUMNS: Column[] = ["backlog", "assigned", "working", "review", "ready", "done"];
 
@@ -243,6 +247,13 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
     use_poll(() => {
         list_tasks().then(set_tasks).catch(() => undefined);
     }, 4000, active && !carry);
+
+    const [dispatch, set_dispatch] = useState<DispatchState | null>(null);
+    const [arming, set_arming] = useState(false);
+
+    use_poll(() => {
+        dispatch_status().then(set_dispatch).catch(() => undefined);
+    }, 5000, active);
 
     // The board reads the crew and the projects once it is on screen. The
     // editor needs the projects to offer one, and they used to arrive only
@@ -537,8 +548,24 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                                     : "border-reef"
                             }`}
                         >
-                            <header className="border-b border-reef px-2 py-1 font-mono text-[11px] uppercase tracking-[0.1em] text-shell">
-                                {column} · {tasks.filter((task) => task.column === column).length}
+                            <header className="flex items-center justify-between gap-2 border-b border-reef px-2 py-1 font-mono text-[11px] uppercase tracking-[0.1em] text-shell">
+                                <span className="truncate">
+                                    {column === "ready" ? "ready to merge" : column} ·{" "}
+                                    {tasks.filter((task) => task.column === column).length}
+                                </span>
+                                {column === "ready" && dispatch?.merge_when_checks_pass !== undefined ? (
+                                    <MergeSwitch
+                                        on={dispatch.merge_when_checks_pass}
+                                        arming={arming}
+                                        disabled={busy}
+                                        on_arm={() => set_arming(true)}
+                                        on_cancel={() => set_arming(false)}
+                                        on_set={(wanted) => {
+                                            set_arming(false);
+                                            void run(async () => set_dispatch(await set_merge_policy(wanted)));
+                                        }}
+                                    />
+                                ) : null}
                             </header>
 
                             <Column
@@ -566,6 +593,14 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                                         on_assign={(agent_id) => run(() => assign_task(task.id, agent_id))}
                                         on_review={() => void open_review(task)}
                                         on_delete={() => run(() => delete_task(task.id))}
+                                        on_merge={
+                                            task.column === "ready" && task.worktree
+                                                ? () =>
+                                                      void run(() =>
+                                                          merge_worktree(task.repository_id, task.worktree!, task.id),
+                                                      )
+                                                : undefined
+                                        }
                                         on_menu={(event) => open_menu(event, `${task.id} · ${task.title}`, card_items(task))}
                                     />
                                 )}
@@ -638,6 +673,8 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
             {!editing && !review && opened && tasks.some((task) => task.id === opened) ? (
                 <CardDetail
                     task={tasks.find((task) => task.id === opened)!}
+                    agents={agents}
+                    merges_itself={dispatch?.merge_when_checks_pass === true}
                     on_menu={(event) => {
                         const held = tasks.find((task) => task.id === opened);
                         if (held) {
@@ -817,12 +854,80 @@ function Column({
     );
 }
 
+const CHECK_TINT: Record<CheckState, string> = {
+    passed: "text-palm",
+    changes: "text-coral",
+    waiting: "text-shade",
+};
+
+const CHECK_MARK: Record<CheckState, string> = { passed: "✓", changes: "✗", waiting: "…" };
+
+const CHECK_WORD: Record<CheckState, string> = {
+    passed: "passed",
+    changes: "asked for changes",
+    waiting: "not yet",
+};
+
+/// The one switch that hands merging to the crew.
+///
+/// Off, a card that passes every check waits here for a person, who can merge
+/// it at once or read the reports first. On, it merges itself — which puts code
+/// where everyone gets it, so turning it on is asked twice and turning it off
+/// is not asked at all.
+function MergeSwitch({
+    on,
+    arming,
+    disabled,
+    on_arm,
+    on_cancel,
+    on_set,
+}: {
+    on: boolean;
+    arming: boolean;
+    disabled: boolean;
+    on_arm: () => void;
+    on_cancel: () => void;
+    on_set: (wanted: boolean) => void;
+}) {
+    const pill = "rounded-lg border px-1.5 py-[1px] font-mono text-[10px] normal-case tracking-normal disabled:opacity-40";
+
+    if (arming) {
+        return (
+            <span className="flex shrink-0 items-center gap-1 normal-case tracking-normal">
+                <span className="text-[10px] text-sun">merge on its own?</span>
+                <button className={`${pill} border-sun text-sun`} disabled={disabled} onClick={() => on_set(true)}>
+                    yes
+                </button>
+                <button className={`${pill} border-reef text-shell`} onClick={on_cancel}>
+                    no
+                </button>
+            </span>
+        );
+    }
+
+    return (
+        <button
+            className={`${pill} shrink-0 ${on ? "border-palm text-palm" : "border-reef text-shade hover:text-linen"}`}
+            disabled={disabled}
+            onClick={() => (on ? on_set(false) : on_arm())}
+            title={
+                on
+                    ? "cards that pass every check merge themselves — click to turn this off"
+                    : "cards that pass every check wait here for you — click to let them merge themselves"
+            }
+        >
+            auto-merge {on ? "on" : "off"}
+        </button>
+    );
+}
+
 const KIND_TINT: Record<string, string> = {
     finished: "text-palm",
     commit: "text-turquoise",
     diff: "text-shell",
     pull_request: "text-sun",
     note: "text-shade",
+    reviewed: "text-linen",
 };
 
 /// The evidence inside an entry, whichever shape it arrived in.
@@ -852,6 +957,8 @@ function said(entry: Entry): string {
                 : "";
             return `${what.summary}${size}`;
         }
+        case "reviewed":
+            return `${String(what.verdict)}${what.summary ? ` — ${String(what.summary)}` : ""}`;
         default:
             return String(what.text ?? what.kind);
     }
@@ -864,6 +971,8 @@ function said(entry: Entry): string {
 /// answer rather than the answer.
 function CardDetail({
     task,
+    agents,
+    merges_itself,
     on_menu,
     on_close,
     on_edit,
@@ -872,6 +981,8 @@ function CardDetail({
     on_merge,
 }: {
     task: Task;
+    agents: Agent[];
+    merges_itself: boolean;
     on_menu?: (event: React.MouseEvent) => void;
     on_close: () => void;
     on_edit: () => void;
@@ -881,6 +992,7 @@ function CardDetail({
 }) {
     const now = Math.floor(Date.now() / 1000);
     const finish = task.evidence.filter((entry) => what_of(entry).kind === "finished").at(-1);
+    const checks = checks_for(task, agents);
     const attachments = originals(task.attachments);
     const [shown, set_shown] = useState<string | null>(null);
     const loader_for = useCallback(
@@ -972,6 +1084,40 @@ function CardDetail({
                     </section>
                 ) : null}
 
+                {checks.length > 0 ? (
+                    <section>
+                        <h3 className="mb-1 font-mono text-[9px] uppercase tracking-[0.14em] text-shade">
+                            Checks · {checks.filter((check) => check.state === "passed").length} of {checks.length} passed
+                        </h3>
+                        <ol className="flex flex-col gap-1">
+                            {checks.map((check) => (
+                                <li key={check.role} className="rounded-md border border-reef bg-lagoon-deep px-2 py-1">
+                                    <div className={`font-mono text-[11px] ${CHECK_TINT[check.state]}`}>
+                                        {CHECK_MARK[check.state]} {check.role} · {CHECK_WORD[check.state]}
+                                    </div>
+                                    {check.summary ? <p className="text-[11px] text-shell">{check.summary}</p> : null}
+                                    {check.by ? (
+                                        <div
+                                            className="font-mono text-[10px] text-shade"
+                                            title={check.at ? exactly(check.at) : undefined}
+                                        >
+                                            {check.by}
+                                            {check.at ? ` · ${when(check.at, now)}` : ""}
+                                        </div>
+                                    ) : null}
+                                </li>
+                            ))}
+                        </ol>
+                        {task.column === "ready" ? (
+                            <p className="mt-1 font-mono text-[9px] text-shade">
+                                {merges_itself
+                                    ? "every check passed · auto-merge is on, so this merges itself"
+                                    : "every check passed · merging is yours"}
+                            </p>
+                        ) : null}
+                    </section>
+                ) : null}
+
                 <section>
                     <h3 className="mb-1 font-mono text-[9px] uppercase tracking-[0.14em] text-shade">
                         What happened · {task.evidence.length}
@@ -1052,6 +1198,7 @@ function BoardCard({
     on_assign,
     on_review,
     on_delete,
+    on_merge,
     on_menu,
 }: {
     task: Task;
@@ -1061,8 +1208,11 @@ function BoardCard({
     on_assign: (agent_id: string) => void;
     on_review: () => void;
     on_delete: () => void;
+    on_merge?: () => void;
     on_menu?: (event: React.MouseEvent) => void;
 }) {
+    const checks = task.column === "review" || task.column === "ready" ? checks_for(task, agents) : [];
+
     return (
         <article
                             key={task.id}
@@ -1153,6 +1303,20 @@ function BoardCard({
                                     {task.evidence.length} on its history
                                 </div>
                             ) : null}
+
+                            {checks.length > 0 ? (
+                                <div className="mt-1 flex flex-wrap gap-x-2 font-mono text-[10px]">
+                                    {checks.map((check) => (
+                                        <span
+                                            key={check.role}
+                                            className={CHECK_TINT[check.state]}
+                                            title={check.summary || CHECK_WORD[check.state]}
+                                        >
+                                            {CHECK_MARK[check.state]} {check.role}
+                                        </span>
+                                    ))}
+                                </div>
+                            ) : null}
         
                             <div className="mt-2 flex flex-wrap items-center justify-between gap-1">
                                 <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
@@ -1184,6 +1348,16 @@ function BoardCard({
                                             onClick={() => on_review()}
                                         >
                                             review
+                                        </button>
+                                    ) : null}
+
+                                    {on_merge ? (
+                                        <button
+                                            className="border border-palm px-1 font-mono text-[10px] text-palm rounded-lg"
+                                            onClick={() => on_merge()}
+                                            title="squash and merge the pull request, and finish this card"
+                                        >
+                                            merge
                                         </button>
                                     ) : null}
                                 </div>

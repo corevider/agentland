@@ -1136,6 +1136,9 @@ export interface DispatchCaps {
 export interface DispatchState {
     paused: boolean;
     caps: DispatchCaps;
+    /// Merge a card the moment every check its crew holds has passed. Off
+    /// unless a person turns it on; missing from a core older than the switch.
+    merge_when_checks_pass?: boolean;
     queue: string[];
     events: DispatchEvent[];
     next_seq: number;
@@ -1167,6 +1170,15 @@ export function set_dispatch_caps(caps: DispatchCaps): Promise<DispatchState> {
     return request<DispatchState>("/dispatch/caps", {
         method: "POST",
         body: JSON.stringify(caps),
+    });
+}
+
+/// Whether a card that has passed every check merges itself. A person's
+/// switch: merging puts code where everyone gets it and nothing takes it back.
+export function set_merge_policy(merge_when_checks_pass: boolean): Promise<DispatchState> {
+    return request<DispatchState>("/dispatch/merge-policy", {
+        method: "POST",
+        body: JSON.stringify({ merge_when_checks_pass }),
     });
 }
 
@@ -1354,7 +1366,7 @@ export function dismiss_agent(id: string, anyway = false): Promise<void> {
 export type Column = "backlog" | "assigned" | "working" | "review" | "ready" | "done";
 
 export interface Evidence {
-    kind: "commit" | "diff" | "pull_request" | "note" | "finished" | string;
+    kind: "commit" | "diff" | "pull_request" | "note" | "finished" | "reviewed" | string;
     [key: string]: unknown;
 }
 
