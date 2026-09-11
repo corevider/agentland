@@ -46,6 +46,14 @@ pub struct Plan {
     pub created_by: String,
     pub state: PlanState,
     pub steps: Vec<Step>,
+    /// The card this plan was made to take apart, when it was made for one.
+    ///
+    /// A step already names the card it became; this is the other direction —
+    /// the outcome somebody wrote down, and the steps it turned into. Without
+    /// it a board can show a card or its replacements but never that one is the
+    /// other taken apart.
+    #[serde(default)]
+    pub task_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -64,6 +72,9 @@ pub struct DraftPlan {
     #[serde(default = "unknown_author")]
     pub created_by: String,
     pub steps: Vec<DraftStep>,
+    /// The card being taken apart, when the plan came from one.
+    #[serde(default)]
+    pub task_id: Option<String>,
 }
 
 fn unknown_author() -> String {
@@ -265,6 +276,7 @@ impl Plans {
             created_by: draft.created_by,
             state: PlanState::Running,
             steps,
+            task_id: draft.task_id.map(|id| id.trim().to_owned()).filter(|id| !id.is_empty()),
         };
 
         state.plans.insert(plan_id, plan.clone());
@@ -482,6 +494,7 @@ mod tests {
             repository_id: "agentland".to_owned(),
             created_by: "x".to_owned(),
             steps,
+            task_id: None,
         }
     }
 
@@ -566,6 +579,7 @@ mod tests {
                 repository_id: "agentland".to_owned(),
                 created_by: "x".to_owned(),
                 steps: vec![step("a", &["b"]), step("b", &["a"])],
+            task_id: None,
             })
             .expect_err("a cycle is not a plan");
 
@@ -607,6 +621,7 @@ mod tests {
             repository_id: "agentland".to_owned(),
             created_by: "x".to_owned(),
             steps: vec![step("something", &[])],
+            task_id: None,
         });
         assert!(no_goal.unwrap_err().to_string().contains("needs a goal"));
     }

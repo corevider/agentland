@@ -75,7 +75,21 @@ impl DispatchState {
     }
 }
 
-fn role_affinity(role: &str, task: &Task) -> u8 {
+/// How well a role fits a card, and whether the card is one to be taken apart.
+///
+/// A card that came from a plan step is already one piece of work: somebody
+/// decided what it is, and it wants the hands that do it. A card that came from
+/// nobody's plan is an outcome — what a person wrote on the board — and taking
+/// an outcome apart is the commander's whole job.
+///
+/// The commander is ranked for the second and not the first. Before this it was
+/// ranked for neither, which meant it scored zero and still won whenever it was
+/// the only agent on a repository: a commander was handed a step to implement
+/// because nobody else existed, and had to notice and hand it back.
+///
+/// A card that names its own role beats both. "Review the auth changes" wants a
+/// reviewer whether or not a plan made it.
+fn role_affinity(role: &str, task: &Task, came_from_a_step: bool) -> u8 {
     let haystack = format!("{} {}", task.title, task.body).to_lowercase();
 
     let hints: &[(&str, &str)] = &[
@@ -87,8 +101,12 @@ fn role_affinity(role: &str, task: &Task) -> u8 {
 
     for (candidate_role, keyword) in hints {
         if role == *candidate_role && haystack.contains(keyword) {
-            return 2;
+            return 3;
         }
+    }
+
+    if role == "commander" {
+        return if came_from_a_step { 0 } else { 2 };
     }
 
     if role == "implementer" {
@@ -98,7 +116,12 @@ fn role_affinity(role: &str, task: &Task) -> u8 {
     }
 }
 
-pub fn decide(state: &DispatchState, task: &Task, crew: &[Agent]) -> Decision {
+pub fn decide(
+    state: &DispatchState,
+    task: &Task,
+    crew: &[Agent],
+    came_from_a_step: bool,
+) -> Decision {
     if state.paused {
         return Decision::Queue {
             reason: "X is paused; nothing new is being handed out".to_owned(),
@@ -187,13 +210,44 @@ pub fn decide(state: &DispatchState, task: &Task, crew: &[Agent]) -> Decision {
         };
     }
 
-    candidates.sort_by_key(|agent| std::cmp::Reverse(role_affinity(&agent.role, task)));
+    // Ranking alone left the commander holding steps: when it was the only
+    // agent on a repository it scored lowest and still won, because lowest of
+    // one is first. A step wants hands, and the answer when there are none is
+    // to say so — the commander reads this and hires, which is the thing it
+    // was going to have to do anyway.
+    if came_from_a_step {
+        let hands: Vec<&&Agent> = candidates
+            .iter()
+            .copied()
+            .filter(|agent| agent.role != "commander")
+            .collect();
+
+        if hands.is_empty() {
+            return Decision::Queue {
+                reason: format!(
+                    "{} is a step to be done and only the commander is free on {} — hire someone to do it",
+                    task.id, task.repository_id
+                ),
+            };
+        }
+
+        candidates = hands;
+    }
+
+    candidates
+        .sort_by_key(|agent| std::cmp::Reverse(role_affinity(&agent.role, task, came_from_a_step)));
     let chosen = candidates[0];
 
-    let reason = if role_affinity(&chosen.role, task) == 2 {
+    let fit = role_affinity(&chosen.role, task, came_from_a_step);
+    let reason = if fit == 3 {
         format!(
             "{} is free and the task reads like {} work",
             chosen.name, chosen.role
+        )
+    } else if fit == 2 {
+        format!(
+            "{} is the commander and {} is an outcome to take apart, not a step",
+            chosen.name, task.id
         )
     } else {
         format!(
@@ -247,8 +301,8 @@ impl Dispatch {
         state.clone()
     }
 
-    pub fn decide(&self, task: &Task, crew: &[Agent]) -> Decision {
-        decide(&self.state.lock(), task, crew)
+    pub fn decide(&self, task: &Task, crew: &[Agent], came_from_a_step: bool) -> Decision {
+        decide(&self.state.lock(), task, crew, came_from_a_step)
     }
 
     pub fn record_assignment(&self, agent_id: &str, task_id: &str, reason: &str) -> DispatchState {
@@ -320,7 +374,7 @@ mod tests {
         let mut card = task("document the endpoint in the README");
         card.worktree = Some("ada-tree".to_owned());
 
-        match decide(&state, &card, &crew) {
+        match decide(&state, &card, &crew, false) {
             // Nova reads like the better role for documenting, and would win
             // without the binding — the branch is what decides here.
             Decision::Assign { agent_id, .. } => assert_eq!(agent_id, "ada"),
@@ -335,7 +389,7 @@ mod tests {
         let mut card = task("document the endpoint");
         card.worktree = Some("ada-tree".to_owned());
 
-        match decide(&state, &card, &crew) {
+        match decide(&state, &card, &crew, false) {
             Decision::Refuse { reason } => {
                 assert!(reason.contains("ada-tree"), "the reason names the worktree: {reason}");
             }
@@ -351,7 +405,7 @@ mod tests {
             agent("rex", "reviewer", AgentState::Idle),
         ];
 
-        match decide(&state, &task("review the auth changes"), &crew) {
+        match decide(&state, &task("review the auth changes"), &crew, false) {
             Decision::Assign { agent_id, reason } => {
                 assert_eq!(agent_id, "rex");
                 assert!(reason.contains("reviewer"), "reason should explain: {reason}");
@@ -374,7 +428,7 @@ mod tests {
             agent("rex", "reviewer", AgentState::Idle),
         ];
 
-        match decide(&state, &task("anything"), &crew) {
+        match decide(&state, &task("anything"), &crew, false) {
             Decision::Queue { reason } => assert!(reason.contains("already working")),
             other => panic!("expected a queue, got {other:?}"),
         }
@@ -389,7 +443,7 @@ mod tests {
         let crew = vec![agent("ada", "implementer", AgentState::Idle)];
 
         assert!(matches!(
-            decide(&state, &task("anything"), &crew),
+            decide(&state, &task("anything"), &crew, false),
             Decision::Queue { .. }
         ));
     }
@@ -398,9 +452,75 @@ mod tests {
     fn refuses_when_nobody_is_hired_on_that_repository() {
         let state = DispatchState::default();
         assert!(matches!(
-            decide(&state, &task("anything"), &[]),
+            decide(&state, &task("anything"), &[], false),
             Decision::Refuse { .. }
         ));
+    }
+
+    /// The bug this was written for: a commander alone on a repository was
+    /// handed a step to implement, because lowest of one is still first. It
+    /// noticed and handed the card back, which is a thing it should not have
+    /// had to do.
+    #[test]
+    fn a_commander_alone_is_not_handed_a_step_to_implement() {
+        let state = DispatchState::default();
+        let crew = vec![agent("x2", "commander", AgentState::Idle)];
+
+        match decide(&state, &task("add a test beside greet"), &crew, true) {
+            Decision::Queue { reason } => {
+                assert!(reason.contains("hire"), "the reason says what to do: {reason}");
+            }
+            other => panic!("expected a queue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_step_goes_to_the_hands_rather_than_the_commander() {
+        let state = DispatchState::default();
+        let crew = vec![
+            agent("x2", "commander", AgentState::Idle),
+            agent("ada", "implementer", AgentState::Idle),
+        ];
+
+        match decide(&state, &task("add a test beside greet"), &crew, true) {
+            Decision::Assign { agent_id, .. } => assert_eq!(agent_id, "ada"),
+            other => panic!("expected an assignment, got {other:?}"),
+        }
+    }
+
+    /// The other half of the same rule, and the reason the commander is ranked
+    /// at all: a card nobody planned is an outcome, and taking one apart is its
+    /// job rather than the implementer's.
+    #[test]
+    fn an_outcome_nobody_planned_goes_to_the_commander() {
+        let state = DispatchState::default();
+        let crew = vec![
+            agent("ada", "implementer", AgentState::Idle),
+            agent("x2", "commander", AgentState::Idle),
+        ];
+
+        match decide(&state, &task("the checkout page loses the basket"), &crew, false) {
+            Decision::Assign { agent_id, reason } => {
+                assert_eq!(agent_id, "x2");
+                assert!(reason.contains("take apart"), "the reason explains: {reason}");
+            }
+            other => panic!("expected an assignment, got {other:?}"),
+        }
+    }
+
+    /// A card that names its own role beats both, planned or not.
+    #[test]
+    fn a_card_that_reads_like_one_role_still_goes_to_that_role() {
+        let state = DispatchState::default();
+        let crew = vec![
+            agent("x2", "commander", AgentState::Idle),
+            agent("rex", "reviewer", AgentState::Idle),
+        ];
+
+        match decide(&state, &task("review the auth changes"), &crew, false) {
+            Decision::Assign { agent_id, .. } => assert_eq!(agent_id, "rex"),
+            other => panic!("expected an assignment, got {other:?}"),
+        }
     }
 }
 

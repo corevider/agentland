@@ -3120,7 +3120,10 @@ async fn dispatch_task(
         }));
     }
 
-    let decision = state.dispatch.decide(&task, &crew);
+    // A card a plan already broke out is a step; anything else is an outcome
+    // nobody has taken apart yet, and those two want different people.
+    let came_from_a_step = state.plans.plan_of_task(&task.id).is_some();
+    let decision = state.dispatch.decide(&task, &crew, came_from_a_step);
 
     match &decision {
         Decision::Assign { agent_id, reason } => {
@@ -7483,6 +7486,7 @@ mod plan_word_tests {
             goal: "svc-demo answers /health".into(),
             repository_id: "demo".into(),
             created_by: "x".into(),
+            task_id: None,
             state: PlanState::Done,
             steps: vec![
                 Step {
