@@ -3440,15 +3440,18 @@ async fn submit_review(
             .map(|(_, role)| role.clone())
     };
 
-    let approvals: Vec<(String, String)> = updated
+    let reviews: Vec<(String, String)> = updated
         .evidence
         .iter()
         .filter_map(|entry| match &entry.what {
-            Evidence::Reviewed { verdict, .. } if verdict == crate::pulls::Verdict::Approved.word() => {
-                role_of(&entry.by).map(|role| (entry.by.clone(), role))
-            }
+            Evidence::Reviewed { verdict, .. } => Some((entry.by.clone(), verdict.clone())),
             _ => None,
         })
+        .collect();
+
+    let approvals: Vec<(String, String)> = crate::pulls::standing_approvers(&reviews)
+        .into_iter()
+        .filter_map(|who| role_of(&who).map(|role| (who, role)))
         .collect();
 
     let owed = crate::pulls::checks_outstanding(&crew, &approvals);

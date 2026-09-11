@@ -821,9 +821,31 @@ pub fn checks_outstanding(
         .collect()
 }
 
+/// Who has approved since the work last went back to be changed.
+///
+/// An approval is of the code it read. Once somebody asks for changes the card
+/// goes back to working and the code moves on, so a yes given before that is a
+/// yes to something that is no longer there. Counting it let a card reach ready
+/// on a reviewer's approval of the version security then sent back.
+///
+/// Reviews are read in the order they were written, which is the order the
+/// card keeps them in.
+pub fn standing_approvers(reviews: &[(String, String)]) -> Vec<String> {
+    let since = reviews
+        .iter()
+        .rposition(|(_, verdict)| verdict == Verdict::ChangesRequested.word())
+        .map_or(0, |index| index + 1);
+
+    reviews[since..]
+        .iter()
+        .filter(|(_, verdict)| verdict == Verdict::Approved.word())
+        .map(|(by, _)| by.clone())
+        .collect()
+}
+
 #[cfg(test)]
 mod check_tests {
-    use super::checks_outstanding;
+    use super::{checks_outstanding, standing_approvers};
 
     fn crew(roles: &[(&str, &str)]) -> Vec<(String, String)> {
         roles
@@ -860,5 +882,36 @@ mod check_tests {
     fn a_crew_with_nobody_to_check_owes_nothing() {
         let on_the_crew = crew(&[("ada", "implementer")]);
         assert!(checks_outstanding(&on_the_crew, &[]).is_empty());
+    }
+
+    fn reviews(said: &[(&str, &str)]) -> Vec<(String, String)> {
+        said.iter()
+            .map(|(by, verdict)| ((*by).to_owned(), (*verdict).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn an_approval_given_before_changes_were_asked_for_does_not_stand() {
+        let said = reviews(&[
+            ("rex", "approved"),
+            ("sec", "requested changes"),
+            ("sec", "approved"),
+        ]);
+
+        assert_eq!(standing_approvers(&said), vec!["sec"]);
+    }
+
+    #[test]
+    fn with_nothing_sent_back_every_approval_stands() {
+        let said = reviews(&[("rex", "approved"), ("tess", "commented"), ("tess", "approved")]);
+
+        assert_eq!(standing_approvers(&said), vec!["rex", "tess"]);
+    }
+
+    #[test]
+    fn a_card_just_sent_back_has_no_approval_standing() {
+        let said = reviews(&[("rex", "approved"), ("sec", "requested changes")]);
+
+        assert!(standing_approvers(&said).is_empty());
     }
 }
