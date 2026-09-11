@@ -292,10 +292,11 @@ pub fn allowed_for(role: &str) -> Vec<&'static str> {
     allowed.extend_from_slice(LOOKING);
 
     match role {
-        // It cannot edit what it judges, so it has nothing to format and
-        // nothing to commit. It does get to run the tests, because a review
-        // that takes the author's word for it is not a review.
-        "reviewer" => allowed.extend_from_slice(PROVING),
+        // Nobody who judges the work can edit it, so they have nothing to
+        // format and nothing to commit. They do get to run the tests, because a
+        // review that takes the author's word for it is not a review — and a
+        // tester or a security check that cannot run anything is not one at all.
+        "reviewer" | "tester" | "security" => allowed.extend_from_slice(PROVING),
         // "shell" is a CLI a person opened by hand and asked to run on the
         // crew's footing. It is somebody working, so it works: it looks, it
         // proves, and it records.
@@ -548,6 +549,15 @@ mod tests {
     }
 
     #[test]
+    fn a_tester_and_a_security_check_run_things_and_change_nothing() {
+        for role in ["tester", "security"] {
+            assert!(allows(role, "Bash(npm test:*)"), "{role} cannot run what it was hired to run");
+            assert!(allows(role, "Bash(python3 -m pytest:*)"));
+            assert!(!allows(role, "Bash(git commit:*)"), "{role} could change what it judges");
+        }
+    }
+
+    #[test]
     fn a_commander_reads_and_delegates_the_rest() {
         assert!(allows("commander", "Bash(git log:*)"));
         assert!(!allows("commander", "Bash(npm test:*)"), "it hands that to somebody");
@@ -556,7 +566,7 @@ mod tests {
 
     #[test]
     fn the_crews_own_tools_are_never_a_question_for_a_person() {
-        for role in ["chief", "commander", "implementer", "reviewer", "gardener"] {
+        for role in ["chief", "commander", "implementer", "reviewer", "tester", "security", "gardener"] {
             assert!(
                 allows(role, "mcp__agentland"),
                 "{role} had to ask whether it may call the app that hired it",
