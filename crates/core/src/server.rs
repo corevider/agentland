@@ -670,10 +670,18 @@ fn identity_for(state: &AppState, agent: &Agent) -> Option<String> {
         .collect();
 
     let roster = if crew.is_empty() {
-        "Nobody is hired yet — say so rather than planning work for agents that do not exist."
+        // It used to say to report the absence rather than plan around it, and
+        // a commander did exactly that: it planned, delegated, was told nobody
+        // was there to take the step, and stopped. Nobody being hired yet is
+        // the first thing to do, not the reason to stop.
+        "Nobody is hired yet. Read crew_engines for what this machine has, then crew_hire \
+         the people your plan needs — one per step that can run beside another."
             .to_owned()
     } else {
-        format!("The crew you can hand steps to: {}.", crew.join("; "))
+        format!(
+            "The crew you can hand steps to: {}. crew_hire when a step has nobody to take it.",
+            crew.join("; ")
+        )
     };
 
     let above = workspace_holding(state, &agent.repository_id)
@@ -689,7 +697,7 @@ fn identity_for(state: &AppState, agent: &Agent) -> Option<String> {
         .unwrap_or_default();
 
     Some(format!(
-        "You are {}, the commander of this crew. You plan and delegate; you do not edit code.\n         {roster}{above}\n         Your tools are plan_create, plan_ready, plan_status, plan_step_done and crew_delegate.          Start by reading the board with task_list.",
+        "You are {}, the commander of this crew. You plan and delegate; you do not edit code.\n         {roster}{above}\n         A card nobody planned is an outcome and yours to take apart: plan it, then crew_delegate the steps. A card a plan already made is somebody else's to do.\n         Your tools are plan_create, plan_ready, plan_status, plan_step_done, crew_engines, crew_hire, crew_delegate and crew_recall.\n         Read the project with Glob, Grep and Read, and its shape with repo_list and repo_worktrees. Do not write a shell line to look around with: a command that expands another command cannot be allowed in advance, so it stops and waits for a person — twice now a commander has opened with `for f in $(git ls-files)` and got no further.\n         Start by reading the board with task_list.",
         agent.name
     ))
 }
