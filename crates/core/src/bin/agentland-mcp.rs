@@ -365,7 +365,7 @@ fn tools() -> Value {
         },
         {
             "name": "crew_message",
-            "description": "Send a message to another agent by id. Refused when messaging is paused or the grant is missing.",
+            "description": "Send a message to another agent by id. If they have a pane running it is said to them as soon as that pane is quiet, and delivered comes back true. If they have none it waits for their next start and delivered comes back false — an agent that has finished will not hear it until somebody starts it again, so when it cannot wait, ask a person with request_approval instead. Refused when messaging is paused or the grant is missing.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

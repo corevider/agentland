@@ -4031,7 +4031,46 @@ async fn send_mail(
     State(state): State<AppState>,
     Json(request): Json<SendMessage>,
 ) -> Result<Json<MailMessage>, ApiError> {
-    Ok(Json(state.mail.send(request)?))
+    let sent = state.mail.send(request)?;
+
+    // Mail waited for the recipient's next brief whatever the recipient was
+    // doing, and an agent idle at its prompt has no next brief coming: a
+    // commander told by its implementer that the work was done would sit there
+    // not knowing. One with a pane running hears it the way answers already
+    // reach the crew — when the pane is quiet, never in the middle of a turn.
+    // One with no pane reads it when it next starts, as before; waking a
+    // finished agent to read its mail is spending a week on a letter.
+    let listening = state
+        .crew
+        .list()
+        .into_iter()
+        .find(|agent| agent.id == sent.to)
+        .and_then(|agent| agent.session_id)
+        .is_some_and(|id| state.manager.get(&id).is_some());
+
+    if !listening {
+        return Ok(Json(sent));
+    }
+
+    let taken = state.mail.take_inbox(&sent.to);
+    if taken.is_empty() {
+        return Ok(Json(sent));
+    }
+
+    state
+        .crew_words
+        .lock()
+        .entry(sent.to.clone())
+        .or_default()
+        .push(crate::mail::said_in_the_pane(&taken));
+
+    let sent_id = sent.id.clone();
+    Ok(Json(
+        taken
+            .into_iter()
+            .find(|message| message.id == sent_id)
+            .unwrap_or(sent),
+    ))
 }
 
 async fn mail_policy(State(state): State<AppState>) -> Json<MailPolicy> {

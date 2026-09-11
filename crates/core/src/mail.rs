@@ -166,9 +166,37 @@ impl Mailbox {
     }
 }
 
+/// What a pane is told when mail reaches it while it is running.
+///
+/// Said as one block, oldest first, so an agent that was idle through three
+/// messages hears all three at once rather than one per quiet moment.
+pub fn said_in_the_pane(messages: &[Message]) -> String {
+    messages
+        .iter()
+        .map(|message| format!("{} wrote to you: {}", message.from, message.text.trim()))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mail_said_in_a_pane_names_who_wrote_each_one() {
+        let message = |from: &str, text: &str| Message {
+            id: String::new(),
+            from: from.to_owned(),
+            to: "x2".to_owned(),
+            text: text.to_owned(),
+            delivered: true,
+            at: 0,
+        };
+
+        let said = said_in_the_pane(&[message("vale", "t396 is committed"), message("rex", " approved ")]);
+
+        assert_eq!(said, "vale wrote to you: t396 is committed\n\nrex wrote to you: approved");
+    }
 
     #[test]
     fn a_pause_stops_every_handoff() {

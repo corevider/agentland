@@ -579,8 +579,10 @@ send while running   -> msg1 delivered
 send while paused    -> {"error":"agent-to-agent messaging is paused"}
 ```
 
-An inbox is delivered exactly once, and it arrives in the recipient's next brief rather than
-interrupting a running session.
+An inbox is delivered exactly once. A recipient with a pane running hears it as soon as that pane is
+quiet — never in the middle of a turn — and one with no pane reads it in its next brief. It used to
+wait for the next brief either way, and an agent idle at its prompt has no next brief coming: a
+commander would never have heard its implementer say the work was done.
 
 ### Routines
 
