@@ -1154,35 +1154,40 @@ function BoardCard({
                                 </div>
                             ) : null}
         
-                            <div className="mt-2 flex flex-wrap gap-1">
-                                {task.assignee ? (
-                                    <span className="border border-reef px-1 font-mono text-[10px] text-driftwood rounded-lg">
-                                        {task.assignee}
-                                    </span>
-                                ) : (
-                                    <Picker
-                                        className="rounded-lg border border-reef bg-lagoon-deep px-1 py-[1px] font-mono text-[10px]"
-                                        value=""
-                                        placeholder="assign…"
-                                        choices={agents
-                                            .filter(
-                                                (agent) =>
-                                                    agent.repository_id === task.repository_id,
-                                            )
-                                            .map((agent) => ({ value: agent.id, label: agent.name }))}
-                                        on_pick={on_assign}
-                                    />
-                                )}
-        
-                                {task.worktree ? (
-                                    <button
-                                        className="border border-reef px-1 font-mono text-[10px] text-driftwood rounded-lg"
-                                        onClick={() => on_review()}
-                                    >
-                                        review
-                                    </button>
-                                ) : null}
-        
+                            <div className="mt-2 flex flex-wrap items-center justify-between gap-1">
+                                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+                                    {task.assignee ? (
+                                        <span className="border border-reef px-1 font-mono text-[10px] text-driftwood rounded-lg">
+                                            {task.assignee}
+                                        </span>
+                                    ) : (
+                                        <Picker
+                                            className="min-w-[7rem] flex-1 rounded-lg border border-reef bg-lagoon-deep px-2 py-[1px] font-mono text-[10px]"
+                                            value=""
+                                            placeholder="assign…"
+                                            choices={agents
+                                                .filter(
+                                                    (agent) =>
+                                                        agent.repository_id === task.repository_id,
+                                                )
+                                                .map((agent) => ({
+                                                    value: agent.id,
+                                                    label: agent.name,
+                                                }))}
+                                            on_pick={on_assign}
+                                        />
+                                    )}
+
+                                    {task.worktree ? (
+                                        <button
+                                            className="border border-reef px-1 font-mono text-[10px] text-driftwood rounded-lg"
+                                            onClick={() => on_review()}
+                                        >
+                                            review
+                                        </button>
+                                    ) : null}
+                                </div>
+
                                 <button
                                     className="border border-reef px-1 font-mono text-[10px] text-shell rounded-lg"
                                     onClick={() => on_delete()}
