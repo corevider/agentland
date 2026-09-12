@@ -1,6 +1,13 @@
-import type { Agent, Repository, Workspace, WorktreeStatus } from "@/lib/core";
+import type { Agent, Repository, Task, Workspace, WorktreeStatus } from "@/lib/core";
 
-export type PlaceKind = "workspace" | "project" | "worktree" | "agent";
+export type PlaceKind = "workspace" | "project" | "worktree" | "agent" | "card" | "view";
+
+/// A panel of the window, as far as the jumper needs to know it.
+export interface View {
+    id: string;
+    label: string;
+    hint: string;
+}
 
 export interface Place {
     kind: PlaceKind;
@@ -27,6 +34,8 @@ export interface World {
     repositories: Repository[];
     worktrees: WorktreeStatus[];
     agents: Agent[];
+    cards: Task[];
+    views: View[];
 }
 
 /// The home folder, read from the paths themselves.
@@ -132,6 +141,45 @@ export function places_from(world: World, home = ""): Place[] {
         });
     }
 
+    // A finished card is history rather than somewhere to go, and a board a
+    // few weeks old holds more of those than of everything else together.
+    for (const card of world.cards.filter((held) => held.column !== "done")) {
+        const project = world.repositories.find((repository) => repository.id === card.repository_id);
+        const workspace = workspace_holding(world.workspaces, card.repository_id);
+        const holder = card.assignee
+            ? world.agents.find((agent) => agent.id === card.assignee)?.name ?? card.assignee
+            : "nobody holds it";
+
+        places.push({
+            kind: "card",
+            id: `card:${card.id}`,
+            name: card.title.trim() || card.id,
+            alias: card.id,
+            detail: `${card.id} · ${card.column} · ${project?.name ?? card.repository_id} · ${holder}`,
+            workspace_id: workspace?.id ?? null,
+            workspace_name: workspace?.name ?? null,
+            repository_id: card.repository_id || null,
+            worktree: card.worktree,
+            agent_id: card.assignee,
+        });
+    }
+
+    // A view is on every workspace alike, so going to one never switches.
+    for (const view of world.views) {
+        places.push({
+            kind: "view",
+            id: `view:${view.id}`,
+            name: view.label,
+            alias: view.id,
+            detail: view.hint,
+            workspace_id: null,
+            workspace_name: null,
+            repository_id: null,
+            worktree: null,
+            agent_id: null,
+        });
+    }
+
     return places;
 }
 
@@ -188,9 +236,11 @@ export function score(place: Place, query: string): number {
 /// names are the ones they type.
 const RANK: Record<PlaceKind, number> = {
     agent: 0,
-    worktree: 1,
-    project: 2,
-    workspace: 3,
+    card: 1,
+    worktree: 2,
+    project: 3,
+    view: 4,
+    workspace: 5,
 };
 
 /// Someone who has typed nothing is browsing, and browsing goes the other way:
@@ -200,6 +250,8 @@ const BROWSE: Record<PlaceKind, number> = {
     project: 1,
     worktree: 2,
     agent: 3,
+    card: 4,
+    view: 5,
 };
 
 /// The places worth showing for what was typed, best first.

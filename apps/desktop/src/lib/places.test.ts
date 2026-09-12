@@ -69,6 +69,45 @@ const world: World = {
             account: null,
         },
     ],
+    cards: [
+        {
+            id: "t7",
+            title: "Add /health",
+            body: "",
+            column: "working",
+            repository_id: "svc-demo",
+            assignee: "ada",
+            worktree: "ada-tree",
+            branch: "agent/ada-tree",
+            evidence: [],
+        },
+        {
+            id: "t8",
+            title: "Tighten the port probe",
+            body: "",
+            column: "backlog",
+            repository_id: "agentland",
+            assignee: null,
+            worktree: null,
+            branch: null,
+            evidence: [],
+        },
+        {
+            id: "t3",
+            title: "Long since merged",
+            body: "",
+            column: "done",
+            repository_id: "svc-demo",
+            assignee: null,
+            worktree: null,
+            branch: null,
+            evidence: [],
+        },
+    ],
+    views: [
+        { id: "board", label: "Board", hint: "cards and their evidence" },
+        { id: "approvals", label: "Approvals", hint: "the agents that are blocked on you" },
+    ],
 };
 
 describe("the places a person can go", () => {
@@ -300,5 +339,49 @@ describe("where a routine's agent lives", () => {
 
         expect(here.map((held) => held.routine.id)).toEqual(["r1", "r2"]);
         expect(elsewhere.map((held) => held.routine.id)).toEqual(["r3"]);
+    });
+});
+
+describe("cards and views in the jumper", () => {
+    const places = places_from(world);
+
+    it("holds the cards still in play, and every view", () => {
+        expect(places.filter((place) => place.kind === "card").map((place) => place.id)).toEqual([
+            "card:t7",
+            "card:t8",
+        ]);
+        expect(places.filter((place) => place.kind === "view")).toHaveLength(2);
+    });
+
+    it("finds a card by its id, and says where it stands and who holds it", () => {
+        const found = search_places(places, "t7");
+
+        expect(found[0]?.id).toBe("card:t7");
+        expect(found[0]?.detail).toBe("t7 · working · svc-demo · Ada");
+        expect(places.find((place) => place.id === "card:t8")?.detail).toBe(
+            "t8 · backlog · agentland · nobody holds it",
+        );
+    });
+
+    it("finds a card by the words of its title", () => {
+        expect(search_places(places, "port probe")[0]?.id).toBe("card:t8");
+    });
+
+    it("files a card under its project's workspace", () => {
+        const card = places.find((place) => place.id === "card:t7")!;
+
+        expect(card.workspace_id).toBe("w2");
+        expect(needs_switch(card, "w1")).toBe(true);
+    });
+
+    it("reaches a view from whichever workspace is on screen", () => {
+        const board = search_places(places, "board")[0];
+
+        expect(board?.id).toBe("view:board");
+        expect(needs_switch(board!, "w2")).toBe(false);
+    });
+
+    it("still puts a person before the card that mentions them", () => {
+        expect(search_places(places, "ada")[0]?.kind).toBe("agent");
     });
 });

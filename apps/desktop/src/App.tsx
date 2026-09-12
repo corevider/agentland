@@ -25,6 +25,7 @@ import { CrewPanel } from "@/components/CrewPanel";
 import { RepoPanel } from "@/components/RepoPanel";
 import { NoticeBell } from "@/components/NoticeBell";
 import { Jumper, PlaceTrail } from "@/components/Jumper";
+import { ask_for_card } from "@/lib/asked_card";
 import { SettingsPage } from "@/components/SettingsPage";
 import { TerminalPane, type PaneMetrics } from "@/components/TerminalPane";
 import {
@@ -634,6 +635,11 @@ export default function App() {
                 focus_panel("crew");
                 return;
             }
+            if (what === "card" && which) {
+                ask_for_card(which);
+                focus_panel("board");
+                return;
+            }
             if (is_known_panel(what)) {
                 focus_panel(what as PanelId);
             }
@@ -844,14 +850,26 @@ export default function App() {
 
             <Jumper
                 open={jumping}
+                views={PANELS}
                 on_close={() => set_jumping(false)}
                 on_go={(place) => {
+                    if (place.kind === "view") {
+                        focus_panel(place.id.slice("view:".length));
+                        return;
+                    }
+
                     set_workspace_turn((turn) => turn + 1);
                     set_going({
                         repository_id: place.repository_id,
                         worktree: place.worktree,
                         at: Date.now(),
                     });
+
+                    if (place.kind === "card") {
+                        ask_for_card(place.id.slice("card:".length));
+                        focus_panel("board");
+                        return;
+                    }
 
                     if (place.kind === "agent") {
                         const held = crew.find((agent) => agent.id === place.agent_id);

@@ -6,8 +6,10 @@ import {
     activate_workspace,
     list_agents,
     list_repos,
+    list_tasks,
     list_workspaces,
     list_worktrees,
+    type Task,
     type WorktreeStatus,
 } from "@/lib/core";
 import {
@@ -17,6 +19,7 @@ import {
     search_places,
     trail,
     type Place,
+    type View,
     type World,
 } from "@/lib/places";
 import { use_poll } from "@/lib/poll";
@@ -26,6 +29,8 @@ const KIND_WORD: Record<Place["kind"], string> = {
     project: "project",
     worktree: "worktree",
     agent: "agent",
+    card: "card",
+    view: "view",
 };
 
 const KIND_TINT: Record<Place["kind"], string> = {
@@ -33,21 +38,28 @@ const KIND_TINT: Record<Place["kind"], string> = {
     project: "text-turquoise",
     worktree: "text-palm",
     agent: "text-shell",
+    card: "text-coral",
+    view: "text-driftwood",
 };
 
 interface Props {
     open: boolean;
+    /// The window's panels, reachable by name from any workspace.
+    views: View[];
     on_close: () => void;
     /// Where to go once a place is chosen: the workspace is switched here first
     /// if the place lives in another one.
     on_go: (place: Place) => void;
 }
 
-async function read_world(): Promise<World> {
-    const [workspaces, repositories, agents] = await Promise.all([
+/// The workspaces, projects, worktrees and crew, and the board's cards when
+/// they are wanted: the trail in the header polls this and has no use for them.
+async function read_world(with_cards: boolean): Promise<World> {
+    const [workspaces, repositories, agents, cards] = await Promise.all([
         list_workspaces(),
         list_repos(),
         list_agents(),
+        with_cards ? list_tasks().catch(() => [] as Task[]) : Promise.resolve([] as Task[]),
     ]);
 
     const trees = await Promise.all(
@@ -60,6 +72,8 @@ async function read_world(): Promise<World> {
         repositories,
         worktrees: trees.flat(),
         agents,
+        cards,
+        views: [],
     };
 }
 
@@ -67,9 +81,10 @@ async function read_world(): Promise<World> {
 ///
 /// Workspaces hold different folders, a project's folder is not its worktrees',
 /// and an agent sits in one of those — four kinds of place a person has to move
-/// between all day. Typing a few letters finds any of them, and choosing one
-/// switches the workspace on the way if it has to.
-export function Jumper({ open, on_close, on_go }: Props) {
+/// between all day. The cards on the board and the window's own views are two
+/// more. Typing a few letters finds any of them, a card by its id as well as
+/// its title, and choosing one switches the workspace on the way if it has to.
+export function Jumper({ open, views, on_close, on_go }: Props) {
     const [world, set_world] = useState<World | null>(null);
     const [query, set_query] = useState("");
     const [cursor, set_cursor] = useState(0);
@@ -82,7 +97,7 @@ export function Jumper({ open, on_close, on_go }: Props) {
 
         set_query("");
         set_cursor(0);
-        read_world().then(set_world).catch(() => undefined);
+        read_world(true).then(set_world).catch(() => undefined);
         box.current?.focus();
     }, [open]);
 
@@ -90,11 +105,14 @@ export function Jumper({ open, on_close, on_go }: Props) {
         () =>
             world
                 ? search_places(
-                      places_from(world, home_from(world.repositories.map((repo) => repo.primary_path))),
+                      places_from(
+                          { ...world, views },
+                          home_from(world.repositories.map((repo) => repo.primary_path)),
+                      ),
                       query,
                   )
                 : [],
-        [world, query],
+        [world, views, query],
     );
 
     const go = useCallback(
@@ -134,7 +152,7 @@ export function Jumper({ open, on_close, on_go }: Props) {
                     ref={box}
                     autoFocus
                     className="w-full border-b border-reef bg-lagoon-deep px-3 py-2 text-[13px] text-linen outline-none"
-                    placeholder="go to a workspace, project, worktree or agent…"
+                    placeholder="go to a workspace, project, worktree, agent, card or view…"
                     value={query}
                     onChange={(event) => {
                         set_query(event.target.value);
@@ -210,7 +228,7 @@ export function PlaceTrail({
     const [world, set_world] = useState<World | null>(null);
 
     const read = useCallback(() => {
-        read_world().then(set_world).catch(() => undefined);
+        read_world(false).then(set_world).catch(() => undefined);
     }, []);
 
     useEffect(read, [read, turn]);

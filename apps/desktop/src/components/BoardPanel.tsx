@@ -46,6 +46,7 @@ import {
 import { Picker } from "@/components/Picker";
 import { checks_for, type CheckState } from "@/lib/checks";
 import { notes_as_review, type Note } from "@/lib/annotations";
+import { on_card_asked, take_asked_card } from "@/lib/asked_card";
 import { AnnotatedPatch } from "./AnnotatedPatch";
 
 const COLUMNS: Column[] = ["backlog", "assigned", "working", "review", "ready", "done"];
@@ -310,6 +311,23 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
         window.addEventListener("agentland:command", heard);
         return () => window.removeEventListener("agentland:command", heard);
     }, [opened]);
+
+    // A card asked for from outside the board — the jumper, a notice — opens
+    // as if it had been clicked. Taken on mount as well, since the ask usually
+    // comes before the board is on screen to hear it.
+    useEffect(() => {
+        const take = () => {
+            const asked = take_asked_card();
+            if (asked) {
+                set_editing(null);
+                set_review(null);
+                set_opened(asked);
+            }
+        };
+
+        take();
+        return on_card_asked(take);
+    }, []);
 
     const { open_menu } = use_services();
 
