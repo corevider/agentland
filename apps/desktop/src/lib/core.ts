@@ -1565,6 +1565,22 @@ export function delete_task(id: string): Promise<void> {
     return request<void>(`/tasks/${id}`, { method: "DELETE" });
 }
 
+/// Judge a card's work as a person. The verdict goes on the card and on its
+/// pull request, and request_changes sends the card back to whoever holds it,
+/// with what was said.
+export function submit_review(
+    repository_id: string,
+    worktree: string,
+    task_id: string,
+    verdict: "approve" | "request_changes" | "comment",
+    summary: string,
+): Promise<Task> {
+    return request<Task>(
+        `/repos/${encodeURIComponent(repository_id)}/worktrees/${encodeURIComponent(worktree)}/review`,
+        { method: "POST", body: JSON.stringify({ task_id, verdict, summary }) },
+    );
+}
+
 export function review_worktree(repository_id: string, worktree: string): Promise<Review> {
     return request<Review>(`/repos/${repository_id}/worktrees/${worktree}/review`);
 }

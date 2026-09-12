@@ -33,6 +33,7 @@ import {
     review_worktree,
     set_merge_policy,
     shelved_file,
+    submit_review,
     type Agent,
     type Column,
     type DispatchState,
@@ -44,6 +45,8 @@ import {
 } from "@/lib/core";
 import { Picker } from "@/components/Picker";
 import { checks_for, type CheckState } from "@/lib/checks";
+import { notes_as_review, type Note } from "@/lib/annotations";
+import { AnnotatedPatch } from "./AnnotatedPatch";
 
 const COLUMNS: Column[] = ["backlog", "assigned", "working", "review", "ready", "done"];
 
@@ -53,22 +56,6 @@ export const keeps_the_turn = (target: EventTarget | null) => column_keeps_the_t
 
 const ASIDE =
     "flex w-full min-w-0 flex-col border-l border-reef @[820px]:w-[46%] @[820px]:min-w-[380px]";
-
-function patch_line_color(line: string): string {
-    if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ")) {
-        return "text-shell";
-    }
-    if (line.startsWith("+")) {
-        return "text-palm";
-    }
-    if (line.startsWith("-")) {
-        return "text-coral";
-    }
-    if (line.startsWith("@@")) {
-        return "text-turquoise";
-    }
-    return "text-driftwood";
-}
 
 /// Cards in the order they were placed, oldest id first for the ones written
 /// before there was an order to place them in.
@@ -95,6 +82,8 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
     /// editor with the screenshot already on the card.
     const [editing, set_editing] = useState<{ task: Task | null; seed: File[]; column?: Column } | null>(null);
     const [review, set_review] = useState<{ task: Task; data: Review } | null>(null);
+    /// Notes pinned to lines of the diff being read, sent back together.
+    const [notes, set_notes] = useState<Note[]>([]);
     /// Where the card being dragged would land: the column, and the card it
     /// would sit above (null meaning the bottom). Drawn, so a drop is aimed
     /// rather than guessed.
@@ -481,6 +470,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
         }
         set_error(null);
         const data = await review_worktree(task.repository_id, task.worktree);
+        set_notes([]);
         set_review({ task, data });
     }, []);
 
@@ -717,6 +707,30 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                         </div>
                         <div className="flex gap-2">
                             <button
+                                className="border border-sun px-2 py-1 font-mono text-[11px] text-sun disabled:opacity-40 rounded-lg"
+                                disabled={busy || notes.length === 0}
+                                title="send every pinned note back to whoever holds the card, as one request for changes"
+                                onClick={() => {
+                                    const sending = notes;
+                                    const card = review.task;
+                                    void run(async () => {
+                                        await submit_review(
+                                            card.repository_id,
+                                            card.worktree as string,
+                                            card.id,
+                                            "request_changes",
+                                            notes_as_review(sending),
+                                        );
+                                        set_notes([]);
+                                        set_error(
+                                            `${sending.length} note${sending.length === 1 ? "" : "s"} sent — ${card.id} is back with ${card.assignee ?? "the board"}`,
+                                        );
+                                    });
+                                }}
+                            >
+                                send {notes.length > 0 ? `${notes.length} ` : ""}note{notes.length === 1 ? "" : "s"}
+                            </button>
+                            <button
                                 className="border border-turquoise px-2 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40 rounded-lg"
                                 disabled={busy}
                                 onClick={() =>
@@ -753,13 +767,12 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                         </div>
                     ) : null}
 
-                    <pre className="min-h-0 flex-1 overflow-auto p-2 font-mono text-[11px] leading-relaxed">
-                        {review.data.patch.split("\n").map((line, index) => (
-                            <div key={index} className={patch_line_color(line)}>
-                                {line || " "}
-                            </div>
-                        ))}
-                    </pre>
+                    <AnnotatedPatch
+                        patch={review.data.patch}
+                        notes={notes}
+                        on_add={(note) => set_notes((held) => [...held, note])}
+                        on_remove={(index) => set_notes((held) => held.filter((_, at) => at !== index))}
+                    />
                 </aside>
             ) : null}
         </div>
