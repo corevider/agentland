@@ -1258,14 +1258,26 @@ export interface NoticeReport {
     notices: Notice[];
     unseen: number;
     loud: boolean;
+    /// Whether the desktop shows notices while the window is not in front.
+    desktop: boolean;
 }
 
 export function read_notices(limit = 40): Promise<NoticeReport> {
     return request<NoticeReport>(`/notices?limit=${limit}`);
 }
 
+/// Mark notices read; naming none marks every one of them.
 export function mark_notices_seen(ids: number[] = []): Promise<void> {
     return request<void>("/notices", { method: "POST", body: JSON.stringify({ ids }) });
+}
+
+/// Put read notices back as unread, so they keep counting until dealt with.
+export function mark_notices_unseen(ids: number[]): Promise<void> {
+    return request<void>("/notices", { method: "POST", body: JSON.stringify({ ids, unseen: true }) });
+}
+
+export function set_desktop_notices(on: boolean): Promise<NoticeReport> {
+    return request<NoticeReport>("/notices/desktop", { method: "POST", body: JSON.stringify({ on }) });
 }
 
 export interface VaultReport {

@@ -8,6 +8,7 @@ use serde::Serialize;
 use tauri::Manager;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
+mod alerts;
 mod screenshot;
 
 const DEFAULT_PORT: u16 = 9470;
@@ -888,6 +889,7 @@ fn main() {
         token: endpoint.token.clone(),
     };
     let for_the_tray = dialled.clone();
+    let for_the_alerts = dialled.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -927,6 +929,7 @@ fn main() {
             if let Err(error) = put_an_icon_in_the_tray(app, for_the_tray) {
                 eprintln!("no tray icon this time: {error}");
             }
+            alerts::watch(app.handle().clone(), for_the_alerts);
 
             if let Some(window) = app.get_webview_window("main") {
                 watch_the_window(&window, moved_or_resized.clone());

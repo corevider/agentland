@@ -425,6 +425,7 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
         .route("/vault", get(where_the_vault_is).post(redraw_the_maps))
         .route("/vault/health", get(check_the_vault))
         .route("/notices", get(list_notices).post(mark_notices_seen))
+        .route("/notices/desktop", post(set_desktop_notices))
         .route("/notes/{*slug}", get(read_note).delete(forget_note))
         .route("/ui/commands", get(take_ui_commands).post(queue_ui_command))
         .route(
@@ -4507,6 +4508,27 @@ struct NoticeReport {
     notices: Vec<crate::notices::Notice>,
     unseen: usize,
     loud: bool,
+    /// Whether the desktop shows notices while the window is not in front.
+    desktop: bool,
+}
+
+const DESKTOP_NOTICES: &str = "notices_on_desktop";
+
+/// On until a person turns it off: an agent waiting on somebody who is in
+/// another program waits for as long as nobody tells them.
+fn desktop_notices_on(state: &AppState) -> bool {
+    state.settings.lock().get(DESKTOP_NOTICES).map(String::as_str) != Some("off")
+}
+
+fn notice_report(state: &AppState, limit: usize) -> NoticeReport {
+    let (unseen, loud) = state.notices.unseen();
+
+    NoticeReport {
+        notices: state.notices.list(limit.clamp(1, 200)),
+        unseen,
+        loud,
+        desktop: desktop_notices_on(state),
+    }
 }
 
 /// What the crew wants the human to know, newest first, with a count for the
@@ -4515,27 +4537,46 @@ async fn list_notices(
     State(state): State<AppState>,
     Query(query): Query<NoteQuery>,
 ) -> Json<NoticeReport> {
-    let (unseen, loud) = state.notices.unseen();
-
-    Json(NoticeReport {
-        notices: state.notices.list(query.limit.unwrap_or(40).clamp(1, 200)),
-        unseen,
-        loud,
-    })
+    Json(notice_report(&state, query.limit.unwrap_or(40)))
 }
 
 #[derive(Deserialize)]
 struct SeenBody {
     #[serde(default)]
     ids: Vec<u64>,
+    /// Put the named notices back as unread rather than read.
+    #[serde(default)]
+    unseen: bool,
 }
 
 async fn mark_notices_seen(
     State(state): State<AppState>,
     Json(body): Json<SeenBody>,
 ) -> StatusCode {
-    state.notices.mark_seen(&body.ids);
+    if body.unseen {
+        state.notices.mark_unseen(&body.ids);
+    } else {
+        state.notices.mark_seen(&body.ids);
+    }
     StatusCode::NO_CONTENT
+}
+
+#[derive(Deserialize)]
+struct SwitchDesktopNotices {
+    on: bool,
+}
+
+async fn set_desktop_notices(
+    State(state): State<AppState>,
+    Json(wanted): Json<SwitchDesktopNotices>,
+) -> Json<NoticeReport> {
+    state
+        .settings
+        .lock()
+        .insert(DESKTOP_NOTICES.to_owned(), if wanted.on { "on" } else { "off" }.to_owned());
+    crate::db::save_state(&state.config.data_dir, "settings", &*state.settings.lock());
+
+    Json(notice_report(&state, 40))
 }
 
 /// Where the vault is on disk, so the human can open the same folder in whatever

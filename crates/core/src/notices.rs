@@ -120,6 +120,17 @@ impl Notices {
             }
         }
     }
+
+    /// Put notices back as not read, so they keep counting until dealt with.
+    ///
+    /// Only the ones named: an empty list is "all of them" for reading, which
+    /// is a way to clear the bell, but nobody means to un-read everything.
+    pub fn mark_unseen(&self, ids: &[u64]) {
+        let mut state = self.state.lock();
+        for notice in state.notices.iter_mut().filter(|notice| ids.contains(&notice.id)) {
+            notice.seen = false;
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -201,6 +212,21 @@ mod tests {
 
         notices.mark_seen(&[]);
         assert_eq!(notices.unseen().0, 0, "an empty list means all of them");
+    }
+
+    #[test]
+    fn a_read_notice_can_be_put_back_to_count_again() {
+        let notices = Notices::default();
+        let one = notices.push(word("one"), 10);
+        notices.push(word("two"), 20);
+        notices.mark_seen(&[]);
+
+        notices.mark_unseen(&[one.id]);
+        assert_eq!(notices.unseen().0, 1);
+        assert!(!notices.list(10).iter().find(|notice| notice.id == one.id).unwrap().seen);
+
+        notices.mark_unseen(&[]);
+        assert_eq!(notices.unseen().0, 1, "naming none un-reads none");
     }
 
     #[test]
