@@ -223,6 +223,7 @@ impl RepoRegistry {
             if worktree.path.exists() {
                 write_mcp_config(&worktree.path, &data_dir);
                 trust_the_folder(&worktree.path);
+                exclude_what_running_leaves(&worktree.path);
                 share_the_build_cache(&worktree.path, &cache_root(&data_dir, &worktree.repository_id));
             }
         }
@@ -515,6 +516,7 @@ impl RepoRegistry {
         let port = self.ports.allocate(&key)?;
         write_mcp_config(&path, &self.data_dir);
         trust_the_folder(&path);
+        exclude_what_running_leaves(&path);
         share_the_build_cache(&path, &cache_root(&self.data_dir, repository_id));
         let worktree = Worktree {
             name: name.to_owned(),
@@ -970,6 +972,21 @@ fn as_toml_string(text: &str) -> String {
     format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+/// What running a project's own tests leaves in its folder.
+///
+/// None of it is work, and all of it counted as uncommitted work: an
+/// implementer ran its Python tests, committed, and was refused a pull request
+/// for the `__pycache__` the tests had left behind — and it may not delete
+/// anything. These are kept out of git's sight in the repository's own exclude
+/// file, which stays on this machine and is never committed.
+const LEFT_BY_RUNNING: &[&str] = &["__pycache__/", "*.pyc", ".pytest_cache/"];
+
+fn exclude_what_running_leaves(worktree: &Path) {
+    for pattern in LEFT_BY_RUNNING {
+        exclude_from_git(worktree, pattern);
+    }
+}
+
 fn exclude_from_git(worktree: &Path, pattern: &str) {
     let Ok(common_dir) = git(
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -1367,8 +1384,20 @@ impl RepoRegistry {
 
         let pending = git(&["status", "--porcelain"], Some(&worktree.path))?;
         if !pending.trim().is_empty() {
-            let count = pending.lines().filter(|line| !line.is_empty()).count();
-            bail!("commit the work first: {count} file(s) in {worktree_name} are not committed");
+            let files: Vec<&str> = pending
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(|line| {
+                    line.trim_start()
+                        .split_once(char::is_whitespace)
+                        .map_or(line, |(_, path)| path.trim())
+                })
+                .collect();
+            bail!(
+                "commit the work first: {} file(s) in {worktree_name} are not committed ({}) — a file the work made belongs in a commit, and one a tool left behind belongs in .gitignore",
+                files.len(),
+                files.iter().take(5).copied().collect::<Vec<_>>().join(", ")
+            );
         }
 
         let base = repository.default_branch.clone();
@@ -1732,6 +1761,19 @@ mod tests {
         hand_the_tools_to_every_desk(&data_dir);
 
         assert!(!data_dir.join("desks").exists());
+    }
+
+    #[test]
+    fn what_running_the_tests_leaves_is_not_work() {
+        let dir = a_folder("left-by-running");
+        git(&["init", "-b", "main"], Some(&dir)).unwrap();
+        fs::create_dir_all(dir.join("src/__pycache__")).unwrap();
+        fs::write(dir.join("src/__pycache__/greet.cpython-314.pyc"), b"x").unwrap();
+
+        exclude_what_running_leaves(&dir);
+
+        let pending = git(&["status", "--porcelain"], Some(&dir)).unwrap();
+        assert!(pending.trim().is_empty(), "still counted as work: {pending}");
     }
 
     #[test]
