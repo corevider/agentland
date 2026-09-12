@@ -1643,6 +1643,12 @@ fn spawn_supervisor(state: AppState) {
                     .find(|agent| agent.role == "commander" && agent.session_id.is_some());
 
                 let Some(leader) = leader else {
+                    // Nobody commanding had a pane, so the news waited for
+                    // whoever opened one — and nobody did: a crew finished both
+                    // of its steps and stopped with its commander never told.
+                    if !news.is_empty() {
+                        bring_back_the_commander(&state, &news, now);
+                    }
                     continue;
                 };
                 let Some(session_id) = leader.session_id.clone() else {
@@ -5200,6 +5206,54 @@ fn desk_for_workspace(state: &AppState, workspace: &Workspace) -> Result<PathBuf
 /// Everybody else opens in the worktree they were hired into. A chief has none
 /// — it was hired into a workspace — so it opens at the desk that workspace
 /// keeps for it.
+/// Start the commander of the project some news is about, to hear it.
+///
+/// The way an agent is brought back to hear what came back to it: the news is
+/// its brief, and it resumes where it left off. Only that project's news goes
+/// with it, and only when the commander's own allowance has room for a turn.
+fn bring_back_the_commander(state: &AppState, news: &[Watch], now: u64) {
+    let Some(repository_id) = news.first().map(|watch| watch.repository_id.clone()) else {
+        return;
+    };
+    let Some(commander) = state
+        .crew
+        .list()
+        .into_iter()
+        .find(|agent| agent.role == "commander" && agent.repository_id == repository_id)
+    else {
+        return;
+    };
+
+    if !room_for(state, &identity_of(&commander)).may_wake_the_commander() {
+        return;
+    }
+
+    let Ok(desk) = where_it_sits(state, &commander) else {
+        return;
+    };
+
+    let mine: Vec<Watch> = news
+        .iter()
+        .filter(|watch| watch.repository_id == repository_id)
+        .cloned()
+        .collect();
+
+    match state.crew.start(&commander.id, &desk, true, Some(&news_text(&mine))) {
+        Ok(_) => {
+            let ids: Vec<String> = mine.iter().map(|watch| watch.id.clone()).collect();
+            state.supervisor.leader_was_told(&ids, now);
+            state.journal.write(
+                "commander.recalled",
+                "the supervisor",
+                &commander.id,
+                "brought back to hear what its crew finished",
+                now,
+            );
+        }
+        Err(error) => tracing::warn!(%error, agent = %commander.id, "cannot bring the commander back"),
+    }
+}
+
 fn where_it_sits(state: &AppState, agent: &Agent) -> Result<PathBuf, ApiError> {
     if let Some(id) = agent.workspace_id.as_deref() {
         let workspace = workspace_called(state, id)?;
