@@ -2351,3 +2351,124 @@ Every run above was Claude throughout: Codex and Cursor are installed on this
 machine but not signed in, and the one link still unmeasured is the one the Codex
 section already names — a Codex session starting the server it was configured
 with.
+
+## A person beside the crew
+
+Six things were added for the person watching the crew rather than for the crew
+itself. Each was tried in the running app before it was written down here.
+
+### Notes on the diff
+
+Reading a card's diff, any line takes a note: hover it, press the `+` beside it,
+write, `ctrl+enter`. Notes stay pinned under their lines until *send N notes*
+posts them together as one request for changes, ordered by file and line, each
+quoted with its line and marked when it sits on a removed one. One note sent
+from the board landed on the card as *reviewed · a person · requested changes*,
+in the words the agent reads:
+
+```
+1 note on the diff, each pinned to its line. Address every one, then commit and open the pull request again.
+
+1. src/greet.py:9 — `def whisper(name):`
+   whisper should say it quietly: lower-case the greeting, not the name alone
+```
+
+and the card went back to working. Handed notes one at a time an agent swings
+between them; handed all of them, it revises once. The diff is read hunk by
+hunk, and `---` counts as a header only before a file's first hunk: a removed
+line that began with two dashes would otherwise have moved every note after it
+onto the wrong file.
+
+### Being told
+
+The bell used to clear itself the moment it was opened. Each notice now stays
+unread until it is opened or marked, any can be put back as unread, and *mark
+all read* clears the lot.
+
+While the window is not in front, waiting, trouble and finished notices also
+reach the desktop: three at most at once and a count for the rest, nothing
+replayed at start-up, and on Linux a click marks the notice read and brings the
+window onto what it was about. A switch in the bell, saved with the core's
+settings and on until somebody turns it off, stops them. On GNOME an approval
+request made exactly one `Notify` call from the app — *Agentland · Waiting on you
+· agentland-check is asking: …*, with an Open action.
+
+### Ctrl+K reaches cards and views
+
+The jumper found workspaces, projects, worktrees and agents. It now finds the
+board's open cards by id or by the words of their title — `t411` found *Scratch
+card for the jump check*, and Enter opened it on the board — and the window's
+views by name. A card whose project lives in another workspace switches the
+workspace first; a view never does.
+
+### Racing a card
+
+A card can be handed to two to four agents at once, each on an engine and a
+model, each in a worktree of its own. Nobody holds the card meanwhile. A
+compare view lays their diffs side by side with how each is doing; keeping one
+binds the card to that worktree and tells its agent to open the pull request,
+and the others are let go with their folders. Their branches stay, so nothing
+written is lost.
+
+The first race put Claude Haiku against Claude Sonnet on *Add whisper beside
+shout*. Both committed, both `+8 −1`. Then Haiku went to open a pull request and
+Sonnet tried to: every entrant had been handed the card's whole brief, which
+ends by telling it to call `pr_open`. While a race is open the core refuses
+assigning, dispatching and pull requests for the card, and that is what stopped
+Sonnet — *"pr_open is blocked by design here … I won't attempt to open the PR
+myself"*. Entrants are now given the card's words without that last line.
+
+Keeping Sonnet's work put the card in working under it, wrote *kept r1b's work
+from r1; let go of r1a* on the card, dismissed Haiku, removed its worktree and
+left `agent/race-r1a` where it was. Entrants are named for the race — `r1a`,
+`r1b` — because a card can be raced again after a race is called off, and an
+entrant named like an old one would have started on the old one's branch.
+
+### Files dropped on a pane
+
+A file dragged from the file manager onto a pane is kept by the core and its
+path typed at the prompt, quoted where a shell would split it and followed by a
+space to go on typing — what any terminal does with a dropped file. The window
+receives the bytes but not the path, which is why the core keeps the file.
+Dropped on a Claude pane, *ege's notes from today.txt* arrived as
+`…/drops/pane-…/1789248621134-ege'\''s notes from today.txt`.
+
+Agents started by the crew may read the folder these land in, and the one card
+attachments land in, without asking: a read-only rule in their settings rather
+than a folder grant, so they cannot write there. On Windows that rule is not
+written yet, and an agent asks before reading, as it did before.
+
+### Pointing at the page
+
+The preview was a frame onto the dev server's own port, which nothing in the
+window may look inside. With design mode on, the core stands in front of the dev
+server on a port of its own, passes every request and answer through, and adds
+one script to each page. *Pick an element* outlines whatever the pointer is
+over; a click hands that element to the preview, which writes it up for whoever
+works in the dev server's worktree and sends it as mail, read when their pane is
+quiet. One click on a checkout page's button and one sentence sent this:
+
+````
+Make this button green and a little bigger
+
+Picked in the preview of designdemo/desk, on http://127.0.0.1:4102/:
+- element: body > main > button.pay (button, 94×37 at 40,132 in a 1331×953 view)
+- its text: "Pay now"
+- its HTML:
+```html
+<button class="pay">Pay now</button>
+```
+- the styles set on it:
+```css
+  display: inline-block;
+  padding: 10px 18px;
+  color: rgb(255, 255, 255);
+  background-color: rgb(31, 111, 235);
+  …
+```
+````
+
+Only styles the page set are included, and the page is named by the dev
+server's address, not the preview's. Only a dev server the crew started can be
+put behind a preview, and only on the loopback address. A dev server's live
+reload does not pass through yet: after an agent's change, press reload.
