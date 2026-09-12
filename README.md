@@ -2165,3 +2165,189 @@ The commander can see all of it — `crew_accounts` lists the logins and whether
 each is really signed in, and both `crew_hire` and `crew_shape` take an
 `account`. Spreading a crew across the logins that exist is how a week lasts the
 week.
+
+## Checks, and a person at the end of them
+
+Work used to stop at the implementer. A card was committed, the pane went quiet,
+and it sat in working with a green test beside it: the agent had been told what
+to do and never told what done looks like. Now the path from a finished step to
+a merged one is the crew's own, and the last step on it is a person's.
+
+```
+implementer commits → pr_open → review
+    → reviewer · tester · security   (whichever the crew holds, in parallel)
+    → ready to merge                 (a person merges — or the crew, if a switch says so)
+```
+
+**The one who finished opens the pull request.** `pr_open` pushes the branch,
+records the pull request on the card under the agent's name rather than
+"a person", and moves the card to review. A card's brief now ends by saying so,
+and by saying not to merge it yourself.
+
+**A card owes one check for each judging role its crew holds.** `tester` and
+`security` are roles of their own beside `reviewer`: they read and report, run
+the tests, and commit nothing. Hire a security agent and security gates the card;
+hire none and it does not — the gate is the crew a person built, not a list this
+code insists on. Approvals are counted per role, and only the ones written since
+somebody last asked for changes: a yes to code that has since moved is a yes to
+something nobody read.
+
+**Ready to merge is a person's column.** The column says so, and a card in it
+shows each check — ✓ passed, ✗ asked for changes, … not yet — with a merge
+button on the card itself. Its page lists every check with who gave it and what
+they said. A review used to appear there as the bare word "reviewed", its verdict
+and its reasons dropped. The column's header carries the one switch that hands
+merging to the crew. It is off until somebody turns it on, and turning it on asks
+once more, because merging puts code where everyone gets it; turning it off does
+not ask.
+
+**Merging needs GitHub today.** A pull request against a local origin is pushed
+and reviewed like any other, but the merge itself is `gh pr merge`, so there it is
+refused — and with the switch on, the card stays in ready with the reason written
+on it rather than pretending.
+
+### The runs that broke it
+
+Six crews were given the same outcome on the same two-file project: every
+function tested, farewell saying Goodbye, two implementers at once, and nothing
+merged without a review and a test run by somebody else. Each ran unattended on
+a fresh copy, against the real app, with a harness answering the questions a
+person would have been asked. Everything below is from their timelines.
+
+The commander read the project with `Read` rather than a shell loop — two
+commanders before it had opened with `for f in $(git ls-files)` and waited for a
+person, because a command that expands another command cannot be allowed in
+advance. It planned two steps, hired **Iris** and **Jun** as implementers, one per
+file and each in its own worktree, **Rho** as reviewer and **Tess** as tester, and
+handed the steps out.
+
+Both went to the wrong people. The dispatcher ranked roles by the words on a card,
+so "add a test beside greet" went to the tester, and the farewell step went to the
+reviewer because its brief said the work would be reviewed. Neither can edit. The
+commander noticed and took both cards back — and the two kept working anyway,
+because taking a card back cleared the board and told the holder nothing.
+
+It got worse, and the fault was the harness watching the run. It answered every
+permission question yes so the run could go unattended, and the reviewer and the
+tester had asked before each edit. **A check in plan mode asks before an edit
+rather than refusing it**, so "a check cannot change what it judges" holds only
+while a person answers no. The harness said yes, and a reviewer rewrote the code
+it was there to review.
+
+What changed because of it:
+
+- A plan step goes only to hands. With none free it is queued with a reason that
+  says to hire, never handed to the commander or to a check.
+- Taking a card back tells the holder, when its pane is quiet, to stop and leave
+  the files as they are.
+- A check is hired in plan or not at all — the hiring tool offered every rung
+  below never asking to every role.
+- `python3 -m unittest` runs without asking, beside pytest: both agents wrote
+  standard-library tests where pytest was not installed.
+- The commander runs git from where it stands. It had learned not to write shell
+  loops and still stopped at `git -C <its own folder> ls-files`; allowing `-C`
+  itself would let `git -C x push` past the deny list.
+
+The next crew, on a fresh copy of the same project, got further and found
+the rest. The commander hired two implementers and no checks, planned six
+steps — two to write, two to review, two to run the tests — and put a card on
+the board for each of the first two. Both implementers did their work,
+committed it and called `pr_open`, and both were refused: the `__pycache__`
+their test run had left behind counted as uncommitted work, and neither may
+delete anything. Each got past it by committing an unrelated `.gitignore`,
+and then the pull requests opened. And then nothing happened, for three
+reasons that had been waiting for a run to reach them:
+
+- **A card was not known to be a step.** The link from a card to its plan step
+  was made only when the step was marked done, so the dispatcher took the
+  commander's own step card for an outcome and handed it back to the
+  commander.
+- **Nobody told the checks.** A card up for review waited there for somebody
+  to notice it, which is why the commander had planned the reviews as steps of
+  its own — steps the dispatcher, now, will not hand to a check.
+- **Nobody told the commander.** News of finished steps waited for a commander
+  with a pane, and its pane had been closed. Nothing ever started it again.
+
+What changed because of that:
+
+- `task_create` takes the step a card carries out and links them as it is
+  written.
+- `__pycache__`, `*.pyc` and `.pytest_cache` are kept out of git's sight in the
+  repository's own exclude file, which never leaves the machine, and a refusal
+  names the files it is about.
+- When a pull request opens, every check the crew holds — except its author —
+  is told to judge that card in the words of its own job, and a crew with none
+  has its commander told the card is waiting for one. Reviews are not steps.
+- News that finds no commander with a pane brings back the commander of the
+  project it is about, with the news as its brief, when its week has room.
+
+Three more crews found the rest, each only because the one before had got far
+enough to reach it:
+
+- **A check woke in somebody else's conversation.** A resume was
+  `--continue`, which opens the newest conversation in the folder, and a tester
+  standing in the implementer's worktree woke inside the implementer's
+  conversation — it wrote that it could not review the card because it had
+  written the code. A reviewer woke inside the author's. Every Claude agent now
+  starts its conversation under an id it keeps and is resumed by that id.
+- **One project's news reached another project's commander.** News went to
+  whichever commander had a pane. It is now taken one project at a time.
+- **Plan asked before everything.** Claude's own plan mode asked before each of
+  the crew's own tools, so the checks stopped at `repo_review` with nobody
+  there, and it asked before an edit rather than refusing it. For Claude, plan
+  is now an ordinary pane whose settings refuse `Edit`, `Write`, `MultiEdit` and
+  `NotebookEdit` outright; the tools it is allowed run without asking.
+- **A comment asked for a change.** A reviewer found one thing the card had
+  asked for undone and said so as a comment, which neither passes a card nor
+  sends it back. A check is now told that anything which has to change first,
+  however small, is `request_changes`.
+- **A card reached review with no pull request.** An implementer could not
+  reach `pr_open`, and the supervisor moved its finished card to review anyway,
+  where no check had been told. A finished card now stays put until its pull
+  request is open, and its holder is told what is left.
+
+### The run after them
+
+The sixth crew went the whole way. Its commander hired two implementers, a
+reviewer and a tester, planned two steps and named each step on its card. Both
+steps went to the implementers — the tester and the reviewer stood in the same
+worktrees and were passed over. Each implementer committed and opened its pull
+request; the reviewer and the tester were told, and judged it.
+
+The reviewer sent both cards back, and was right to: once for something a card
+had asked for and the work had not done, and once because an implementer
+resubmitted the same commit — *"Resubmitted with no changes — same commit
+(554a2b3), same diff as before."* Each card went back to its author, came back
+changed and was judged again, and the approvals given before a change was asked
+for did not count. When the reviewer and the tester had both passed a card it
+moved to ready to merge on its own:
+
+```
+READY TO MERGE · 2                                        auto-merge off
+Make farewell say Goodbye, covered in src/test_farewell.py
+  ✓ reviewer  ✓ tester                                    merge   delete
+Cover greet in src/test_greet.py
+  ✓ reviewer  ✓ tester                                    merge   delete
+```
+
+Opening a card shows *Checks · 2 of 2 passed*, each with who gave it, when, and
+what they said, and then *every check passed · merging is yours*. With the switch
+off it waits for a person, which is where this run stopped.
+
+The harness still answered what a person would have been asked: shell lines
+outside the allow list, tests run in a worktree the check was not standing in,
+and — pytest not being installed — attempts to install it with pip and apt. The
+deny list stood behind every one of those answers, and a person watching would
+have said no to the installs.
+
+### Every engine, in principle
+
+Each agent names its engine when it is hired — `crew_hire` takes `engine_id`, and
+`crew_engines` says which are installed — so a commander on Claude can hire an
+implementer on Codex, Gemini or Cursor, each in its own worktree and pane, all
+talking to the same board through the same tools. Four of the eight engines in the
+catalog take those tools; the other four run in a pane but cannot report back.
+Every run above was Claude throughout: Codex and Cursor are installed on this
+machine but not signed in, and the one link still unmeasured is the one the Codex
+section already names — a Codex session starting the server it was configured
+with.
