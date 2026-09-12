@@ -1631,16 +1631,21 @@ fn spawn_supervisor(state: AppState) {
                 .unwrap_or(crate::budget::Room::Plenty);
 
             if (state.supervisor.wake_is_due(now) || waiting_words) && room.may_wake_the_commander() {
-                let news = state.supervisor.news_for_leader();
+                let (about, news) =
+                    news_for_one_project(state.supervisor.news_for_leader(), |watch| watch.repository_id.as_str());
                 if news.is_empty() && !waiting_words {
                     continue;
                 }
 
-                let leader = state
-                    .crew
-                    .list()
-                    .into_iter()
-                    .find(|agent| agent.role == "commander" && agent.session_id.is_some());
+                // News goes to the commander of the project it is about. Any
+                // commander with a pane used to do — which, with a commander per
+                // project, told one of them what another project's crew had
+                // finished.
+                let leader = state.crew.list().into_iter().find(|agent| {
+                    agent.role == "commander"
+                        && agent.session_id.is_some()
+                        && about.as_deref().map_or(true, |repository_id| agent.repository_id == repository_id)
+                });
 
                 let Some(leader) = leader else {
                     // Nobody commanding had a pane, so the news waited for
@@ -5206,6 +5211,20 @@ fn desk_for_workspace(state: &AppState, workspace: &Workspace) -> Result<PathBuf
 /// Everybody else opens in the worktree they were hired into. A chief has none
 /// — it was hired into a workspace — so it opens at the desk that workspace
 /// keeps for it.
+/// The news of one project: the project the oldest waiting word is about, and
+/// only that project's news. The rest waits for the next tick.
+fn news_for_one_project<T>(news: Vec<T>, project_of: impl Fn(&T) -> &str) -> (Option<String>, Vec<T>) {
+    let Some(repository_id) = news.first().map(|held| project_of(held).to_owned()) else {
+        return (None, news);
+    };
+
+    let mine = news
+        .into_iter()
+        .filter(|held| project_of(held) == repository_id)
+        .collect();
+    (Some(repository_id), mine)
+}
+
 /// Start the commander of the project some news is about, to hear it.
 ///
 /// The way an agent is brought back to hear what came back to it: the news is
@@ -7968,6 +7987,30 @@ mod memory_notice_tests {
         let shown = opening_of(&written, 10);
 
         assert_eq!(shown, format!("{}…", "ö".repeat(10)));
+    }
+}
+
+#[cfg(test)]
+mod news_routing_tests {
+    use super::news_for_one_project;
+
+    /// With a commander per project, one commander was told what another
+    /// project's crew had finished. News is now taken one project at a time.
+    #[test]
+    fn news_is_taken_one_project_at_a_time() {
+        let waiting = vec![("crewdemo5", "t402"), ("crewdemo6", "t404"), ("crewdemo5", "t403")];
+
+        let (about, mine) = news_for_one_project(waiting, |held| held.0);
+
+        assert_eq!(about.as_deref(), Some("crewdemo5"));
+        assert_eq!(mine, vec![("crewdemo5", "t402"), ("crewdemo5", "t403")]);
+    }
+
+    #[test]
+    fn no_news_is_about_nobody() {
+        let (about, mine) = news_for_one_project(Vec::<(&str, &str)>::new(), |held| held.0);
+
+        assert!(about.is_none() && mine.is_empty());
     }
 }
 
