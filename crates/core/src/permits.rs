@@ -61,6 +61,7 @@ const PROVING: &[&str] = &[
     "Bash(cargo fmt:*)",
     "Bash(pytest:*)",
     "Bash(python3 -m pytest:*)",
+    "Bash(python3 -m unittest:*)",
     "Bash(go test:*)",
     "Bash(go build:*)",
     "Bash(go vet:*)",
@@ -546,6 +547,16 @@ mod tests {
         // But it cannot edit what it judges, so it has nothing to commit.
         assert!(!allows("reviewer", "Bash(git commit:*)"));
         assert!(!allows("reviewer", "Bash(cargo fmt:*)") || allows("reviewer", "Bash(npm test:*)"));
+    }
+
+    /// Python's own test runner, beside pytest: two agents in a live run wrote
+    /// stdlib tests where pytest was not installed and were asked, every time,
+    /// whether they may run them.
+    #[test]
+    fn python_s_own_test_runner_is_not_a_question() {
+        for role in ["implementer", "reviewer", "tester"] {
+            assert!(allows(role, "Bash(python3 -m unittest:*)"), "{role} had to ask to run unittest");
+        }
     }
 
     #[test]
