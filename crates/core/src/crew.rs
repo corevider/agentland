@@ -683,6 +683,8 @@ impl Crew {
             bail!("{} is not on PATH", engine.command);
         }
 
+        may_be_hired_with(&request.role, request.permissions.as_deref())?;
+
         let wanted = slugify(&request.name);
         if wanted.is_empty() {
             bail!("name must contain letters or digits");
@@ -1241,6 +1243,24 @@ pub fn permission_for_role(role: &str) -> &'static str {
     }
 }
 
+/// Whether a role may be hired with the rope asked for.
+///
+/// Nobody who judges the work may be hired able to change it: a check that can
+/// edit what it checks is not a check. The tool that hires offers every rung
+/// below never asking to every role, so the line is drawn here rather than
+/// left to whoever does the hiring.
+pub fn may_be_hired_with(role: &str, permissions: Option<&str>) -> Result<()> {
+    let Some(asked) = permissions.map(str::trim).filter(|mode| !mode.is_empty()) else {
+        return Ok(());
+    };
+
+    if crate::pulls::CHECKS.contains(&role) && asked != "plan" {
+        bail!("a {role} judges work it cannot change, so it is hired in plan — not {asked}");
+    }
+
+    Ok(())
+}
+
 /// The colours a crew is known by.
 ///
 /// Chosen to stay apart at a glance and on the island's green: a human learns
@@ -1489,6 +1509,21 @@ mod model_tests {
                 "nothing is born never asking",
             );
         }
+    }
+
+    #[test]
+    fn a_check_is_only_ever_hired_in_plan() {
+        use super::may_be_hired_with;
+
+        for role in ["reviewer", "tester", "security"] {
+            assert!(may_be_hired_with(role, Some("plan")).is_ok());
+            assert!(may_be_hired_with(role, None).is_ok(), "{role} left to its default reads");
+            for rope in ["default", "acceptEdits", "bypassPermissions"] {
+                assert!(may_be_hired_with(role, Some(rope)).is_err(), "{role} was hired able to edit with {rope}");
+            }
+        }
+
+        assert!(may_be_hired_with("implementer", Some("acceptEdits")).is_ok());
     }
 
     #[test]
