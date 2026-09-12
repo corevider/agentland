@@ -3020,7 +3020,19 @@ async fn release_task(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Task>, ApiError> {
+    let holder = state.board.get(&id).and_then(|task| task.assignee.clone());
     let released = state.board.release(&id)?;
+
+    // Taking a card back used to change the board and nothing else: the agent
+    // holding it still had the brief in its pane and kept working. In a live
+    // run a reviewer and a tester went on writing the code for two cards the
+    // commander had already taken back. The holder is now told, as soon as its
+    // pane is quiet, that the card is no longer theirs.
+    if let Some(who) = holder {
+        state.crew_words.lock().entry(who).or_default().push(format!(
+            "{id} was taken back from you. Stop working on it: do not commit it, open a pull request for it or finish it. Leave its files as they are and wait to be handed something."
+        ));
+    }
 
     for watch in state.supervisor.list() {
         if watch.task_id == id && watch.state == crate::supervisor::WatchState::Working {
