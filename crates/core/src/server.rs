@@ -698,7 +698,7 @@ fn identity_for(state: &AppState, agent: &Agent) -> Option<String> {
         .unwrap_or_default();
 
     Some(format!(
-        "You are {}, the commander of this crew. You plan and delegate; you do not edit code.\n         {roster}{above}\n         A card nobody planned is an outcome and yours to take apart: plan it, then crew_delegate the steps. A card a plan already made is somebody else's to do.\n         Your tools are plan_create, plan_ready, plan_status, plan_step_done, crew_engines, crew_hire, crew_delegate and crew_recall.\n         Read the project with Glob, Grep and Read, and its shape with repo_list and repo_worktrees. Do not write a shell line to look around with: a command that expands another command cannot be allowed in advance, so it stops and waits for a person — twice now a commander has opened with `for f in $(git ls-files)` and got no further. Run git from where you stand, without -C: a command pointed at another folder cannot be allowed in advance either.\n         Start by reading the board with task_list.",
+        "You are {}, the commander of this crew. You plan and delegate; you do not edit code.\n         {roster}{above}\n         A card nobody planned is an outcome and yours to take apart: plan it, then crew_delegate the steps. A card a plan already made is somebody else's to do. When you write the card for a step, pass the step's id to task_create as step — that is how the dispatcher knows it is a step for the hands and not an outcome for you.\n         Your tools are plan_create, plan_ready, plan_status, plan_step_done, crew_engines, crew_hire, crew_delegate and crew_recall.\n         Read the project with Glob, Grep and Read, and its shape with repo_list and repo_worktrees. Do not write a shell line to look around with: a command that expands another command cannot be allowed in advance, so it stops and waits for a person — twice now a commander has opened with `for f in $(git ls-files)` and got no further. Run git from where you stand, without -C: a command pointed at another folder cannot be allowed in advance either.\n         Start by reading the board with task_list.",
         agent.name
     ))
 }
@@ -2402,11 +2402,42 @@ async fn read_task(
         .ok_or_else(|| ApiError(anyhow::anyhow!("there is no card called {id}")))
 }
 
+/// A card, and the plan step it carries out when it carries one out.
+///
+/// A commander writes the card for a step and hands it out in the next breath,
+/// so the step has to be named when the card is written. The link used to be
+/// made only when the step was marked done, and until then the dispatcher saw
+/// an outcome nobody had planned and handed it straight back to the commander.
+#[derive(Deserialize)]
+struct NewCard {
+    #[serde(flatten)]
+    card: CreateTask,
+    #[serde(default)]
+    step: Option<String>,
+}
+
 async fn create_task(
     State(state): State<AppState>,
-    Json(request): Json<CreateTask>,
+    Json(request): Json<NewCard>,
 ) -> Result<Json<Task>, ApiError> {
-    Ok(Json(state.board.create(request)?))
+    let step = request.step.as_deref().map(str::trim).filter(|id| !id.is_empty());
+    let plan = match step {
+        Some(id) => Some(
+            state
+                .plans
+                .plan_with_step(id)
+                .ok_or_else(|| ApiError(anyhow::anyhow!("there is no step called {id}")))?,
+        ),
+        None => None,
+    };
+
+    let task = state.board.create(request.card)?;
+
+    if let (Some(plan), Some(id)) = (plan, step) {
+        state.plans.link_task(&plan.id, id, &task.id)?;
+    }
+
+    Ok(Json(task))
 }
 
 /// Change what a card says.

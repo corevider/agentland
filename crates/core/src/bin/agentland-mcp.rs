@@ -108,14 +108,15 @@ fn tools() -> Value {
         },
         {
             "name": "task_create",
-            "description": "Put a new card on the board. Use this instead of keeping work in your head. Pass worktree when the work must happen on a particular branch.",
+            "description": "Put a new card on the board. Use this instead of keeping work in your head. Pass worktree when the work must happen on a particular branch, and step when the card carries out a plan step.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "title": { "type": "string" },
                     "body": { "type": "string" },
                     "repository_id": { "type": "string" },
-                    "worktree": { "type": "string", "description": "the worktree this work must happen in" }
+                    "worktree": { "type": "string", "description": "the worktree this work must happen in" },
+                    "step": { "type": "string", "description": "the plan step this card carries out, such as p19s1. Name it: a card with no step behind it is an outcome, and an outcome is handed to the commander rather than to the hands" }
                 },
                 "required": ["title", "repository_id"]
             }
@@ -611,6 +612,7 @@ fn call_tool(core: &Core, name: &str, arguments: &Value) -> Result<Value, String
                 "body": arguments.get("body").and_then(Value::as_str).unwrap_or_default(),
                 "repository_id": text("repository_id")?,
                 "worktree": arguments.get("worktree").and_then(Value::as_str),
+                "step": arguments.get("step").and_then(Value::as_str),
             })),
         ),
         "task_discard" => core.call(

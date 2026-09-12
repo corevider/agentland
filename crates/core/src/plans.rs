@@ -284,6 +284,23 @@ impl Plans {
         Ok(plan)
     }
 
+    /// Name the card a step became, without saying anything about how far it
+    /// has got. A card is written for a step before anybody holds it, and
+    /// calling the step assigned then would be a claim about somebody who is
+    /// not there yet.
+    pub fn link_task(&self, plan_id: &str, step_id: &str, task_id: &str) -> Result<Plan> {
+        self.change(plan_id, step_id, |step| {
+            step.task_id = Some(task_id.to_owned());
+        })
+    }
+
+    /// The plan a step belongs to, found by the step's own id.
+    pub fn plan_with_step(&self, step_id: &str) -> Option<Plan> {
+        self.list()
+            .into_iter()
+            .find(|plan| plan.steps.iter().any(|step| step.id == step_id))
+    }
+
     pub fn attach_task(&self, plan_id: &str, step_id: &str, task_id: &str) -> Result<Plan> {
         self.change(plan_id, step_id, |step| {
             step.task_id = Some(task_id.to_owned());
@@ -486,6 +503,23 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("agentland-plans-{name}"));
         let _ = fs::remove_dir_all(&dir);
         Plans::new(dir)
+    }
+
+    /// The run this was written for: a commander wrote the card for a step and
+    /// handed it out, and the dispatcher, finding no step behind it, gave it
+    /// straight back to the commander as an outcome to take apart.
+    #[test]
+    fn a_card_written_for_a_step_is_found_as_that_step() {
+        let plans = plans("link");
+        let plan = plans.create(draft(vec![step("write the test", &[])])).unwrap();
+        let step_id = plan.steps[0].id.clone();
+
+        assert_eq!(plans.plan_with_step(&step_id).map(|found| found.id), Some(plan.id.clone()));
+        plans.link_task(&plan.id, &step_id, "t7").unwrap();
+
+        let (found, linked) = plans.plan_of_task("t7").expect("the card is a step");
+        assert_eq!(found.id, plan.id);
+        assert_eq!(linked.state, plan.steps[0].state, "linking says nothing about progress");
     }
 
     fn draft(steps: Vec<DraftStep>) -> DraftPlan {
