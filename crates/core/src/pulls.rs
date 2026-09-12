@@ -843,9 +843,33 @@ pub fn standing_approvers(reviews: &[(String, String)]) -> Vec<String> {
         .collect()
 }
 
+/// Who is asked to judge a card that has just gone up for review: every check
+/// the crew holds on its project, except whoever wrote it.
+pub fn asked_to_judge(on_the_crew: &[(String, String)], author: &str) -> Vec<String> {
+    on_the_crew
+        .iter()
+        .filter(|(id, role)| CHECKS.contains(&role.as_str()) && id != author)
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
+/// What a check is told when a card goes up for review, in the words of its
+/// own job.
+pub fn asked_to_judge_it(role: &str, task_id: &str, repository_id: &str, worktree: &str) -> String {
+    let what = match role {
+        "tester" => "run its tests and say whether they prove what the card asks",
+        "security" => "look for what it could leak, expose or let in",
+        _ => "read it for whether it does what the card asks, and does it well",
+    };
+
+    format!(
+        "{task_id} is up for review on {repository_id}, in the {worktree} worktree. Read it with repo_review, {what}, and give your verdict with pr_review on that card — approve, request_changes or comment, and say what has to change rather than that something does. You judge it; you do not edit it."
+    )
+}
+
 #[cfg(test)]
 mod check_tests {
-    use super::{checks_outstanding, standing_approvers};
+    use super::{asked_to_judge, asked_to_judge_it, checks_outstanding, standing_approvers};
 
     fn crew(roles: &[(&str, &str)]) -> Vec<(String, String)> {
         roles
@@ -913,5 +937,27 @@ mod check_tests {
         let said = reviews(&[("rex", "approved"), ("sec", "requested changes")]);
 
         assert!(standing_approvers(&said).is_empty());
+    }
+
+    #[test]
+    fn every_check_but_the_author_is_asked_to_judge() {
+        let on_the_crew = crew(&[("ada", "implementer"), ("rex", "reviewer"), ("tess", "tester"), ("x", "commander")]);
+
+        assert_eq!(asked_to_judge(&on_the_crew, "ada"), vec!["rex", "tess"]);
+        assert_eq!(asked_to_judge(&on_the_crew, "rex"), vec!["tess"], "nobody judges their own work");
+        assert!(asked_to_judge(&crew(&[("ada", "implementer")]), "ada").is_empty());
+    }
+
+    #[test]
+    fn a_check_is_asked_in_the_words_of_its_own_job() {
+        let tester = asked_to_judge_it("tester", "t400", "svc", "greet-tree");
+        let security = asked_to_judge_it("security", "t400", "svc", "greet-tree");
+
+        assert!(tester.contains("run its tests"));
+        assert!(security.contains("leak"));
+        for said in [tester, security, asked_to_judge_it("reviewer", "t400", "svc", "greet-tree")] {
+            assert!(said.contains("t400") && said.contains("greet-tree") && said.contains("pr_review"));
+            assert!(said.contains("you do not edit it"));
+        }
     }
 }

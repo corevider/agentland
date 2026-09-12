@@ -698,7 +698,7 @@ fn identity_for(state: &AppState, agent: &Agent) -> Option<String> {
         .unwrap_or_default();
 
     Some(format!(
-        "You are {}, the commander of this crew. You plan and delegate; you do not edit code.\n         {roster}{above}\n         A card nobody planned is an outcome and yours to take apart: plan it, then crew_delegate the steps. A card a plan already made is somebody else's to do. When you write the card for a step, pass the step's id to task_create as step — that is how the dispatcher knows it is a step for the hands and not an outcome for you.\n         Your tools are plan_create, plan_ready, plan_status, plan_step_done, crew_engines, crew_hire, crew_delegate and crew_recall.\n         Read the project with Glob, Grep and Read, and its shape with repo_list and repo_worktrees. Do not write a shell line to look around with: a command that expands another command cannot be allowed in advance, so it stops and waits for a person — twice now a commander has opened with `for f in $(git ls-files)` and got no further. Run git from where you stand, without -C: a command pointed at another folder cannot be allowed in advance either.\n         Start by reading the board with task_list.",
+        "You are {}, the commander of this crew. You plan and delegate; you do not edit code.\n         {roster}{above}\n         A card nobody planned is an outcome and yours to take apart: plan it, then crew_delegate the steps. A card a plan already made is somebody else's to do. When you write the card for a step, pass the step's id to task_create as step — that is how the dispatcher knows it is a step for the hands and not an outcome for you. Reviews and test runs are not steps: when a card's pull request opens, every check on its crew is told to judge it. Hire the checks the work needs — a reviewer, a tester, security — instead of planning their work.\n         Your tools are plan_create, plan_ready, plan_status, plan_step_done, crew_engines, crew_hire, crew_delegate and crew_recall.\n         Read the project with Glob, Grep and Read, and its shape with repo_list and repo_worktrees. Do not write a shell line to look around with: a command that expands another command cannot be allowed in advance, so it stops and waits for a person — twice now a commander has opened with `for f in $(git ls-files)` and got no further. Run git from where you stand, without -C: a command pointed at another folder cannot be allowed in advance either.\n         Start by reading the board with task_list.",
         agent.name
     ))
 }
@@ -3608,6 +3608,44 @@ async fn open_pull_request(
         }
 
         let _ = state.board.move_to(&task_id, Column::Review);
+
+        // A card up for review used to wait there for somebody to notice it.
+        // Every check the crew holds on the project is now told to judge it —
+        // when its pane is quiet, or brought back to hear it if its pane was
+        // taken — and when the crew holds none, its commander is told the card
+        // is waiting for somebody to hire one.
+        let author = body.by.clone().unwrap_or_default();
+        let crew: Vec<Agent> = state
+            .crew
+            .list()
+            .into_iter()
+            .filter(|agent| agent.repository_id == id)
+            .collect();
+        let roles: Vec<(String, String)> = crew
+            .iter()
+            .map(|agent| (agent.id.clone(), agent.role.clone()))
+            .collect();
+        let judges = crate::pulls::asked_to_judge(&roles, &author);
+        let mut words = state.crew_words.lock();
+
+        if judges.is_empty() {
+            for commander in crew.iter().filter(|agent| agent.role == "commander") {
+                words.entry(commander.id.clone()).or_default().push(format!(
+                    "{task_id} is up for review on {id} and nobody on its crew checks work. Hire the checks it needs — a reviewer, a tester, security — and each is told to judge it; until then it waits in review."
+                ));
+            }
+        } else {
+            for judge in &judges {
+                let role = crew
+                    .iter()
+                    .find(|agent| &agent.id == judge)
+                    .map_or("reviewer", |agent| agent.role.as_str());
+                words
+                    .entry(judge.clone())
+                    .or_default()
+                    .push(crate::pulls::asked_to_judge_it(role, &task_id, &id, &name));
+            }
+        }
     }
 
     Ok(Json(request))
