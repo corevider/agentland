@@ -1509,6 +1509,27 @@ export async function attach_to_task(id: string, file: File, derived_from?: stri
     return (await response.json()) as Task;
 }
 
+/// Hand a file to whoever works in a pane: the core keeps it and says where,
+/// so its path can be typed into the pane.
+export async function drop_on_pane(session_id: string, file: File): Promise<string> {
+    const target = await resolve_endpoint();
+    const url = `${base_url(target)}/sessions/${encodeURIComponent(session_id)}/drops?name=${encodeURIComponent(file.name)}`;
+    const response = await fetch(url, {
+        method: "POST",
+        headers: {
+            "content-type": file.type || "application/octet-stream",
+            "x-auth-token": target.token,
+        },
+        body: file,
+    });
+
+    if (!response.ok) {
+        throw new Error(`${response.status} ${await response.text()}`);
+    }
+
+    return ((await response.json()) as { path: string }).path;
+}
+
 /// Write down what was drawn on a picture on a card.
 export function set_marks(id: string, name: string, marks: Marks): Promise<Task> {
     return request<Task>(

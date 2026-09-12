@@ -17,8 +17,10 @@ import {
     resize_session,
     session_stats,
     write_input,
+    drop_on_pane,
     type SessionInfo,
 } from "@/lib/core";
+import { as_typed } from "@/lib/drops";
 
 /// Its own kind, so a task card dropped on the island and a terminal dragged
 /// across the grid are never mistaken for one another.
@@ -115,6 +117,27 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
     const gpu_ref = useRef<WebglAddon | null>(null);
     const readable_ref = useRef(readable);
     readable_ref.current = readable;
+    /// Files held over the pane, about to be handed to whoever works in it.
+    const [receiving, set_receiving] = useState(false);
+    const [drop_said, set_drop_said] = useState<string | null>(null);
+
+    // Files dropped on the pane go to the core, which says where it kept each,
+    // and the paths are pasted in the way any terminal pastes a dropped file:
+    // the agent reads them, and the person finishes the sentence around them.
+    const hand_over = (files: File[]) => {
+        set_drop_said(`handing over ${files.length} file${files.length === 1 ? "" : "s"}…`);
+        Promise.all(files.map((file) => drop_on_pane(session.id, file)))
+            .then((paths) => {
+                const terminal = screen_ref.current;
+                terminal?.paste(as_typed(paths));
+                terminal?.focus();
+                set_drop_said(null);
+            })
+            .catch((cause) => {
+                set_drop_said(cause instanceof Error ? cause.message : String(cause));
+                window.setTimeout(() => set_drop_said(null), 6000);
+            });
+    };
     const focused_ref = useRef(focused);
     // The commander is read while something else is being watched: it is the
     // one pane a person glances at to see whether the crew is still moving, so
@@ -441,31 +464,55 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
 
     return (
         <div
-            className={`flex min-h-0 flex-col overflow-hidden rounded-lg border bg-lagoon-deep ${
-                wanted ? "border-sun" : focused ? "border-turquoise" : "border-reef"
+            className={`relative flex min-h-0 flex-col overflow-hidden rounded-lg border bg-lagoon-deep ${
+                wanted || receiving ? "border-sun" : focused ? "border-turquoise" : "border-reef"
             }`}
             onMouseDown={() => on_focus(session.id)}
             onDragOver={(event) => {
                 if (on_drop_on && event.dataTransfer.types.includes(PANE_DRAG)) {
                     event.preventDefault();
                     event.dataTransfer.dropEffect = "move";
+                    return;
+                }
+                if (session.kind === "pty" && event.dataTransfer.types.includes("Files")) {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "copy";
+                    set_receiving(true);
+                }
+            }}
+            onDragLeave={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                    set_receiving(false);
                 }
             }}
             onDrop={(event) => {
-                if (!on_drop_on) {
-                    return;
-                }
+                set_receiving(false);
 
                 // The dropped terminal names itself in the event; asking React
                 // what was picked up would be asking a second source of truth.
-                const moved = event.dataTransfer.getData(PANE_DRAG);
-                if (moved) {
+                const moved = on_drop_on ? event.dataTransfer.getData(PANE_DRAG) : "";
+                if (moved && on_drop_on) {
                     event.preventDefault();
                     on_drop_on(moved, session.id);
+                    return;
+                }
+
+                const files = Array.from(event.dataTransfer.files);
+                if (session.kind === "pty" && files.length > 0) {
+                    event.preventDefault();
+                    hand_over(files);
                 }
             }}
             onContextMenu={(event) => on_menu?.(event, "body")}
         >
+            {receiving || drop_said ? (
+                <div
+                    data-drop-said
+                    className="pointer-events-none absolute inset-x-2 bottom-2 z-10 rounded-md border border-sun bg-lagoon/95 px-2 py-1 font-mono text-[11px] text-sun"
+                >
+                    {drop_said ?? "drop to hand these over · their paths are typed into this pane"}
+                </div>
+            ) : null}
             <div
                 className={`flex shrink-0 items-center gap-2 border-b border-reef/70 px-2 py-1 ${
                     on_pick_up ? "cursor-grab active:cursor-grabbing" : ""

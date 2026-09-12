@@ -395,6 +395,21 @@ pub fn permission_args(engine_id: &str, mode: &str) -> Vec<String> {
 /// crew that cannot start is worse than one that asks too often. Codex is told
 /// the same thing a different way, in `permission_args`, because it takes the
 /// answer as arguments rather than as a file.
+/// Rules that let an agent read what a person handed it — a file on its card,
+/// a file dropped on its pane — without stopping to ask. Both live in
+/// Agentland's own folder, outside the worktree, and an agent that has to ask
+/// before reading what it was given has been handed nothing. Read only.
+fn what_was_handed(data_dir: &std::path::Path) -> Vec<String> {
+    [data_dir.join("attachments"), crate::server::drops_of(data_dir)]
+        .into_iter()
+        .filter_map(|folder| {
+            let _ = fs::create_dir_all(&folder);
+            let folder = fs::canonicalize(&folder).unwrap_or(folder);
+            crate::permits::reading_under(&folder)
+        })
+        .collect()
+}
+
 pub fn settings_flag(engine_id: &str) -> Option<&'static str> {
     match engine_id {
         "claude" => Some("--settings"),
@@ -953,6 +968,7 @@ impl Crew {
                 request.workspace_id.as_deref(),
             );
             declared.extend(self.learned.lock().get(&home).cloned().unwrap_or_default());
+            declared.extend(what_was_handed(&self.data_dir));
             let file = folder.join(format!("{BY_HAND}-{}.json", slugify(&home)));
 
             if fs::create_dir_all(&folder).is_ok()
@@ -1046,6 +1062,7 @@ impl Crew {
             let mut declared = crate::permits::declared_in(worktree_path);
             let home = home_of(&agent.repository_id, agent.workspace_id.as_deref());
             declared.extend(self.learned.lock().get(&home).cloned().unwrap_or_default());
+            declared.extend(what_was_handed(&self.data_dir));
             let file = folder.join(format!("{}-{}.json", slugify(&agent.role), slugify(&home)));
 
             if fs::create_dir_all(&folder).is_ok()
@@ -1459,6 +1476,25 @@ mod model_tests {
         engine, free_colour, model_for_role, permission_args, tools_for, Authority, CliRequest,
         PromptStyle, PALETTE,
     };
+
+    #[cfg(unix)]
+    #[test]
+    fn an_agent_may_read_what_it_was_handed_and_nothing_else_of_ours() {
+        let data = std::env::temp_dir().join(format!("agentland-handed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&data);
+
+        let rules = super::what_was_handed(&data);
+
+        let data = std::fs::canonicalize(&data).expect("the folders were made");
+        assert_eq!(
+            rules,
+            vec![
+                format!("Read(/{}/**)", data.join("attachments").display()),
+                format!("Read(/{}/**)", data.join("drops").display()),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&data);
+    }
 
     #[test]
     fn a_cli_request_that_says_nothing_about_authority_is_given_none() {

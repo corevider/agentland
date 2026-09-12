@@ -276,6 +276,19 @@ pub fn rule_for_folder(path: &str) -> Option<String> {
     Some(format!("{A_FOLDER}{path})"))
 }
 
+/// A rule that lets an agent read everything under one of Agentland's own
+/// folders without stopping to ask: what a person handed it, on a card or
+/// dropped on its pane. Read only, where a folder grant would let it write
+/// there too.
+///
+/// Claude reads a rule's path from the root of the disk when it starts with
+/// two slashes. A path that is not absolute gets no rule rather than a wrong
+/// one.
+pub fn reading_under(folder: &std::path::Path) -> Option<String> {
+    let path = folder.to_str()?;
+    (path.starts_with('/') && path.len() > 1 && !path.contains("..")).then(|| format!("Read(/{path}/**)"))
+}
+
 #[derive(Debug, Serialize)]
 struct Permissions {
     allow: Vec<String>,
@@ -538,6 +551,24 @@ mod tests {
 
     fn allows(role: &str, rule: &str) -> bool {
         allowed_for(role).contains(&rule)
+    }
+
+    #[test]
+    fn an_agent_may_read_what_a_person_handed_it_without_asking() {
+        let rule = reading_under(std::path::Path::new("/home/dev/agentland/data/drops")).unwrap();
+        assert_eq!(rule, "Read(//home/dev/agentland/data/drops/**)");
+
+        let written: serde_json::Value =
+            serde_json::from_str(&settings_in("implementer", &[rule.clone()], "acceptEdits")).unwrap();
+        let allowed = written["permissions"]["allow"].as_array().unwrap();
+        assert!(allowed.iter().any(|held| held == &serde_json::json!(rule)));
+        assert!(
+            written["permissions"]["additionalDirectories"].is_null(),
+            "reading is not a folder grant, which would let it write there too"
+        );
+
+        assert!(reading_under(std::path::Path::new("relative/drops")).is_none());
+        assert!(reading_under(std::path::Path::new("/")).is_none());
     }
 
     #[test]

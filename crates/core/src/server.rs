@@ -439,6 +439,10 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
             post(shelve_a_file).layer(axum::extract::DefaultBodyLimit::max(MOST_ATTACHMENT_BYTES)),
         )
         .route("/shelf/{name}", get(read_shelved))
+        .route(
+            "/sessions/{id}/drops",
+            post(drop_on_a_pane).layer(axum::extract::DefaultBodyLimit::max(MOST_ATTACHMENT_BYTES)),
+        )
         .route("/ui/windows", get(list_windows).post(set_window))
         .route("/dispatch/tasks/{id}", post(dispatch_task))
         .route("/repos/{id}/files", get(list_project_files))
@@ -3748,9 +3752,18 @@ async fn shelve_a_file(
     std::fs::create_dir_all(&shelf).map_err(anyhow::Error::from)?;
     let name = format!("{}-{}", now_secs(), crate::board::safe_name(&query.name));
     std::fs::write(shelf.join(&name), &body).map_err(anyhow::Error::from)?;
+    keep_the_newest(&shelf, SHELF_KEEPS);
 
-    let mut held: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(&shelf)
-        .map_err(anyhow::Error::from)?
+    Ok(Json(serde_json::json!({ "name": name })))
+}
+
+/// Leave only the newest `keep` files in a folder.
+fn keep_the_newest(folder: &std::path::Path, keep: usize) {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return;
+    };
+
+    let mut held: Vec<(std::time::SystemTime, PathBuf)> = entries
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let modified = entry.metadata().and_then(|meta| meta.modified()).ok()?;
@@ -3758,11 +3771,50 @@ async fn shelve_a_file(
         })
         .collect();
     held.sort_by(|one, other| other.0.cmp(&one.0));
-    for (_, old) in held.into_iter().skip(SHELF_KEEPS) {
+    for (_, old) in held.into_iter().skip(keep) {
         let _ = std::fs::remove_file(old);
     }
+}
 
-    Ok(Json(serde_json::json!({ "name": name })))
+/// Files dropped on a pane, for whoever works in it.
+///
+/// A file dragged in from the desktop reaches the window as bytes with no path,
+/// so it is written here and the window types its path into the pane, the way
+/// any terminal hands over a dropped file. Kept per pane, the newest few
+/// hundred; agents may read this folder without asking.
+pub(crate) fn drops_of(data_dir: &std::path::Path) -> PathBuf {
+    data_dir.join("drops")
+}
+
+const DROPS_KEEP: usize = 200;
+
+async fn drop_on_a_pane(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<AttachQuery>,
+    body: axum::body::Bytes,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if body.is_empty() {
+        return Err(anyhow::anyhow!("nothing arrived to hand over").into());
+    }
+    if state.manager.get(&id).is_none() {
+        return Err(anyhow::anyhow!("no pane called {id}").into());
+    }
+
+    let folder = drops_of(&state.config.data_dir).join(crate::board::safe_name(&id));
+    std::fs::create_dir_all(&folder).map_err(anyhow::Error::from)?;
+
+    // Milliseconds, so two files of one name dropped together both survive.
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_millis())
+        .unwrap_or_default();
+    let path = folder.join(format!("{stamp}-{}", crate::board::safe_name(&query.name)));
+    std::fs::write(&path, &body).map_err(anyhow::Error::from)?;
+    keep_the_newest(&folder, DROPS_KEEP);
+
+    let path = std::fs::canonicalize(&path).unwrap_or(path);
+    Ok(Json(serde_json::json!({ "path": path.to_string_lossy() })))
 }
 
 async fn read_shelved(
