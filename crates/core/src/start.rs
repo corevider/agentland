@@ -187,6 +187,7 @@ mod tests {
             prompt_style: PromptStyle::Positional,
             takes_the_tools,
             resume_carries_a_brief: false,
+            own_conversation: None,
             installed,
             version: None,
         }

@@ -67,6 +67,11 @@ pub struct Engine {
     /// lone word to the session, so a brief handed to it would be read as the
     /// name of a session nobody has.
     pub resume_carries_a_brief: bool,
+    /// How this engine is told which conversation is the agent's own: the flag
+    /// that starts one under a given id, and the one that opens it again. Where
+    /// it has none, an agent is resumed by the engine's own resume, which opens
+    /// the newest conversation in the folder — whoever it belongs to.
+    pub own_conversation: Option<(&'static str, &'static str)>,
     pub installed: bool,
     pub version: Option<String>,
 }
@@ -80,6 +85,7 @@ struct Known {
     prompt_style: PromptStyle,
     takes_the_tools: bool,
     resume_carries_a_brief: bool,
+    own_conversation: Option<(&'static str, &'static str)>,
 }
 
 const CATALOG: &[Known] = &[
@@ -92,6 +98,7 @@ const CATALOG: &[Known] = &[
         prompt_style: PromptStyle::Positional,
         takes_the_tools: true,
         resume_carries_a_brief: true,
+        own_conversation: Some(("--session-id", "--resume")),
     },
     Known {
         id: "codex",
@@ -102,6 +109,7 @@ const CATALOG: &[Known] = &[
         prompt_style: PromptStyle::Positional,
         takes_the_tools: true,
         resume_carries_a_brief: false,
+        own_conversation: None,
     },
     Known {
         id: "gemini",
@@ -115,6 +123,7 @@ const CATALOG: &[Known] = &[
         prompt_style: PromptStyle::Positional,
         takes_the_tools: true,
         resume_carries_a_brief: true,
+        own_conversation: None,
     },
     Known {
         id: "opencode",
@@ -125,6 +134,7 @@ const CATALOG: &[Known] = &[
         prompt_style: PromptStyle::Positional,
         takes_the_tools: false,
         resume_carries_a_brief: false,
+        own_conversation: None,
     },
     Known {
         id: "crush",
@@ -135,6 +145,7 @@ const CATALOG: &[Known] = &[
         prompt_style: PromptStyle::Positional,
         takes_the_tools: false,
         resume_carries_a_brief: false,
+        own_conversation: None,
     },
     Known {
         id: "goose",
@@ -145,6 +156,7 @@ const CATALOG: &[Known] = &[
         prompt_style: PromptStyle::None,
         takes_the_tools: false,
         resume_carries_a_brief: false,
+        own_conversation: None,
     },
     Known {
         id: "qwen",
@@ -155,6 +167,7 @@ const CATALOG: &[Known] = &[
         prompt_style: PromptStyle::Positional,
         takes_the_tools: false,
         resume_carries_a_brief: false,
+        own_conversation: None,
     },
     Known {
         id: "cursor-agent",
@@ -165,6 +178,7 @@ const CATALOG: &[Known] = &[
         prompt_style: PromptStyle::Positional,
         takes_the_tools: true,
         resume_carries_a_brief: true,
+        own_conversation: None,
     },
 ];
 
@@ -243,6 +257,7 @@ pub fn engines() -> Vec<Engine> {
             prompt_style: known.prompt_style,
             takes_the_tools: known.takes_the_tools,
             resume_carries_a_brief: known.resume_carries_a_brief,
+            own_conversation: known.own_conversation,
             installed,
             version,
         })
@@ -426,6 +441,12 @@ pub struct Agent {
     pub workspace_id: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// The engine's own id for this agent's conversation, where the engine lets
+    /// one be chosen. A pane is a process and goes; the conversation is what a
+    /// resume has to find again, and two agents standing in one folder have to
+    /// find their own.
+    #[serde(default)]
+    pub conversation: Option<String>,
     #[serde(default = "offline")]
     pub state: AgentState,
     /// What the commander decided about this agent: which model it runs on, what
@@ -758,6 +779,7 @@ impl Crew {
             worktree: request.worktree,
             workspace_id: request.workspace_id,
             session_id: None,
+            conversation: None,
             state: AgentState::Idle,
             model,
             title: request.title,
@@ -1055,14 +1077,44 @@ impl Crew {
         }
 
         let brief = brief.filter(|value| !value.trim().is_empty());
+        let login = crate::accounts::env_for(&self.data_dir, &agent.engine_id, agent.account.as_deref());
+        let mut conversation = agent.conversation.clone();
 
-        // An engine whose resume cannot carry the brief is started fresh when
-        // there is one, rather than resumed with the brief dropped or handed to
-        // an argument that means something else. A brief that vanishes is an
-        // agent sitting at a prompt with nothing to do; a fresh session that
-        // has been told what to do is only a shorter memory.
-        if resume && !engine.resume.is_empty() && (engine.resume_carries_a_brief || brief.is_none()) {
-            args.extend(engine.resume.iter().map(|word| (*word).to_owned()));
+        match engine.own_conversation {
+            Some(flags) => {
+                let shared = self.state.lock().agents.values().any(|other| {
+                    other.id != agent.id
+                        && other.repository_id == agent.repository_id
+                        && other.worktree == agent.worktree
+                        && other.workspace_id == agent.workspace_id
+                });
+                let still_there = match (conversation.as_deref(), conversations_home(login.as_ref())) {
+                    (Some(id), Some(home)) => conversation_kept(&home, id),
+                    _ => false,
+                };
+                let (words, kept) = conversation_args(
+                    flags,
+                    conversation.as_deref(),
+                    resume,
+                    still_there,
+                    shared,
+                    engine.resume,
+                    || a_conversation_id(&agent.id),
+                );
+                args.extend(words);
+                conversation = kept;
+            }
+            // An engine whose resume cannot carry the brief is started fresh
+            // when there is one, rather than resumed with the brief dropped or
+            // handed to an argument that means something else. A brief that
+            // vanishes is an agent sitting at a prompt with nothing to do; a
+            // fresh session that has been told what to do is only a shorter
+            // memory.
+            None => {
+                if resume && !engine.resume.is_empty() && (engine.resume_carries_a_brief || brief.is_none()) {
+                    args.extend(engine.resume.iter().map(|word| (*word).to_owned()));
+                }
+            }
         }
 
         if let Some(text) = brief {
@@ -1083,11 +1135,7 @@ impl Crew {
         // Which login this pane spends from. The variable is fixed when the
         // process starts and cannot be changed after: a running pane keeps the
         // account it began with, and a switch is a fact about the next one.
-        if let Some((variable, folder)) = crate::accounts::env_for(
-            &self.data_dir,
-            &agent.engine_id,
-            agent.account.as_deref(),
-        ) {
+        if let Some((variable, folder)) = login {
             // The engine asks whether this folder is trusted, and it asks each
             // login separately — the answer lives in that login's own config.
             // A second subscription that stops at "do you trust this folder?"
@@ -1116,6 +1164,7 @@ impl Crew {
             .get_mut(id)
             .ok_or_else(|| anyhow!("unknown agent: {id}"))?;
         stored.session_id = Some(session.id.clone());
+        stored.conversation = conversation;
         stored.state = AgentState::Working;
         let updated = stored.clone();
         self.persist(&state);
@@ -1241,6 +1290,91 @@ pub fn permission_for_role(role: &str) -> &'static str {
         "implementer" | "ops" | "commander" | "chief" => "acceptEdits",
         _ => DEFAULT_PERMISSION,
     }
+}
+
+/// Which conversation a pane opens, and the words that open it.
+///
+/// Two agents standing in one worktree share a folder, and a plain resume
+/// opens the newest conversation in a folder. A tester brought back to judge a
+/// card woke inside the implementer's conversation and believed it had written
+/// the code; a reviewer woke inside the author's. So an agent is resumed by the
+/// id of its own conversation. One whose conversation is gone starts a new one
+/// rather than failing to start at all, and one from before ids were kept is
+/// resumed the old way only where nobody else stands — elsewhere it starts
+/// fresh, because a shorter memory is better than somebody else's.
+fn conversation_args(
+    flags: (&str, &str),
+    kept: Option<&str>,
+    resume: bool,
+    still_there: bool,
+    shared: bool,
+    the_old_way: &[&str],
+    fresh: impl FnOnce() -> String,
+) -> (Vec<String>, Option<String>) {
+    if resume {
+        if let Some(id) = kept.filter(|_| still_there) {
+            return (vec![flags.1.to_owned(), id.to_owned()], Some(id.to_owned()));
+        }
+        if kept.is_none() && !shared && !the_old_way.is_empty() {
+            return (the_old_way.iter().map(|word| (*word).to_owned()).collect(), None);
+        }
+    }
+
+    let id = fresh();
+    (vec![flags.0.to_owned(), id.clone()], Some(id))
+}
+
+/// A new conversation id, in the shape the engine asks for: a version-4 UUID.
+///
+/// Nothing here needs to be secret, only never the same twice. The standard
+/// library's hasher is keyed afresh for every use, which is randomness enough
+/// for that without a dependency to provide it.
+fn a_conversation_id(seed: &str) -> String {
+    use std::hash::{BuildHasher, Hash, Hasher};
+
+    let keys = std::collections::hash_map::RandomState::new();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_nanos())
+        .unwrap_or_default();
+    let half = |salt: u8| {
+        let mut hasher = keys.build_hasher();
+        (seed, nanos, salt).hash(&mut hasher);
+        hasher.finish()
+    };
+
+    let mut bytes = [0u8; 16];
+    bytes[..8].copy_from_slice(&half(0).to_be_bytes());
+    bytes[8..].copy_from_slice(&half(1).to_be_bytes());
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("{}-{}-{}-{}-{}", &hex[0..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..32])
+}
+
+/// Where the engine keeps this agent's conversations: the login's own folder
+/// when it spends from one, and the machine's otherwise.
+fn conversations_home(login: Option<&(String, String)>) -> Option<PathBuf> {
+    if let Some((variable, folder)) = login {
+        if variable == "CLAUDE_CONFIG_DIR" {
+            return Some(PathBuf::from(folder));
+        }
+    }
+
+    std::env::var_os("CLAUDE_CONFIG_DIR")
+        .filter(|held| !held.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| crate::exec::home().map(|home| home.join(".claude")))
+}
+
+/// Whether a conversation is still there to be opened. Found by its file under
+/// any project folder, rather than by guessing how the engine names folders.
+fn conversation_kept(home: &Path, id: &str) -> bool {
+    let wanted = format!("{id}.jsonl");
+    fs::read_dir(home.join("projects"))
+        .map(|folders| folders.flatten().any(|folder| folder.path().join(&wanted).is_file()))
+        .unwrap_or(false)
 }
 
 /// Whether a role may be hired with the rope asked for.
@@ -1527,6 +1661,62 @@ mod model_tests {
     }
 
     #[test]
+    fn a_conversation_id_is_a_uuid_nobody_else_has() {
+        let one = super::a_conversation_id("ivo");
+        let other = super::a_conversation_id("ivo");
+
+        assert_eq!(one.len(), 36);
+        assert_eq!([8, 13, 18, 23].map(|at| &one[at..=at]), ["-"; 4]);
+        assert_eq!(&one[14..15], "4", "a version-4 uuid");
+        assert!("89ab".contains(&one[19..20]), "the RFC 4122 variant");
+        assert_ne!(one, other);
+    }
+
+    const FLAGS: (&str, &str) = ("--session-id", "--resume");
+
+    fn opens(kept: Option<&str>, resume: bool, still_there: bool, shared: bool) -> (Vec<String>, Option<String>) {
+        super::conversation_args(FLAGS, kept, resume, still_there, shared, &["--continue"], || "new".to_owned())
+    }
+
+    /// The run this was written for: a tester, brought back with a plain resume
+    /// in a worktree it shared, woke inside the implementer's conversation.
+    #[test]
+    fn a_resume_opens_the_agents_own_conversation_even_in_a_shared_folder() {
+        assert_eq!(opens(Some("abc"), true, true, true), (vec!["--resume".into(), "abc".into()], Some("abc".into())));
+    }
+
+    #[test]
+    fn a_shared_folder_never_continues_somebody_elses_conversation() {
+        assert_eq!(opens(None, true, false, true), (vec!["--session-id".into(), "new".into()], Some("new".into())));
+    }
+
+    #[test]
+    fn an_agent_from_before_ids_that_stands_alone_continues_as_it_did() {
+        assert_eq!(opens(None, true, false, false), (vec!["--continue".into()], None));
+    }
+
+    #[test]
+    fn a_conversation_that_is_gone_is_started_again_rather_than_failing() {
+        assert_eq!(opens(Some("abc"), true, false, false), (vec!["--session-id".into(), "new".into()], Some("new".into())));
+    }
+
+    #[test]
+    fn a_fresh_start_is_a_new_conversation() {
+        assert_eq!(opens(Some("abc"), false, true, false), (vec!["--session-id".into(), "new".into()], Some("new".into())));
+    }
+
+    #[test]
+    fn a_kept_conversation_is_found_under_any_project_folder() {
+        let home = std::env::temp_dir().join("agentland-conversations");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("projects/-some-worktree")).unwrap();
+        std::fs::write(home.join("projects/-some-worktree/abc.jsonl"), "{}").unwrap();
+
+        assert!(super::conversation_kept(&home, "abc"));
+        assert!(!super::conversation_kept(&home, "gone"));
+    }
+
+    #[test]
     fn lowering_is_free_and_raising_is_not() {
         use super::is_a_raise;
 
@@ -1738,6 +1928,7 @@ mod pane_tests {
 
     fn an_agent(session: Option<&str>, state: AgentState) -> Agent {
         Agent {
+            conversation: None,
             id: "ada".to_owned(),
             name: "Ada".to_owned(),
             role: "implementer".to_owned(),

@@ -7696,6 +7696,7 @@ mod dismissal_tests {
 
     fn standing(id: &str, repository_id: &str, worktree: &str) -> Agent {
         Agent {
+            conversation: None,
             id: id.to_owned(),
             name: id.to_owned(),
             role: "implementer".to_owned(),

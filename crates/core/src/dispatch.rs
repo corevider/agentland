@@ -355,6 +355,7 @@ mod tests {
 
     fn agent(id: &str, role: &str, state: AgentState) -> Agent {
         Agent {
+            conversation: None,
             id: id.to_owned(),
             name: id.to_owned(),
             role: role.to_owned(),
