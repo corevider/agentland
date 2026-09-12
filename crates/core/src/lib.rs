@@ -28,6 +28,7 @@ pub mod permits;
 pub mod phone;
 pub mod plans;
 pub mod ports;
+pub mod preview;
 pub mod pulls;
 pub mod races;
 pub mod repo;

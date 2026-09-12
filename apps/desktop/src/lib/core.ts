@@ -1530,6 +1530,12 @@ export async function drop_on_pane(session_id: string, file: File): Promise<stri
     return ((await response.json()) as { path: string }).path;
 }
 
+/// The address of a dev server's page as Agentland's preview serves it, where
+/// an element can be picked out and handed to an agent.
+export function open_preview(port: number): Promise<{ url: string }> {
+    return request<{ url: string }>(`/previews/${port}`, { method: "POST" });
+}
+
 /// Write down what was drawn on a picture on a card.
 export function set_marks(id: string, name: string, marks: Marks): Promise<Task> {
     return request<Task>(

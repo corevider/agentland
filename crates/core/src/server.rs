@@ -125,6 +125,7 @@ struct AppState {
     crew_words: Arc<parking_lot::Mutex<BTreeMap<String, Vec<String>>>>,
     notices: Arc<crate::notices::Notices>,
     races: Arc<crate::races::Races>,
+    previews: Arc<crate::preview::Previews>,
     /// What the engines last said about the account's quota, and when. Read
     /// rather than tallied: the quota is the account's, and every engine on the
     /// machine spends from it — including ones nobody here started.
@@ -236,6 +237,7 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
         crew_words: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
         notices: Arc::new(crate::notices::Notices::default()),
         races: Arc::new(crate::races::Races::new(data_dir.clone())),
+        previews: Arc::new(crate::preview::Previews::default()),
         journal: Arc::new(crate::journal::Journal::new(data_dir.clone())),
         goals: Arc::new(crate::goals::Goals::new(data_dir.clone())),
         standards: Arc::new(crate::standards::Standards::new(data_dir.clone())),
@@ -432,6 +434,7 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
         .route("/races/{id}", axum::routing::delete(call_off_race))
         .route("/races/{id}/winner", post(pick_the_winner))
         .route("/tasks/{id}/race", post(start_race))
+        .route("/previews/{port}", post(open_preview))
         .route("/notes/{*slug}", get(read_note).delete(forget_note))
         .route("/ui/commands", get(take_ui_commands).post(queue_ui_command))
         .route(
@@ -4900,6 +4903,21 @@ async fn call_off_race(
     note(&state, "race.called_off", "a person", &race.task_id, &said);
 
     Ok(Json(race))
+}
+
+/// Stand in front of a running dev server so the preview can point at its
+/// elements. Only a dev server Agentland started: the preview is a way to look
+/// at the crew's work, not a way to reach any port on the machine.
+async fn open_preview(
+    State(state): State<AppState>,
+    Path(port): Path<u16>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !state.services.list().iter().any(|service| service.port == port) {
+        return Err(anyhow::anyhow!("no dev server of the crew's is running on port {port}").into());
+    }
+
+    let proxy = state.previews.open(port).await?;
+    Ok(Json(serde_json::json!({ "url": format!("http://127.0.0.1:{proxy}/") })))
 }
 
 /// Where the vault is on disk, so the human can open the same folder in whatever
