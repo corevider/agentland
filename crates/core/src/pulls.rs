@@ -863,7 +863,7 @@ pub fn asked_to_judge_it(role: &str, task_id: &str, repository_id: &str, worktre
     };
 
     format!(
-        "{task_id} is up for review on {repository_id}, in the {worktree} worktree. Read it with repo_review, {what}, and give your verdict with pr_review on that card — approve, request_changes or comment, and say what has to change rather than that something does. You judge it; you do not edit it."
+        "{task_id} is up for review on {repository_id}, in the {worktree} worktree. Read it with repo_review, {what}, and give your verdict with pr_review on that card. Approve it when it is ready to merge as it is. If anything has to change first, however small, that is request_changes — say what has to change rather than that something does, and it goes back to its author. A comment asks for nothing and leaves the card where it is. You judge it; you do not edit it."
     )
 }
 
@@ -958,6 +958,7 @@ mod check_tests {
         for said in [tester, security, asked_to_judge_it("reviewer", "t400", "svc", "greet-tree")] {
             assert!(said.contains("t400") && said.contains("greet-tree") && said.contains("pr_review"));
             assert!(said.contains("you do not edit it"));
+            assert!(said.contains("however small, that is request_changes"), "a change asked for is not a comment");
         }
     }
 }
