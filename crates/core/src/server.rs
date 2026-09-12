@@ -1095,8 +1095,24 @@ fn spawn_supervisor(state: AppState) {
                             }
                         });
 
+                        let up_for_review = state
+                            .board
+                            .get(&watch.task_id)
+                            .is_some_and(|task| crate::board::may_go_up_for_review(&task));
+
                         if let Some(column) = wanted {
-                            if state.board.move_to(&watch.task_id, column).is_ok() {
+                            // Finished is not the same as up for review. A card
+                            // moved there without its pull request told no check
+                            // and sat waiting; its holder is told what is left
+                            // instead, and the card stays where it is.
+                            if column == Column::Review && !held_by_the_commander && !up_for_review {
+                                state.crew_words.lock().entry(watch.agent_id.clone()).or_default().push(format!(
+                                    "{task} is finished but not up for review, and nothing tells the checks until it is. Commit anything left, then open it with pr_open — task_id {task}, worktree {worktree}.",
+                                    task = watch.task_id,
+                                    worktree = watch.worktree,
+                                ));
+                                note(&state, "card.needs_a_pull_request", "the supervisor", &watch.task_id, &reason);
+                            } else if state.board.move_to(&watch.task_id, column).is_ok() {
                                 note(
                                     &state,
                                     "card.for_review",

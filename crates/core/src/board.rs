@@ -1073,6 +1073,16 @@ pub fn too_close(above: Option<f64>, below: Option<f64>) -> bool {
 /// Only forward, and only from `working`: a card somebody moved by hand, or one
 /// already waiting on a reviewer, is left where they put it. Nothing written
 /// means nothing to look at, so it stays as it is and the commander decides.
+/// Whether a finished card may go up for review: only once its pull request
+/// is open. Opening it is what tells the checks; a card moved to review
+/// without one sat there in a live run with every check waiting for a word
+/// that never came.
+pub fn may_go_up_for_review(task: &Task) -> bool {
+    task.evidence
+        .iter()
+        .any(|entry| matches!(entry.what, Evidence::PullRequest { .. }))
+}
+
 pub fn where_a_settled_card_goes(column: Column, files_written: usize) -> Option<Column> {
     if column == Column::Working && files_written > 0 {
         Some(Column::Review)
@@ -1888,4 +1898,30 @@ fn now_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|value| value.as_secs())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod up_for_review_tests {
+    use super::*;
+
+    #[test]
+    fn a_card_goes_up_for_review_only_with_its_pull_request_open() {
+        let dir = std::env::temp_dir().join("agentland-board-up-for-review");
+        let _ = std::fs::remove_dir_all(&dir);
+        let board = Board::new(dir);
+        let card = board
+            .create(CreateTask {
+                title: "cover greet".to_owned(),
+                body: String::new(),
+                repository_id: "svc".to_owned(),
+                worktree: None,
+            })
+            .unwrap();
+
+        assert!(!may_go_up_for_review(&card));
+        let held = board
+            .attach(&card.id, Evidence::PullRequest { url: String::new() }, "wren", 0)
+            .unwrap();
+        assert!(may_go_up_for_review(&held));
+    }
 }
