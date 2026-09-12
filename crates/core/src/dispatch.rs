@@ -224,17 +224,22 @@ pub fn decide(
     // one is first. A step wants hands, and the answer when there are none is
     // to say so — the commander reads this and hires, which is the thing it
     // was going to have to do anyway.
+    //
+    // The checks are not hands either. They cannot edit what they judge, and a
+    // live run handed "add a test beside greet" to the tester because the
+    // title said "test", and the farewell step to the reviewer because its
+    // brief said the work would be reviewed. Both had to be taken back.
     if came_from_a_step {
         let hands: Vec<&&Agent> = candidates
             .iter()
             .copied()
-            .filter(|agent| agent.role != "commander")
+            .filter(|agent| agent.role != "commander" && !crate::pulls::CHECKS.contains(&agent.role.as_str()))
             .collect();
 
         if hands.is_empty() {
             return Decision::Queue {
                 reason: format!(
-                    "{} is a step to be done and only the commander is free on {} — hire someone to do it",
+                    "{} is a step to be done and nobody free on {} does steps — the commander and the checks do not edit — hire someone to do it",
                     task.id, task.repository_id
                 ),
             };
@@ -525,6 +530,37 @@ mod tests {
                 assert!(reason.contains("take apart"), "the reason explains: {reason}");
             }
             other => panic!("expected an assignment, got {other:?}"),
+        }
+    }
+
+    /// The run this was written for: a step whose title said "test" went to the
+    /// tester, which cannot edit, and had to be taken back.
+    #[test]
+    fn a_step_that_mentions_tests_goes_to_the_hands_not_the_tester() {
+        let state = DispatchState::default();
+        let crew = vec![
+            agent("tess", "tester", AgentState::Idle),
+            agent("ada", "implementer", AgentState::Idle),
+        ];
+
+        match decide(&state, &task("add a test beside greet"), &crew, true) {
+            Decision::Assign { agent_id, .. } => assert_eq!(agent_id, "ada"),
+            other => panic!("expected an assignment, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_step_is_never_handed_to_a_check_even_when_only_checks_are_free() {
+        let state = DispatchState::default();
+        let crew = vec![
+            agent("rho", "reviewer", AgentState::Idle),
+            agent("tess", "tester", AgentState::Idle),
+            agent("sec", "security", AgentState::Idle),
+        ];
+
+        match decide(&state, &task("make farewell say Goodbye, reviewed before it merges"), &crew, true) {
+            Decision::Queue { reason } => assert!(reason.contains("hire"), "{reason}"),
+            other => panic!("expected a queue, got {other:?}"),
         }
     }
 
