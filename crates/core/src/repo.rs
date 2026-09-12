@@ -552,6 +552,33 @@ impl RepoRegistry {
             .cloned()
             .ok_or_else(|| anyhow!("unknown repository: {repository_id}"))?;
 
+        // A project whose checkout is gone could never be let go: forgetting it
+        // wants its worktrees removed first, and removing one ran git in the
+        // folder that was no longer there. With no repository left there is
+        // nothing to unregister the worktree from, so the folder and the record
+        // are all there is — and nothing can say what the folder holds, so it
+        // only goes when somebody says to go ahead anyway.
+        if !repository.primary_path.exists() {
+            if !force {
+                bail!(
+                    "{key} belongs to {repository_id}, whose checkout at {} is gone, so nothing can say what it holds — remove it anyway to let it go",
+                    repository.primary_path.display()
+                );
+            }
+
+            if worktree.path.exists() {
+                fs::remove_dir_all(&worktree.path)
+                    .with_context(|| format!("cannot remove {}", worktree.path.display()))?;
+            }
+
+            self.ports.release(&key);
+            let mut state = self.state.lock();
+            state.worktrees.remove(&key);
+            state.ports = self.ports.snapshot();
+            self.persist(&state);
+            return Ok(());
+        }
+
         if !force {
             let status = self.status(worktree.clone());
             if status.dirty_files > 0 {
@@ -1761,6 +1788,27 @@ mod tests {
         hand_the_tools_to_every_desk(&data_dir);
 
         assert!(!data_dir.join("desks").exists());
+    }
+
+    #[test]
+    fn a_worktree_whose_project_checkout_is_gone_can_still_be_let_go() {
+        let dir = a_folder("checkout-gone");
+        git(&["init", "-b", "main"], Some(&dir)).unwrap();
+        fs::write(dir.join("thing.txt"), "x\n").unwrap();
+        git(&["add", "-A"], Some(&dir)).unwrap();
+        git(&["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-m", "first"], Some(&dir)).unwrap();
+
+        let registry = a_registry("checkout-gone");
+        let repository = registry.adopt(&dir).unwrap();
+        let worktree = registry.create_worktree(&repository.id, "desk").unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+
+        assert!(registry.remove_worktree(&repository.id, "desk", false).is_err(), "not without being told to");
+        assert!(worktree.path.exists());
+
+        registry.remove_worktree(&repository.id, "desk", true).unwrap();
+        assert!(!worktree.path.exists());
+        registry.forget(&repository.id).expect("and now the project can be forgotten");
     }
 
     #[test]
