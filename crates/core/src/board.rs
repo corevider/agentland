@@ -401,6 +401,26 @@ impl Task {
     /// The title, the body, and then every attached file by its path, so the
     /// agent reads the screenshot rather than being told there was one.
     pub fn brief(&self) -> String {
+        let mut brief = self.what_is_asked();
+
+        // How the work leaves your hands. An implementer finished a card,
+        // committed it and stopped, and the card sat in working with a green
+        // test beside it: it had been told what to do and never told what done
+        // looks like.
+        brief.push_str(&format!(
+            "\n\nWhen this is finished: commit it, then pr_open with task_id {} and the worktree you worked in. That is what puts it up for review — somebody who is not you reads it, and the card leaves your hands. Do not merge it yourself.",
+            self.id
+        ));
+
+        brief
+    }
+
+    /// The card's own words and files, without how the work leaves your hands.
+    ///
+    /// What a race entrant is given. Handed the whole brief, an entrant was told
+    /// both to stay away from the pull request and to open one, and went for
+    /// it; in a race that step comes after a person has compared the entrants.
+    pub fn what_is_asked(&self) -> String {
         let mut brief = format!("{}\n\n{}", self.title, self.body);
 
         let originals: Vec<&Attachment> = self
@@ -441,15 +461,6 @@ impl Task {
                 }
             }
         }
-
-        // How the work leaves your hands. An implementer finished a card,
-        // committed it and stopped, and the card sat in working with a green
-        // test beside it: it had been told what to do and never told what done
-        // looks like.
-        brief.push_str(&format!(
-            "\n\nWhen this is finished: commit it, then pr_open with task_id {} and the worktree you worked in. That is what puts it up for review — somebody who is not you reads it, and the card leaves your hands. Do not merge it yourself.",
-            self.id
-        ));
 
         brief
     }
@@ -1393,6 +1404,21 @@ mod tests {
         assert!(!path.exists());
 
         assert!(board.detach_file(&card.id, "log.txt").is_err(), "gone is gone");
+    }
+
+    #[test]
+    fn what_is_asked_leaves_out_how_the_work_leaves_your_hands() {
+        let board = board("what-is-asked");
+        let card = a_card(&board, None);
+
+        let asked = card.what_is_asked();
+        assert!(asked.starts_with(&card.title));
+        assert!(!asked.contains("pr_open"), "a race entrant is not told to open a pull request");
+        assert!(!asked.contains(&card.id), "nor which card it is racing on");
+
+        let brief = card.brief();
+        assert!(brief.starts_with(&asked));
+        assert!(brief.contains(&format!("pr_open with task_id {}", card.id)));
     }
 
     #[test]

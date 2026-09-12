@@ -20,17 +20,18 @@ const same_place = (note: Note, line: PatchLine) => {
 ///
 /// Hover a line and a + appears beside it; the note is written under the line
 /// and stays pinned there until it is sent or taken off. Nothing leaves the
-/// panel until every note goes back at once.
+/// panel until every note goes back at once. Without `on_add` it is only a
+/// diff to read, as it is when several are laid side by side.
 export function AnnotatedPatch({
     patch,
-    notes,
+    notes = [],
     on_add,
     on_remove,
 }: {
     patch: string;
-    notes: Note[];
-    on_add: (note: Note) => void;
-    on_remove: (index: number) => void;
+    notes?: Note[];
+    on_add?: (note: Note) => void;
+    on_remove?: (index: number) => void;
 }) {
     const lines = useMemo(() => read_patch(patch), [patch]);
     const [writing, set_writing] = useState<number | null>(null);
@@ -39,7 +40,7 @@ export function AnnotatedPatch({
     const save = (line: PatchLine) => {
         const text = draft.trim();
         if (text) {
-            on_add({ ...anchor_of(line), text });
+            on_add?.({ ...anchor_of(line), text });
         }
         set_writing(null);
         set_draft("");
@@ -50,17 +51,19 @@ export function AnnotatedPatch({
             {lines.map((line, index) => (
                 <div key={index}>
                     <div className={`group flex ${TINT[line.kind]}`}>
-                        <button
-                            className="w-4 shrink-0 text-center text-shade opacity-0 hover:text-turquoise group-hover:opacity-100 disabled:invisible"
-                            disabled={!pinnable(line)}
-                            title="pin a note to this line"
-                            onClick={() => {
-                                set_writing(index);
-                                set_draft("");
-                            }}
-                        >
-                            +
-                        </button>
+                        {on_add ? (
+                            <button
+                                className="w-4 shrink-0 text-center text-shade opacity-0 hover:text-turquoise group-hover:opacity-100 disabled:invisible"
+                                disabled={!pinnable(line)}
+                                title="pin a note to this line"
+                                onClick={() => {
+                                    set_writing(index);
+                                    set_draft("");
+                                }}
+                            >
+                                +
+                            </button>
+                        ) : null}
                         <span className="min-w-0 whitespace-pre">{line.text || " "}</span>
                     </div>
 
@@ -74,7 +77,7 @@ export function AnnotatedPatch({
                                 <button
                                     className="shrink-0 text-[10px] text-shade hover:text-coral"
                                     title="take this note off"
-                                    onClick={() => on_remove(at)}
+                                    onClick={() => on_remove?.(at)}
                                 >
                                     ✕
                                 </button>

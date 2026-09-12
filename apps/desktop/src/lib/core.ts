@@ -1593,6 +1593,56 @@ export function submit_review(
     );
 }
 
+/// What one entrant in a race runs on. An empty model leaves it to the engine.
+export interface RaceLane {
+    engine_id: string;
+    model?: string | null;
+}
+
+export interface Entrant {
+    agent_id: string;
+    name: string;
+    engine_id: string;
+    model: string | null;
+    worktree: string;
+    branch: string;
+}
+
+/// One card worked by several agents at once, each in its own worktree, until
+/// a person keeps one entrant's work.
+export interface Race {
+    id: string;
+    task_id: string;
+    repository_id: string;
+    entrants: Entrant[];
+    started_at: number;
+    winner: string | null;
+    ended_at: number | null;
+}
+
+export function list_races(): Promise<Race[]> {
+    return request<Race[]>("/races");
+}
+
+export function start_race(task_id: string, lanes: RaceLane[]): Promise<Race> {
+    return request<Race>(`/tasks/${encodeURIComponent(task_id)}/race`, {
+        method: "POST",
+        body: JSON.stringify({ lanes }),
+    });
+}
+
+/// Keep one entrant's work: the card becomes its, and the others are let go.
+export function keep_entrant(race_id: string, agent_id: string): Promise<Race> {
+    return request<Race>(`/races/${encodeURIComponent(race_id)}/winner`, {
+        method: "POST",
+        body: JSON.stringify({ agent_id }),
+    });
+}
+
+export function call_off_race(race_id: string): Promise<Race> {
+    return request<Race>(`/races/${encodeURIComponent(race_id)}`, { method: "DELETE" });
+}
+
 export function review_worktree(repository_id: string, worktree: string): Promise<Review> {
     return request<Review>(`/repos/${repository_id}/worktrees/${worktree}/review`);
 }

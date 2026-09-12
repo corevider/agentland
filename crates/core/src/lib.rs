@@ -29,6 +29,7 @@ pub mod phone;
 pub mod plans;
 pub mod ports;
 pub mod pulls;
+pub mod races;
 pub mod repo;
 pub mod routines;
 pub mod services;

@@ -34,7 +34,9 @@ import {
     set_merge_policy,
     shelved_file,
     submit_review,
+    list_races,
     type Agent,
+    type Race,
     type Column,
     type DispatchState,
     type Entry,
@@ -47,6 +49,8 @@ import { Picker } from "@/components/Picker";
 import { checks_for, type CheckState } from "@/lib/checks";
 import { notes_as_review, type Note } from "@/lib/annotations";
 import { on_card_asked, take_asked_card } from "@/lib/asked_card";
+import { lane_words, race_on, standing_of, why_not_race } from "@/lib/races";
+import { RaceBoard, RaceStarter } from "./Race";
 import { AnnotatedPatch } from "./AnnotatedPatch";
 
 const COLUMNS: Column[] = ["backlog", "assigned", "working", "review", "ready", "done"];
@@ -85,6 +89,10 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
     const [review, set_review] = useState<{ task: Task; data: Review } | null>(null);
     /// Notes pinned to lines of the diff being read, sent back together.
     const [notes, set_notes] = useState<Note[]>([]);
+    /// Races on the board's cards, read with the cards.
+    const [races, set_races] = useState<Race[]>([]);
+    /// The race laid out side by side in place of the columns.
+    const [comparing, set_comparing] = useState<string | null>(null);
     /// Where the card being dragged would land: the column, and the card it
     /// would sit above (null meaning the bottom). Drawn, so a drop is aimed
     /// rather than guessed.
@@ -209,14 +217,16 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
     const [busy, set_busy] = useState(false);
 
     const refresh = useCallback(async () => {
-        const [board, crew, repositories] = await Promise.all([
+        const [board, crew, repositories, raced] = await Promise.all([
             list_tasks(),
             list_agents(),
             list_repos(),
+            list_races().catch(() => [] as Race[]),
         ]);
         set_tasks(board);
         set_agents(crew);
         set_repos(repositories);
+        set_races(raced);
     }, []);
 
     // A drag that ends anywhere — dropped, cancelled, let go over the sidebar —
@@ -236,6 +246,12 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
     // A refresh in the middle of a drag replaces every card under the pointer.
     use_poll(() => {
         list_tasks().then(set_tasks).catch(() => undefined);
+        list_races().then(set_races).catch(() => undefined);
+        // Entrants side by side say how each is doing, which the crew list
+        // knows and the cards do not.
+        if (comparing) {
+            list_agents().then(set_agents).catch(() => undefined);
+        }
     }, 4000, active && !carry);
 
     const [dispatch, set_dispatch] = useState<DispatchState | null>(null);
@@ -498,6 +514,27 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
     // and the columns both got 380px and drew over each other.
     const aside_open = Boolean(editing || review || (opened && tasks.some((task) => task.id === opened)));
 
+    // A race is compared across the whole panel: a diff per entrant, next to
+    // each other, needs every column of width there is.
+    const compared = comparing ? races.find((race) => race.id === comparing) ?? null : null;
+    if (compared) {
+        return (
+            <div className="flex h-full min-h-0 min-w-0 flex-1">
+                <RaceBoard
+                    race={compared}
+                    title={tasks.find((task) => task.id === compared.task_id)?.title ?? compared.task_id}
+                    agents={agents}
+                    on_close={() => set_comparing(null)}
+                    on_finished={(said) => {
+                        set_comparing(null);
+                        set_error(said);
+                        void refresh();
+                    }}
+                />
+            </div>
+        );
+    }
+
     return (
         <div className="@container flex h-full min-h-0 min-w-0 flex-1">
             <div
@@ -682,6 +719,13 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                 <CardDetail
                     task={tasks.find((task) => task.id === opened)!}
                     agents={agents}
+                    race={race_on(races, opened)}
+                    on_compare={(race_id) => set_comparing(race_id)}
+                    on_raced={(race) => {
+                        set_races((held) => [race, ...held.filter((was) => was.id !== race.id)]);
+                        set_comparing(race.id);
+                        void refresh();
+                    }}
                     merges_itself={dispatch?.merge_when_checks_pass === true}
                     on_menu={(event) => {
                         const held = tasks.find((task) => task.id === opened);
@@ -1010,10 +1054,17 @@ function CardDetail({
     on_changed,
     on_review,
     on_merge,
+    race,
+    on_compare,
+    on_raced,
 }: {
     task: Task;
     agents: Agent[];
     merges_itself: boolean;
+    /// The race running on this card, if one is.
+    race: Race | null;
+    on_compare: (race_id: string) => void;
+    on_raced: (race: Race) => void;
     on_menu?: (event: React.MouseEvent) => void;
     on_close: () => void;
     on_edit: () => void;
@@ -1181,6 +1232,30 @@ function CardDetail({
                     </ol>
                 </section>
 
+                {race ? (
+                    <section
+                        data-racing={race.id}
+                        className="rounded-md border border-sun/60 bg-lagoon-deep px-2 py-1.5"
+                    >
+                        <h3 className="font-mono text-[9px] uppercase tracking-[0.14em] text-sun">
+                            Racing in {race.id} · {race.entrants.length} entrants
+                        </h3>
+                        <ul className="mt-0.5 font-mono text-[10px] text-shell">
+                            {race.entrants.map((entrant) => (
+                                <li key={entrant.agent_id}>
+                                    {entrant.name} · {lane_words(entrant)} · {standing_of(entrant, agents)}
+                                </li>
+                            ))}
+                        </ul>
+                        <button
+                            className="mt-1 rounded-lg border border-sun px-2 py-0.5 font-mono text-[11px] text-sun"
+                            onClick={() => on_compare(race.id)}
+                        >
+                            compare side by side
+                        </button>
+                    </section>
+                ) : null}
+
                 <div className="flex flex-wrap gap-2">
                     {task.worktree ? (
                         <button
@@ -1200,6 +1275,8 @@ function CardDetail({
                             merge it
                         </button>
                     ) : null}
+
+                    {why_not_race(task, race) === null ? <RaceStarter task={task} on_started={on_raced} /> : null}
                 </div>
             </div>
 

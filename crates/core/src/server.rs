@@ -124,6 +124,7 @@ struct AppState {
     /// question and was answered has to hear the answer, or it waits forever.
     crew_words: Arc<parking_lot::Mutex<BTreeMap<String, Vec<String>>>>,
     notices: Arc<crate::notices::Notices>,
+    races: Arc<crate::races::Races>,
     /// What the engines last said about the account's quota, and when. Read
     /// rather than tallied: the quota is the account's, and every engine on the
     /// machine spends from it — including ones nobody here started.
@@ -234,6 +235,7 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
         leader_words: Arc::new(parking_lot::Mutex::new(Vec::new())),
         crew_words: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
         notices: Arc::new(crate::notices::Notices::default()),
+        races: Arc::new(crate::races::Races::new(data_dir.clone())),
         journal: Arc::new(crate::journal::Journal::new(data_dir.clone())),
         goals: Arc::new(crate::goals::Goals::new(data_dir.clone())),
         standards: Arc::new(crate::standards::Standards::new(data_dir.clone())),
@@ -426,6 +428,10 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
         .route("/vault/health", get(check_the_vault))
         .route("/notices", get(list_notices).post(mark_notices_seen))
         .route("/notices/desktop", post(set_desktop_notices))
+        .route("/races", get(list_races))
+        .route("/races/{id}", axum::routing::delete(call_off_race))
+        .route("/races/{id}/winner", post(pick_the_winner))
+        .route("/tasks/{id}/race", post(start_race))
         .route("/notes/{*slug}", get(read_note).delete(forget_note))
         .route("/ui/commands", get(take_ui_commands).post(queue_ui_command))
         .route(
@@ -3010,6 +3016,10 @@ async fn assign_task(
         .get(&id)
         .ok_or_else(|| ApiError(anyhow::anyhow!("unknown task: {id}")))?;
 
+    if let Some(race) = state.races.open_for(&id) {
+        return Err(anyhow::anyhow!("{id} is being raced in {} — keep one entrant's work first", race.id).into());
+    }
+
     let agent = state
         .crew
         .list()
@@ -3167,6 +3177,10 @@ async fn dispatch_task(
     Path(id): Path<String>,
     body: Option<Json<DispatchBody>>,
 ) -> Result<Json<DispatchReport>, ApiError> {
+    if let Some(race) = state.races.open_for(&id) {
+        return Err(anyhow::anyhow!("{id} is being raced in {} — keep one entrant's work first", race.id).into());
+    }
+
     let wanted = body.and_then(|Json(body)| body.worktree);
     if let Some(worktree) = wanted.as_deref() {
         state.board.bind_to_worktree(&id, Some(worktree))?;
@@ -3610,6 +3624,17 @@ async fn open_pull_request(
     Path((id, name)): Path<(String, String)>,
     Json(body): Json<PullRequestBody>,
 ) -> Result<Json<PullRequest>, ApiError> {
+    // An entrant works toward a person's choice, not toward a review: its
+    // pull request would move the card before anybody had compared the rest.
+    if let Some(race) = body.task_id.as_deref().and_then(|task_id| state.races.open_for(task_id)) {
+        return Err(anyhow::anyhow!(
+            "{} is being raced in {} — a pull request comes after one entrant's work is kept",
+            race.task_id,
+            race.id
+        )
+        .into());
+    }
+
     let request = state
         .repos
         .open_pull_request(&id, &name, &body.title, &body.body)?;
@@ -4577,6 +4602,252 @@ async fn set_desktop_notices(
     crate::db::save_state(&state.config.data_dir, "settings", &*state.settings.lock());
 
     Json(notice_report(&state, 40))
+}
+
+async fn list_races(State(state): State<AppState>) -> Json<Vec<crate::races::Race>> {
+    Json(state.races.list())
+}
+
+fn only_a_person(scope: TokenScope, what: &str) -> Result<(), ApiError> {
+    if scope == TokenScope::Agent {
+        return Err(anyhow::anyhow!("{what} is a person's call, not the crew's").into());
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct RaceBody {
+    lanes: Vec<crate::races::Lane>,
+}
+
+/// Hand one card to several agents at once, each in a worktree of its own.
+///
+/// Nobody holds the card while it is raced: whoever is kept takes it once a
+/// person has compared the results. An entrant that cannot be entered — an
+/// engine not installed, a worktree that cannot be made — takes the ones
+/// already entered down with it, so a failed start leaves no half a race.
+async fn start_race(
+    State(state): State<AppState>,
+    Extension(scope): Extension<TokenScope>,
+    Path(id): Path<String>,
+    Json(body): Json<RaceBody>,
+) -> Result<Json<crate::races::Race>, ApiError> {
+    only_a_person(scope, "racing a card")?;
+    crate::races::check_lanes(&body.lanes)?;
+
+    let task = state
+        .board
+        .get(&id)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("unknown task: {id}")))?;
+    if let Some(holder) = task.assignee.as_deref() {
+        return Err(anyhow::anyhow!("{id} belongs to {holder} — take it back before racing it").into());
+    }
+    if let Some(bound) = task.worktree.as_deref() {
+        return Err(anyhow::anyhow!(
+            "{id} is bound to the {bound} worktree, and a race gives each entrant a worktree of its own"
+        )
+        .into());
+    }
+    if matches!(task.column, Column::Review | Column::Ready | Column::Done) {
+        return Err(anyhow::anyhow!(
+            "{id} is past racing: it is already in {}",
+            format!("{:?}", task.column).to_lowercase()
+        )
+        .into());
+    }
+
+    let race = state.races.open(&id, &task.repository_id, now_secs())?;
+    let brief = crate::races::race_brief(&task.what_is_asked(), body.lanes.len());
+
+    let mut entrants: Vec<crate::races::Entrant> = Vec::new();
+    for (index, lane) in body.lanes.iter().enumerate() {
+        match enter_the_race(&state, &task, &race.id, index, lane, &brief).await {
+            Ok(entrant) => entrants.push(entrant),
+            Err(error) => {
+                for entrant in &entrants {
+                    withdraw(&state, &task.repository_id, entrant);
+                }
+                state.races.forget(&race.id);
+                return Err(error);
+            }
+        }
+    }
+
+    let lineup = body
+        .lanes
+        .iter()
+        .zip(&entrants)
+        .map(|(lane, entrant)| format!("{} ({})", entrant.name, lane.words()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let race = state.races.set_entrants(&race.id, entrants)?;
+
+    let _ = state.board.attach(
+        &id,
+        Evidence::Note {
+            text: format!("raced in {}: {lineup}", race.id),
+        },
+        "a person",
+        now_secs(),
+    );
+    note(&state, "card.raced", "a person", &id, &lineup);
+
+    Ok(Json(race))
+}
+
+async fn enter_the_race(
+    state: &AppState,
+    task: &crate::board::Task,
+    race_id: &str,
+    index: usize,
+    lane: &crate::races::Lane,
+    brief: &str,
+) -> Result<crate::races::Entrant, ApiError> {
+    let worktree = state
+        .repos
+        .create_worktree(&task.repository_id, &crate::races::worktree_name(race_id, index))?;
+
+    let hired = take_on(
+        state,
+        HireRequest {
+            name: crate::races::entrant_name(race_id, index),
+            role: "implementer".to_owned(),
+            engine_id: lane.engine_id.trim().to_owned(),
+            repository_id: task.repository_id.clone(),
+            worktree: worktree.name.clone(),
+            workspace_id: None,
+            model: lane.model(),
+            title: Some(format!("{} · {}", task.id, lane.words())),
+            colour: None,
+            permissions: None,
+            account: None,
+        },
+    );
+    let agent = match hired {
+        Ok(agent) => agent,
+        Err(error) => {
+            let _ = state.repos.remove_worktree(&task.repository_id, &worktree.name, true);
+            return Err(error);
+        }
+    };
+
+    let entrant = crate::races::Entrant {
+        agent_id: agent.id.clone(),
+        name: agent.name.clone(),
+        engine_id: agent.engine_id.clone(),
+        model: agent.model.clone(),
+        worktree: worktree.name.clone(),
+        branch: worktree.branch.clone(),
+    };
+
+    let said = compose_brief(state, &agent, brief).await;
+    match hand_the_work_over(state, &agent, &worktree.path, &said).await {
+        Ok(HandOver::Busy) => {
+            withdraw(state, &task.repository_id, &entrant);
+            Err(anyhow::anyhow!("{} could not be started", agent.name).into())
+        }
+        Ok(_) => Ok(entrant),
+        Err(error) => {
+            withdraw(state, &task.repository_id, &entrant);
+            Err(error)
+        }
+    }
+}
+
+/// Let an entrant go with its folder. Its branch stays, so what it wrote can
+/// still be read.
+fn withdraw(state: &AppState, repository_id: &str, entrant: &crate::races::Entrant) {
+    if let Err(error) = state.crew.dismiss(&entrant.agent_id) {
+        tracing::warn!(%error, agent = %entrant.agent_id, "an entrant could not be let go");
+    }
+    let _ = state.skills.forget_agent(&entrant.agent_id);
+
+    if nobody_left_in(&state.crew.list(), repository_id, &entrant.worktree) {
+        if let Err(error) = state.repos.remove_worktree(repository_id, &entrant.worktree, true) {
+            tracing::warn!(%error, worktree = %entrant.worktree, "an entrant's worktree stays");
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct PickBody {
+    agent_id: String,
+}
+
+/// Keep one entrant's work. The card becomes that entrant's, bound to its
+/// worktree, and goes on the way any card does — commit, pull request, checks.
+/// The others are let go.
+async fn pick_the_winner(
+    State(state): State<AppState>,
+    Extension(scope): Extension<TokenScope>,
+    Path(id): Path<String>,
+    Json(body): Json<PickBody>,
+) -> Result<Json<crate::races::Race>, ApiError> {
+    only_a_person(scope, "choosing whose work is kept")?;
+
+    let race = state.races.decide(&id, &body.agent_id, now_secs())?;
+    let winner = race
+        .entrants
+        .iter()
+        .find(|entrant| entrant.agent_id == body.agent_id)
+        .cloned()
+        .ok_or_else(|| ApiError(anyhow::anyhow!("{} is not racing in {id}", body.agent_id)))?;
+
+    state.board.bind_to_worktree(&race.task_id, Some(&winner.worktree))?;
+    let task = state
+        .board
+        .record_assignment(&race.task_id, &winner.agent_id, &winner.worktree, &winner.branch)?;
+
+    let losers: Vec<&crate::races::Entrant> = race
+        .entrants
+        .iter()
+        .filter(|entrant| entrant.agent_id != winner.agent_id)
+        .collect();
+    for loser in &losers {
+        withdraw(&state, &race.repository_id, loser);
+    }
+
+    state
+        .crew_words
+        .lock()
+        .entry(winner.agent_id.clone())
+        .or_default()
+        .push(format!(
+            "Your work on {task} is the one kept; the others were let go. Finish it, commit, then open it for review with pr_open — task_id {task}, worktree {worktree}.",
+            task = race.task_id,
+            worktree = winner.worktree,
+        ));
+    if let Some(agent) = state.crew.list().into_iter().find(|held| held.id == winner.agent_id) {
+        watch_the_step(&state, &agent, &race.task_id, task.title.trim());
+    }
+
+    let let_go = losers.iter().map(|loser| loser.name.as_str()).collect::<Vec<_>>().join(", ");
+    let said = format!("kept {}'s work from {}; let go of {let_go}", winner.name, race.id);
+    let _ = state.board.attach(&race.task_id, Evidence::Note { text: said.clone() }, "a person", now_secs());
+    note(&state, "race.decided", "a person", &race.task_id, &said);
+
+    Ok(Json(race))
+}
+
+/// End a race with nobody kept. Every entrant goes; the card stays where it
+/// was, held by nobody.
+async fn call_off_race(
+    State(state): State<AppState>,
+    Extension(scope): Extension<TokenScope>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::races::Race>, ApiError> {
+    only_a_person(scope, "calling a race off")?;
+
+    let race = state.races.call_off(&id, now_secs())?;
+    for entrant in &race.entrants {
+        withdraw(&state, &race.repository_id, entrant);
+    }
+
+    let said = format!("{} was called off; nobody holds the card", race.id);
+    let _ = state.board.attach(&race.task_id, Evidence::Note { text: said.clone() }, "a person", now_secs());
+    note(&state, "race.called_off", "a person", &race.task_id, &said);
+
+    Ok(Json(race))
 }
 
 /// Where the vault is on disk, so the human can open the same folder in whatever
