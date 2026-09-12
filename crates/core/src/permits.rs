@@ -96,6 +96,17 @@ const NEVER: &[&str] = &[
     "Bash(systemctl:*)",
 ];
 
+/// What an agent in plan may not do at all.
+///
+/// Claude's own plan mode asks before an edit rather than refusing it, so
+/// "reads and reports" held only while somebody answered no — a harness that
+/// said yes let a reviewer rewrite the code it was reviewing — and it asked
+/// before every one of the crew's own tools as well, so a check could not
+/// judge anything with nobody there. Plan is now an ordinary pane with these
+/// refused outright: the tools it is allowed run without asking, and an edit
+/// is not a question.
+const EDITING: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit"];
+
 /// The one command a project says is how you run its tests.
 ///
 /// `Bash(bash:*)` would let the list through everything, which is
@@ -348,10 +359,15 @@ pub fn settings_in(role: &str, extra: &[String], mode: &str) -> String {
     folders.sort();
     folders.dedup();
 
+    let mut deny: Vec<String> = never.into_iter().map(str::to_owned).collect();
+    if mode == "plan" {
+        deny.extend(EDITING.iter().map(|tool| (*tool).to_owned()));
+    }
+
     let settings = Settings {
         permissions: Permissions {
             allow,
-            deny: never.into_iter().map(str::to_owned).collect(),
+            deny,
             additional_directories: folders,
         },
         skip_dangerous_mode_permission_prompt: mode == "bypassPermissions",
@@ -557,6 +573,21 @@ mod tests {
         for role in ["implementer", "reviewer", "tester"] {
             assert!(allows(role, "Bash(python3 -m unittest:*)"), "{role} had to ask to run unittest");
         }
+    }
+
+    #[test]
+    fn plan_refuses_every_edit_outright() {
+        let planned: serde_json::Value = serde_json::from_str(&settings_in("reviewer", &[], "plan")).unwrap();
+        let editing: serde_json::Value = serde_json::from_str(&settings_in("implementer", &[], "acceptEdits")).unwrap();
+        let refused = |held: &serde_json::Value, tool: &str| {
+            held["permissions"]["deny"].as_array().unwrap().iter().any(|rule| rule == tool)
+        };
+
+        for tool in ["Edit", "Write", "MultiEdit", "NotebookEdit"] {
+            assert!(refused(&planned, tool), "plan could still {tool}");
+            assert!(!refused(&editing, tool), "an implementer was refused {tool}");
+        }
+        assert!(refused(&planned, "Bash(git push:*)"), "the standing refusals still stand");
     }
 
     #[test]

@@ -357,7 +357,11 @@ pub fn permission_args(engine_id: &str, mode: &str) -> Vec<String> {
     let owned = |words: &[&str]| words.iter().map(|word| (*word).to_owned()).collect();
 
     match engine_id {
-        "claude" => owned(&["--permission-mode", mode]),
+        // Plan is an ordinary pane whose settings refuse every edit, rather
+        // than Claude's own plan mode, which asks before an edit instead of
+        // refusing it and asks before every one of the crew's tools as well.
+        // See permits::EDITING.
+        "claude" => owned(&["--permission-mode", if mode == "plan" { "default" } else { mode }]),
         "codex" => match mode {
             "plan" => owned(&["--sandbox", "read-only"]),
             "bypassPermissions" => owned(&["--dangerously-bypass-approvals-and-sandbox"]),
@@ -1620,6 +1624,11 @@ mod model_tests {
         assert_eq!(
             permission_args("claude", "acceptEdits"),
             vec!["--permission-mode", "acceptEdits"]
+        );
+        assert_eq!(
+            permission_args("claude", "plan"),
+            vec!["--permission-mode", "default"],
+            "plan is a pane whose settings refuse edits, not Claude's own plan mode"
         );
     }
 
