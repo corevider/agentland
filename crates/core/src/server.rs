@@ -435,6 +435,7 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
         .route("/races/{id}/winner", post(pick_the_winner))
         .route("/tasks/{id}/race", post(start_race))
         .route("/previews/{port}", post(open_preview))
+        .route("/previews/{port}/shots", post(photograph_a_pick))
         .route("/notes/{*slug}", get(read_note).delete(forget_note))
         .route("/ui/commands", get(take_ui_commands).post(queue_ui_command))
         .route(
@@ -4918,6 +4919,47 @@ async fn open_preview(
 
     let proxy = state.previews.open(port).await?;
     Ok(Json(serde_json::json!({ "url": format!("http://127.0.0.1:{proxy}/") })))
+}
+
+#[derive(Deserialize)]
+struct ShotBody {
+    /// The page, as a path on the dev server: "/cart?step=2".
+    path: String,
+    #[serde(flatten)]
+    placed: crate::shots::Placed,
+}
+
+/// A picture of the element a person picked, rendered again from the dev
+/// server itself and kept where agents may read it. Only a path on a dev
+/// server the crew started: the headless browser opens nothing else.
+async fn photograph_a_pick(
+    State(state): State<AppState>,
+    Path(port): Path<u16>,
+    Json(body): Json<ShotBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    use base64::Engine;
+
+    let service = state
+        .services
+        .list()
+        .into_iter()
+        .find(|service| service.port == port)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("no dev server of the crew's is running on port {port}")))?;
+    if !body.path.starts_with('/') || body.path.starts_with("//") {
+        return Err(anyhow::anyhow!("a page is a path on the dev server, starting with one /").into());
+    }
+
+    let url = format!("{}{}", service.url.trim_end_matches('/'), body.path);
+    let folder = drops_of(&state.config.data_dir).join("shots");
+    let path = crate::shots::photograph(&url, &body.placed, &folder).await?;
+    keep_the_newest(&folder, DROPS_KEEP);
+
+    let picture = std::fs::read(&path).map_err(anyhow::Error::from)?;
+    let path = std::fs::canonicalize(&path).unwrap_or(path);
+    Ok(Json(serde_json::json!({
+        "path": path.to_string_lossy(),
+        "png": base64::engine::general_purpose::STANDARD.encode(picture),
+    })))
 }
 
 /// Where the vault is on disk, so the human can open the same folder in whatever

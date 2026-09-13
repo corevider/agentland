@@ -127,6 +127,7 @@
                 text: (node.innerText || "").trim().slice(0, 400),
                 styles,
                 box: { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) },
+                scroll: { x: Math.round(scrollX), y: Math.round(scrollY) },
                 viewport: { width: innerWidth, height: innerHeight },
             },
         });

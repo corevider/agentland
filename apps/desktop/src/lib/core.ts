@@ -1536,6 +1536,25 @@ export function open_preview(port: number): Promise<{ url: string }> {
     return request<{ url: string }>(`/previews/${port}`, { method: "POST" });
 }
 
+/// A picture of a picked element: where it is kept, and the PNG itself.
+export interface PickPicture {
+    path: string;
+    png: string;
+}
+
+/// Have the core render the page again and cut the picked element out of it.
+export function photograph_pick(
+    port: number,
+    placed: {
+        path: string;
+        box: { x: number; y: number; width: number; height: number };
+        scroll: { x: number; y: number };
+        viewport: { width: number; height: number };
+    },
+): Promise<PickPicture> {
+    return request<PickPicture>(`/previews/${port}/shots`, { method: "POST", body: JSON.stringify(placed) });
+}
+
 /// Write down what was drawn on a picture on a card.
 export function set_marks(id: string, name: string, marks: Marks): Promise<Task> {
     return request<Task>(
