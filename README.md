@@ -1863,9 +1863,12 @@ rather than from state: moves arrive faster than renders, and a box drawn
 quickly was lost between them.
 
 **The camera.** The tray has *Take a screenshot for a card*. It asks the
-desktop's own picker — the screenshot portal on Linux, `screencapture` on macOS
-— rather than grabbing pixels, which a Wayland desktop does not allow an
-application to do. The file lands on a shelf in the core (`data/shelf/`, the
+desktop's own picker — the screenshot portal on Linux, `screencapture` on macOS,
+the snipping overlay (`ms-screenclip:`) on Windows — rather than grabbing
+pixels, which a Wayland desktop does not allow an application to do. The
+Windows overlay answers nobody: it leaves the picture on the clipboard and
+closes, so a short PowerShell script watches the clipboard's sequence number
+for a change with a picture in it and writes that picture out. The file lands on a shelf in the core (`data/shelf/`, the
 last twenty kept), the window is told its name, and the board comes forward
 with the editor open and the picture already on the card. The portal answers
 with a signal sent only to the connection that asked, which a command-line

@@ -8,8 +8,10 @@
 
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{anyhow, bail, Result};
+use base64::Engine;
 
 /// Ask the desktop for a screenshot and say where it was written.
 ///
@@ -22,7 +24,76 @@ pub fn take_one() -> Result<PathBuf> {
     if cfg!(target_os = "linux") {
         return through_the_portal();
     }
+    if cfg!(windows) {
+        return with_the_snipping_tool();
+    }
     bail!("taking a screenshot from the tray is not available on this system yet")
+}
+
+/// Whether a snip is already being waited for.
+static SNIPPING: AtomicBool = AtomicBool::new(false);
+
+/// The wait for a snip, in PowerShell.
+///
+/// Windows' own area picker answers nobody: it puts the picture on the
+/// clipboard and closes. So the clipboard is watched — for a change since the
+/// picker was opened, and a picture in it — and the picture is written where
+/// `AGENTLAND_SHOT` says.
+const SNIP_WAIT: &str = r#"
+Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+Add-Type -Namespace Agentland -Name Clip -MemberDefinition '[DllImport("user32.dll")] public static extern uint GetClipboardSequenceNumber();'
+$before = [Agentland.Clip]::GetClipboardSequenceNumber()
+Start-Process "ms-screenclip:"
+$until = (Get-Date).AddMinutes(2)
+while ((Get-Date) -lt $until) {
+    Start-Sleep -Milliseconds 250
+    if ([Agentland.Clip]::GetClipboardSequenceNumber() -ne $before -and [System.Windows.Forms.Clipboard]::ContainsImage()) {
+        [System.Windows.Forms.Clipboard]::GetImage().Save($env:AGENTLAND_SHOT, [System.Drawing.Imaging.ImageFormat]::Png)
+        exit 0
+    }
+}
+exit 2
+"#;
+
+/// Windows: the snipping overlay, and the clipboard it leaves the picture on.
+///
+/// A second ask while the first is still waiting opens the overlay again — the
+/// first one was likely closed — and leaves the picture to the wait already
+/// running, so one snip is one card.
+fn with_the_snipping_tool() -> Result<PathBuf> {
+    if SNIPPING.swap(true, Ordering::SeqCst) {
+        let _ = agentland_core::exec::command("cmd")
+            .args(["/C", "start", "", "ms-screenclip:"])
+            .status();
+        bail!("a snip is already being waited for");
+    }
+
+    let path = std::env::temp_dir().join(format!("agentland-shot-{}.png", stamp()));
+    let output = agentland_core::exec::command("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-EncodedCommand"])
+        .arg(encoded_for_powershell(SNIP_WAIT))
+        .env("AGENTLAND_SHOT", &path)
+        .output();
+    SNIPPING.store(false, Ordering::SeqCst);
+
+    let output = output.map_err(|error| anyhow!("cannot run powershell for the snipping tool: {error}"))?;
+    if output.status.code() == Some(2) {
+        bail!("no screenshot was taken");
+    }
+    if !output.status.success() || !path.is_file() {
+        bail!(
+            "the snip did not reach a file: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(path)
+}
+
+/// A script as PowerShell's `-EncodedCommand` takes it: UTF-16LE, in base64.
+/// Handed over this way, no quote in it is eaten by the command line.
+fn encoded_for_powershell(script: &str) -> String {
+    let bytes: Vec<u8> = script.encode_utf16().flat_map(|unit| unit.to_le_bytes()).collect();
+    base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
 /// macOS: the crosshair, into a file of our own.
@@ -184,7 +255,14 @@ pub fn put_on_clipboard(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+/// Windows: already there. The snipping tool puts the picture on the clipboard
+/// itself, and that is where it was read from.
+#[cfg(windows)]
+pub fn put_on_clipboard(_path: &std::path::Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 pub fn put_on_clipboard(_path: &std::path::Path) -> Result<()> {
     bail!("the clipboard is not reachable on this system yet")
 }
@@ -203,6 +281,12 @@ mod tests {
         assert_eq!(path_of("https://example.com/a.png"), None);
         assert_eq!(path_of("file://host/a.png"), None);
         assert_eq!(path_of("file:///tmp/100%25.png"), Some(PathBuf::from("/tmp/100%.png")));
+    }
+
+    #[test]
+    fn a_script_goes_to_powershell_as_utf16_in_base64() {
+        assert_eq!(encoded_for_powershell("a"), "YQA=");
+        assert_eq!(encoded_for_powershell("exit 2"), "ZQB4AGkAdAAgADIA");
     }
 
     #[test]
