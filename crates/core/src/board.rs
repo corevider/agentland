@@ -257,6 +257,16 @@ pub struct Task {
     /// Files put on the card by a person: what the work looks like, or should.
     #[serde(default)]
     pub attachments: Vec<Attachment>,
+    /// The GitHub issue it was made from, which its pull request closes.
+    #[serde(default)]
+    pub issue: Option<Issue>,
+}
+
+/// A GitHub issue a card was made from.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct Issue {
+    pub number: u64,
+    pub url: String,
 }
 
 /// A card as a list shows it: what it is, where it is and who has it.
@@ -537,6 +547,8 @@ pub struct CreateTask {
     /// commits to a branch can only be done where that branch is checked out.
     #[serde(default)]
     pub worktree: Option<String>,
+    #[serde(default)]
+    pub issue: Option<Issue>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -609,6 +621,7 @@ impl Board {
                 .fold(0.0_f64, f64::max)
                 + 1.0,
             attachments: Vec::new(),
+            issue: request.issue,
         };
 
         state.tasks.insert(id, task.clone());
@@ -1135,6 +1148,7 @@ mod tests {
             at: 10,
             position: 1.0,
             attachments: Vec::new(),
+            issue: None,
         }
     }
 
@@ -1286,6 +1300,7 @@ mod tests {
                 body: String::new(),
                 repository_id: "svc-demo".into(),
                 worktree: None,
+                issue: None,
             })
             .expect("create");
 
@@ -1310,6 +1325,7 @@ mod tests {
                 body: String::new(),
                 repository_id: "svc-demo".into(),
                 worktree: None,
+                issue: None,
             })
             .expect("create");
 
@@ -1419,6 +1435,25 @@ mod tests {
         let brief = card.brief();
         assert!(brief.starts_with(&asked));
         assert!(brief.contains(&format!("pr_open with task_id {}", card.id)));
+    }
+
+    #[test]
+    fn a_card_made_from_an_issue_remembers_it() {
+        let board = board("from-issue");
+        let card = board
+            .create(CreateTask {
+                title: "Cart total".to_owned(),
+                body: String::new(),
+                repository_id: "web".to_owned(),
+                worktree: None,
+                issue: Some(Issue {
+                    number: 12,
+                    url: "https://github.com/shop/web/issues/12".to_owned(),
+                }),
+            })
+            .unwrap();
+
+        assert_eq!(board.get(&card.id).and_then(|held| held.issue).map(|held| held.number), Some(12));
     }
 
     #[test]
@@ -1542,6 +1577,7 @@ mod tests {
                 body: String::new(),
                 repository_id: "demo".to_owned(),
                 worktree: worktree.map(str::to_owned),
+                issue: None,
             })
             .unwrap()
     }
@@ -1941,6 +1977,7 @@ mod up_for_review_tests {
                 body: String::new(),
                 repository_id: "svc".to_owned(),
                 worktree: None,
+                issue: None,
             })
             .unwrap();
 

@@ -51,6 +51,7 @@ import { notes_as_review, type Note } from "@/lib/annotations";
 import { on_card_asked, take_asked_card, take_new_card_ask } from "@/lib/asked_card";
 import { lane_words, race_on, standing_of, why_not_race } from "@/lib/races";
 import { RaceBoard, RaceStarter } from "./Race";
+import { IssuePicker } from "./IssuePicker";
 import { AnnotatedPatch } from "./AnnotatedPatch";
 
 const COLUMNS: Column[] = ["backlog", "assigned", "working", "review", "ready", "done"];
@@ -567,6 +568,14 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                             ? "add a project first"
                             : "or paste a screenshot anywhere on the board"}
                     </span>
+
+                    <IssuePicker
+                        repos={repositories ? repos.filter((repo) => repositories.includes(repo.id)) : repos}
+                        on_made={(task) => {
+                            void refresh();
+                            set_opened(task.id);
+                        }}
+                    />
 
                     {/* The board's own switch: it is about every card that
                         passes its checks, not about one column. */}
@@ -1161,6 +1170,14 @@ function CardDetail({
                     <dd className="text-turquoise">{task.branch ?? "none yet"}</dd>
                     <dt className="text-shade">project</dt>
                     <dd className="text-linen">{task.repository_id}</dd>
+                    {task.issue ? (
+                        <>
+                            <dt className="text-shade">issue</dt>
+                            <dd className="truncate text-linen" title={task.issue.url}>
+                                #{task.issue.number} · its pull request closes it
+                            </dd>
+                        </>
+                    ) : null}
                 </dl>
 
                 {finish ? (

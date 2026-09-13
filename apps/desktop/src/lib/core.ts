@@ -1436,6 +1436,8 @@ export interface Task {
     /// Where it sits in its column, smallest first.
     position?: number;
     attachments?: Attachment[];
+    /// The GitHub issue it was made from, which its pull request closes.
+    issue?: { number: number; url: string } | null;
 }
 
 export interface CommitInfo {
@@ -1559,6 +1561,27 @@ export function photograph_pick(
 /// and not ignored. Cut off past a limit, and says so.
 export function every_file(repository_id: string): Promise<{ files: string[]; cut: boolean }> {
     return request<{ files: string[]; cut: boolean }>(`/repos/${encodeURIComponent(repository_id)}/every-file`);
+}
+
+/// One open issue on a project's GitHub, with the card made from it if one was.
+export interface GitHubIssue {
+    number: number;
+    title: string;
+    body: string;
+    url: string;
+    labels: { name: string }[];
+    author: { login: string };
+    updatedAt: string;
+    card: string | null;
+}
+
+export function list_issues(repository_id: string): Promise<GitHubIssue[]> {
+    return request<GitHubIssue[]>(`/repos/${encodeURIComponent(repository_id)}/issues`);
+}
+
+/// Make a card out of an issue; its pull request will close the issue.
+export function card_from_issue(repository_id: string, number: number): Promise<Task> {
+    return request<Task>(`/repos/${encodeURIComponent(repository_id)}/issues/${number}/card`, { method: "POST" });
 }
 
 /// Write down what was drawn on a picture on a card.

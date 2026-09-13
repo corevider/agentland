@@ -452,6 +452,8 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
         .route("/repos/{id}/files", get(list_project_files))
         .route("/repos/{id}/file", get(read_project_file))
         .route("/repos/{id}/every-file", get(list_every_file))
+        .route("/repos/{id}/issues", get(list_issues))
+        .route("/repos/{id}/issues/{number}/card", post(card_from_issue))
         .route("/repos/{id}/review", get(review_project))
         .route("/repos/{id}/worktrees/{name}/review", get(review_worktree))
         .route("/repos/{id}/worktrees/{name}/commit", post(commit_worktree))
@@ -2011,6 +2013,7 @@ fn spawn_routine_ticker(state: AppState) {
                             repository_id: agent.repository_id.clone(),
                             // A routine runs where its agent lives.
                             worktree: Some(agent.worktree.clone()),
+                            issue: None,
                         });
 
                         match card {
@@ -3393,6 +3396,83 @@ async fn list_every_file(
     Ok(Json(crate::files::every_file(&root).await?))
 }
 
+fn on_github(state: &AppState, id: &str) -> Result<crate::repo::Repository, ApiError> {
+    let repository = state
+        .repos
+        .repositories()
+        .into_iter()
+        .find(|repository| repository.id == id)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("unknown repository: {id}")))?;
+    if !crate::issues::on_github(&repository) {
+        return Err(anyhow::anyhow!("{id} has no remote on GitHub, so it has no issues to read").into());
+    }
+    Ok(repository)
+}
+
+#[derive(Serialize)]
+struct IssueRow {
+    #[serde(flatten)]
+    issue: crate::issues::GitHubIssue,
+    /// The card already made from it, when there is one.
+    card: Option<String>,
+}
+
+/// A project's open GitHub issues, each with the card made from it if one was.
+async fn list_issues(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<IssueRow>>, ApiError> {
+    let repository = on_github(&state, &id)?;
+    let issues = crate::issues::open_issues(&repository.primary_path).await?;
+    let cards = state.board.list();
+
+    Ok(Json(
+        issues
+            .into_iter()
+            .map(|issue| IssueRow {
+                card: cards
+                    .iter()
+                    .find(|card| {
+                        card.repository_id == id && card.issue.as_ref().is_some_and(|held| held.number == issue.number)
+                    })
+                    .map(|card| card.id.clone()),
+                issue,
+            })
+            .collect(),
+    ))
+}
+
+/// Make a card out of an issue. One card per issue: a second would split the
+/// work, and both would try to close it.
+async fn card_from_issue(
+    State(state): State<AppState>,
+    Path((id, number)): Path<(String, u64)>,
+) -> Result<Json<Task>, ApiError> {
+    let repository = on_github(&state, &id)?;
+    if let Some(made) = state.board.list().into_iter().find(|card| {
+        card.repository_id == id && card.issue.as_ref().is_some_and(|held| held.number == number)
+    }) {
+        return Err(anyhow::anyhow!("{} was already made from #{number}", made.id).into());
+    }
+
+    let issue = crate::issues::issue(&repository.primary_path, number).await?;
+    let task = state.board.create(crate::issues::card_from(&issue, &id))?;
+    let task = state
+        .board
+        .attach(
+            &task.id,
+            Evidence::Note {
+                text: format!("made from GitHub issue #{number}"),
+            },
+            "a person",
+            now_secs(),
+        )
+        .unwrap_or(task);
+    note(&state, "card.from_issue", "a person", &task.id, &issue.url);
+
+    Ok(Json(task))
+}
+
 async fn read_project_file(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -3641,7 +3721,7 @@ async fn merge_worktree(
 async fn open_pull_request(
     State(state): State<AppState>,
     Path((id, name)): Path<(String, String)>,
-    Json(body): Json<PullRequestBody>,
+    Json(mut body): Json<PullRequestBody>,
 ) -> Result<Json<PullRequest>, ApiError> {
     // An entrant works toward a person's choice, not toward a review: its
     // pull request would move the card before anybody had compared the rest.
@@ -3652,6 +3732,17 @@ async fn open_pull_request(
             race.id
         )
         .into());
+    }
+
+    // A card made from an issue closes it: GitHub does that when a pull
+    // request whose body says "Closes #N" is merged.
+    if let Some(issue) = body
+        .task_id
+        .as_deref()
+        .and_then(|task_id| state.board.get(task_id))
+        .and_then(|task| task.issue)
+    {
+        body.body = crate::issues::closing(&body.body, issue.number);
     }
 
     let request = state

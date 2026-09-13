@@ -387,6 +387,7 @@ mod tests {
             at: 0,
             position: 0.0,
             attachments: Vec::new(),
+            issue: None,
         }
     }
 
