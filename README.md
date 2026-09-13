@@ -2354,8 +2354,8 @@ with.
 
 ## A person beside the crew
 
-Six things were added for the person watching the crew rather than for the crew
-itself. Each was tried in the running app before it was written down here.
+Seven things were added for the person watching the crew rather than for the
+crew itself. Each was tried in the running app before it was written down here.
 
 ### Notes on the diff
 
@@ -2393,13 +2393,21 @@ settings and on until somebody turns it off, stops them. On GNOME an approval
 request made exactly one `Notify` call from the app — *Agentland · Waiting on you
 · agentland-check is asking: …*, with an Open action.
 
-### Ctrl+K reaches cards and views
+### Ctrl+K reaches cards, views, files and commands
 
 The jumper found workspaces, projects, worktrees and agents. It now finds the
 board's open cards by id or by the words of their title — `t411` found *Scratch
 card for the jump check*, and Enter opened it on the board — and the window's
 views by name. A card whose project lives in another workspace switches the
 workspace first; a view never does.
+
+It also finds files: every file of the projects on screen as git sees them —
+tracked, or new and not ignored — by name or by any piece of the path, each
+saying which project and folder it is in. `cart` found *cart.tsx · shop ·
+src/app* and opened it in Files & Git, while `build/`, being in `.gitignore`,
+stayed out. And it runs commands: the four layouts, a new card, settings,
+reloading the interface, and a shell in each project's folder, which opened a
+terminal there. Nobody browsing an empty box is shown files.
 
 ### Racing a card
 
@@ -2472,3 +2480,26 @@ Only styles the page set are included, and the page is named by the dev
 server's address, not the preview's. Only a dev server the crew started can be
 put behind a preview, and only on the loopback address. A dev server's live
 reload does not pass through yet: after an agent's change, press reload.
+
+A picture of the element goes with it. The window may not look inside the
+page, so the core opens it again in a headless Chrome or Chromium at the
+person's width, tall enough to reach the element, and cuts out the element with
+a little room around it. The picked *Pay now* button came back as a 118×61
+picture — the 94×37 button and twelve pixels either side — kept where agents
+may read it and named in the note, which says what it is: the page rendered
+again, so a menu held open or text typed in is not in it. Without a Chrome the
+note goes without a picture.
+
+### Issues become cards
+
+A board whose project lives on GitHub has a *from GitHub* list: the project's
+open issues, read with `gh` in its own checkout, each a card away. The card
+keeps the issue's title and words and a line saying where it came from, and its
+pull request says `Closes #N`, so merging it closes the issue — unless the body
+already closes it; `#123` is not taken for `#12`. One card per issue: a second
+is refused.
+
+Tried against a public repository with a hundred open issues, #3822 became card
+`t1`, the list showed `t1` beside it, and asking again answered *t1 was already
+made from #3822*. Nothing was written to GitHub: the `Closes` line is covered by
+tests, not by a pull request opened for the purpose.
