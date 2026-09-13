@@ -48,7 +48,7 @@ import {
 import { Picker } from "@/components/Picker";
 import { checks_for, type CheckState } from "@/lib/checks";
 import { notes_as_review, type Note } from "@/lib/annotations";
-import { on_card_asked, take_asked_card } from "@/lib/asked_card";
+import { on_card_asked, take_asked_card, take_new_card_ask } from "@/lib/asked_card";
 import { lane_words, race_on, standing_of, why_not_race } from "@/lib/races";
 import { RaceBoard, RaceStarter } from "./Race";
 import { AnnotatedPatch } from "./AnnotatedPatch";
@@ -338,6 +338,10 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                 set_editing(null);
                 set_review(null);
                 set_opened(asked);
+            }
+            if (take_new_card_ask()) {
+                set_review(null);
+                set_editing({ task: null, seed: [] });
             }
         };
 

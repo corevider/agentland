@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
     list_files,
@@ -14,6 +14,7 @@ import {
     type WorktreeStatus,
 } from "@/lib/core";
 import { use_poll } from "@/lib/poll";
+import { folder_of, on_file_asked, take_asked_file, type AskedFile } from "@/lib/asked_file";
 import {
     crumbs_of,
     hunks_of,
@@ -57,6 +58,29 @@ export function ProjectPanel({ active, repositories, going }: Props) {
     const [showing, set_showing] = useState<"files" | "git">("files");
     const [error, set_error] = useState<string | null>(null);
 
+    const repository_ref = useRef(repository_id);
+    repository_ref.current = repository_id;
+
+    /// A file asked for from the jumper while another project was on screen.
+    /// Switching projects clears the folder and the open file, so it is opened
+    /// once that has happened rather than before.
+    const waiting_file = useRef<AskedFile | null>(null);
+
+    const open_asked = useCallback((file: AskedFile) => {
+        set_worktree(file.worktree);
+        set_path(folder_of(file.path));
+        set_showing("files");
+
+        if (!is_probably_text(file.path)) {
+            set_opened({ path: file.path, text: "", bytes: 0, truncated: false });
+            return;
+        }
+
+        read_file(file.repository_id, file.path, file.worktree)
+            .then(set_opened)
+            .catch((cause) => set_error(cause instanceof Error ? cause.message : String(cause)));
+    }, []);
+
     const shown = useMemo(
         () => (repositories ? repos.filter((repo) => repositories.includes(repo.id)) : repos),
         [repos, repositories],
@@ -81,7 +105,13 @@ export function ProjectPanel({ active, repositories, going }: Props) {
         set_opened(null);
         set_worktree(null);
         list_worktrees(repository_id).then(set_worktrees).catch(() => set_worktrees([]));
-    }, [repository_id]);
+
+        const waiting = waiting_file.current;
+        if (waiting && waiting.repository_id === repository_id) {
+            waiting_file.current = null;
+            open_asked(waiting);
+        }
+    }, [repository_id, open_asked]);
 
     // The jumper says where to look; arriving here should already be there.
     useEffect(() => {
@@ -94,6 +124,27 @@ export function ProjectPanel({ active, repositories, going }: Props) {
         set_path("");
         set_opened(null);
     }, [going?.at, going?.repository_id, going?.worktree]);
+
+    // A file asked for from outside the panel: opened here if its project is
+    // the one on screen, or once the panel has switched to it. Taken on mount
+    // as well, since the ask usually comes before the panel is on screen.
+    useEffect(() => {
+        const take = () => {
+            const asked = take_asked_file();
+            if (!asked) {
+                return;
+            }
+            if (asked.repository_id === repository_ref.current) {
+                open_asked(asked);
+                return;
+            }
+            waiting_file.current = asked;
+            set_repository(asked.repository_id);
+        };
+
+        take();
+        return on_file_asked(take);
+    }, [open_asked]);
 
     const refresh = useCallback(() => {
         if (!repository_id) {

@@ -6,6 +6,16 @@ use serde::Serialize;
 
 const MOST_ENTRIES: usize = 500;
 const MOST_BYTES: usize = 256 * 1024;
+/// The most files handed over at once for finding one by name. A checkout
+/// with more is cut, and says so, rather than sending a list nobody scrolls.
+const MOST_FILES: usize = 20_000;
+
+/// Every file of a checkout, and whether the list was cut short.
+#[derive(Clone, Debug, Serialize)]
+pub struct EveryFile {
+    pub files: Vec<String>,
+    pub cut: bool,
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Entry {
@@ -118,6 +128,40 @@ pub fn read(root: &Path, relative: &str) -> Result<FileText> {
     })
 }
 
+/// Paths out of `git ls-files -z`, in order: separated by the NUL git puts
+/// between them, so a name with a newline or a quote in it comes through.
+pub fn paths_from(listed: &[u8]) -> Vec<String> {
+    let mut paths: Vec<String> = listed
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| String::from_utf8_lossy(path).into_owned())
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// Every file of a checkout as git sees it: tracked, or new and not ignored.
+/// A tracked file that has been deleted is left out — there is nothing to
+/// open — and so is everything `.gitignore` names, which is where the
+/// thousands of built and installed files live.
+pub async fn every_file(root: &Path) -> Result<EveryFile> {
+    let listed = crate::exec::tokio_command("git")
+        .args(["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
+        .current_dir(root)
+        .output()
+        .await?;
+    if !listed.status.success() {
+        bail!("git could not list the files: {}", String::from_utf8_lossy(&listed.stderr).trim());
+    }
+
+    let mut files = paths_from(&listed.stdout);
+    files.retain(|path| root.join(path).exists());
+    let cut = files.len() > MOST_FILES;
+    files.truncate(MOST_FILES);
+    Ok(EveryFile { files, cut })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +241,39 @@ mod tests {
 
         assert_eq!(held.text, "");
         assert_eq!(held.bytes, 4);
+    }
+
+    #[test]
+    fn paths_come_apart_at_the_nul_git_puts_between_them() {
+        let listed = b"src/app.ts\0odd\nname.txt\0README.md\0src/app.ts\0\0";
+
+        assert_eq!(paths_from(listed), vec!["README.md", "odd\nname.txt", "src/app.ts"]);
+    }
+
+    #[tokio::test]
+    async fn every_file_is_what_git_would_show() {
+        let dir = std::env::temp_dir().join(format!("agentland-every-file-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("src")).unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git").args(args).current_dir(&dir).output().unwrap()
+        };
+
+        git(&["init", "-q"]);
+        fs::write(dir.join("src/app.ts"), "a").unwrap();
+        fs::write(dir.join("gone.txt"), "b").unwrap();
+        fs::write(dir.join(".gitignore"), "build/\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["-c", "user.name=check", "-c", "user.email=check@localhost", "commit", "-qm", "first"]);
+        fs::remove_file(dir.join("gone.txt")).unwrap();
+        fs::write(dir.join("new.md"), "c").unwrap();
+        fs::create_dir_all(dir.join("build")).unwrap();
+        fs::write(dir.join("build/out.js"), "d").unwrap();
+
+        let every = every_file(&dir).await.unwrap();
+
+        assert_eq!(every.files, vec![".gitignore", "new.md", "src/app.ts"]);
+        assert!(!every.cut);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

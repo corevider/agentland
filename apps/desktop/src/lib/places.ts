@@ -1,9 +1,23 @@
 import type { Agent, Repository, Task, Workspace, WorktreeStatus } from "@/lib/core";
 
-export type PlaceKind = "workspace" | "project" | "worktree" | "agent" | "card" | "view";
+export type PlaceKind = "workspace" | "project" | "worktree" | "agent" | "card" | "view" | "file" | "command";
 
 /// A panel of the window, as far as the jumper needs to know it.
 export interface View {
+    id: string;
+    label: string;
+    hint: string;
+}
+
+/// Every file of a project's own checkout, as git sees it: tracked, or new and
+/// not ignored.
+export interface ProjectFiles {
+    repository_id: string;
+    files: string[];
+}
+
+/// Something the window can do, found by name like any place.
+export interface Command {
     id: string;
     label: string;
     hint: string;
@@ -36,6 +50,8 @@ export interface World {
     agents: Agent[];
     cards: Task[];
     views: View[];
+    files: ProjectFiles[];
+    commands: Command[];
 }
 
 /// The home folder, read from the paths themselves.
@@ -180,6 +196,45 @@ export function places_from(world: World, home = ""): Place[] {
         });
     }
 
+    // A file is found by its name and by any piece of its path, and says which
+    // project and folder it is in: two projects both have a README.
+    for (const held of world.files) {
+        const project = world.repositories.find((repository) => repository.id === held.repository_id);
+        const workspace = workspace_holding(world.workspaces, held.repository_id);
+
+        for (const path of held.files) {
+            const at = path.lastIndexOf("/");
+            places.push({
+                kind: "file",
+                id: `file:${held.repository_id}:${path}`,
+                name: path.slice(at + 1),
+                alias: path,
+                detail: `${project?.name ?? held.repository_id} · ${at < 0 ? "/" : path.slice(0, at)}`,
+                workspace_id: workspace?.id ?? null,
+                workspace_name: workspace?.name ?? null,
+                repository_id: held.repository_id,
+                worktree: null,
+                agent_id: null,
+            });
+        }
+    }
+
+    // Something to do rather than somewhere to go; it happens wherever the
+    // person already is.
+    for (const command of world.commands) {
+        places.push({
+            kind: "command",
+            id: `command:${command.id}`,
+            name: command.label,
+            detail: command.hint,
+            workspace_id: null,
+            workspace_name: null,
+            repository_id: null,
+            worktree: null,
+            agent_id: null,
+        });
+    }
+
     return places;
 }
 
@@ -190,7 +245,7 @@ function hit(name: string, alias: string, detail: string, term: string): number 
     if (name.startsWith(term) || alias.startsWith(term)) {
         return 80;
     }
-    if (name.includes(term)) {
+    if (name.includes(term) || alias.includes(term)) {
         return 60;
     }
     if (detail.includes(term)) {
@@ -237,14 +292,17 @@ export function score(place: Place, query: string): number {
 const RANK: Record<PlaceKind, number> = {
     agent: 0,
     card: 1,
-    worktree: 2,
-    project: 3,
-    view: 4,
-    workspace: 5,
+    file: 2,
+    worktree: 3,
+    project: 4,
+    command: 5,
+    view: 6,
+    workspace: 7,
 };
 
 /// Someone who has typed nothing is browsing, and browsing goes the other way:
 /// the widest place first, so the list reads like the structure it belongs to.
+/// Files come last: a project has thousands, and nobody browses them here.
 const BROWSE: Record<PlaceKind, number> = {
     workspace: 0,
     project: 1,
@@ -252,6 +310,8 @@ const BROWSE: Record<PlaceKind, number> = {
     agent: 3,
     card: 4,
     view: 5,
+    command: 6,
+    file: 7,
 };
 
 /// The places worth showing for what was typed, best first.

@@ -451,6 +451,7 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
         .route("/dispatch/tasks/{id}", post(dispatch_task))
         .route("/repos/{id}/files", get(list_project_files))
         .route("/repos/{id}/file", get(read_project_file))
+        .route("/repos/{id}/every-file", get(list_every_file))
         .route("/repos/{id}/review", get(review_project))
         .route("/repos/{id}/worktrees/{name}/review", get(review_worktree))
         .route("/repos/{id}/worktrees/{name}/commit", post(commit_worktree))
@@ -3380,6 +3381,16 @@ async fn list_project_files(
 ) -> Result<Json<crate::files::Listing>, ApiError> {
     let root = checkout_of(&state, &id, query.worktree.as_deref())?;
     Ok(Json(crate::files::list(&root, &query.path)?))
+}
+
+/// Every file of a checkout at once, for finding one by name.
+async fn list_every_file(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<FilesQuery>,
+) -> Result<Json<crate::files::EveryFile>, ApiError> {
+    let root = checkout_of(&state, &id, query.worktree.as_deref())?;
+    Ok(Json(crate::files::every_file(&root).await?))
 }
 
 async fn read_project_file(

@@ -1555,6 +1555,12 @@ export function photograph_pick(
     return request<PickPicture>(`/previews/${port}/shots`, { method: "POST", body: JSON.stringify(placed) });
 }
 
+/// Every file of a project's own checkout, as git sees it: tracked, or new
+/// and not ignored. Cut off past a limit, and says so.
+export function every_file(repository_id: string): Promise<{ files: string[]; cut: boolean }> {
+    return request<{ files: string[]; cut: boolean }>(`/repos/${encodeURIComponent(repository_id)}/every-file`);
+}
+
 /// Write down what was drawn on a picture on a card.
 export function set_marks(id: string, name: string, marks: Marks): Promise<Task> {
     return request<Task>(
