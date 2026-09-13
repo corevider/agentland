@@ -563,6 +563,24 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                             ? "add a project first"
                             : "or paste a screenshot anywhere on the board"}
                     </span>
+
+                    {/* The board's own switch: it is about every card that
+                        passes its checks, not about one column. */}
+                    {dispatch?.merge_when_checks_pass !== undefined ? (
+                        <span className="ml-auto flex shrink-0 items-center font-mono text-[11px]">
+                            <MergeSwitch
+                                on={dispatch.merge_when_checks_pass}
+                                arming={arming}
+                                disabled={busy}
+                                on_arm={() => set_arming(true)}
+                                on_cancel={() => set_arming(false)}
+                                on_set={(wanted) => {
+                                    set_arming(false);
+                                    void run(async () => set_dispatch(await set_merge_policy(wanted)));
+                                }}
+                            />
+                        </span>
+                    ) : null}
                 </div>
 
                 {error ? (
@@ -598,19 +616,6 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                                     {column === "ready" ? "ready to merge" : column} ·{" "}
                                     {tasks.filter((task) => task.column === column).length}
                                 </span>
-                                {column === "ready" && dispatch?.merge_when_checks_pass !== undefined ? (
-                                    <MergeSwitch
-                                        on={dispatch.merge_when_checks_pass}
-                                        arming={arming}
-                                        disabled={busy}
-                                        on_arm={() => set_arming(true)}
-                                        on_cancel={() => set_arming(false)}
-                                        on_set={(wanted) => {
-                                            set_arming(false);
-                                            void run(async () => set_dispatch(await set_merge_policy(wanted)));
-                                        }}
-                                    />
-                                ) : null}
                             </header>
 
                             <Column
@@ -988,7 +993,7 @@ function MergeSwitch({
             title={
                 on
                     ? "cards that pass every check merge themselves — click to turn this off"
-                    : "cards that pass every check wait here for you — click to let them merge themselves"
+                    : "cards that pass every check wait in ready to merge for you — click to let them merge themselves"
             }
         >
             auto-merge {on ? "on" : "off"}
