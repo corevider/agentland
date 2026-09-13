@@ -1586,7 +1586,7 @@ fn spawn_supervisor(state: AppState) {
                 let live = agent
                     .session_id
                     .as_ref()
-                    .filter(|id| state.manager.get(id).is_some())
+                    .filter(|id| state.manager.live(id).is_some())
                     .cloned();
 
                 let session_id = match live {
@@ -1599,16 +1599,13 @@ fn spawn_supervisor(state: AppState) {
                             continue;
                         }
 
-                        let Some(worktree) = state.repos.worktrees().into_iter().find(|entry| {
-                            entry.worktree.repository_id == agent.repository_id
-                                && entry.worktree.name == agent.worktree
-                        }) else {
+                        let Ok(sits) = where_it_sits(&state, &agent) else {
                             state.crew_words.lock().remove(&agent_id);
                             continue;
                         };
 
                         let text = words.join("\n\n");
-                        match state.crew.start(&agent.id, &worktree.worktree.path, true, Some(&text)) {
+                        match state.crew.start(&agent.id, &sits, true, Some(&text)) {
                             Ok(started) => {
                                 state.crew_words.lock().remove(&agent_id);
                                 state.journal.write(
@@ -2682,7 +2679,7 @@ async fn hand_the_work_over(
     let live = agent
         .session_id
         .as_ref()
-        .filter(|id| state.manager.get(id).is_some())
+        .filter(|id| state.manager.live(id).is_some())
         .cloned();
 
     let Some(session_id) = live else {
@@ -4341,7 +4338,7 @@ async fn send_mail(
         .into_iter()
         .find(|agent| agent.id == sent.to)
         .and_then(|agent| agent.session_id)
-        .is_some_and(|id| state.manager.get(&id).is_some());
+        .is_some_and(|id| state.manager.live(&id).is_some());
 
     if !listening {
         return Ok(Json(sent));
@@ -5302,7 +5299,7 @@ fn holdings_of(state: &AppState, agent: &crate::crew::Agent) -> Holdings {
     let pane_running = agent
         .session_id
         .as_ref()
-        .is_some_and(|id| state.manager.get(id).is_some());
+        .is_some_and(|id| state.manager.live(id).is_some());
 
     let uncommitted = held.as_ref().map_or(0, |status| status.dirty_files);
     let unpushed = held.as_ref().map_or(0, |status| status.ahead);
@@ -5910,7 +5907,7 @@ fn projects_under(state: &AppState, workspace: &Workspace) -> Vec<UnderTheChief>
             let at_its_desk = commander
                 .as_ref()
                 .and_then(|held| held.session_id.clone())
-                .is_some_and(|id| state.manager.get(&id).is_some());
+                .is_some_and(|id| state.manager.live(&id).is_some());
 
             UnderTheChief {
                 repository_id: repository.id.clone(),
@@ -6597,7 +6594,7 @@ async fn said_elsewhere(
         let session_id = held
             .session_id
             .clone()
-            .filter(|id| state.manager.get(id).is_some())
+            .filter(|id| state.manager.live(id).is_some())
             .ok_or_else(|| anyhow::anyhow!("{} has no pane open", held.name))?;
 
         if !say_it(&state, &session_id, &text).await {

@@ -1008,9 +1008,10 @@ impl Crew {
             .ok_or_else(|| anyhow!("unknown agent: {id}"))?;
 
         if let Some(session_id) = &agent.session_id {
-            if self.manager.get(session_id).is_some() {
+            if self.manager.live(session_id).is_some() {
                 bail!("{id} is already running");
             }
+            let _ = self.manager.remove(session_id);
         }
 
         // A pane opened at a folder that is not there does not fail: it opens in

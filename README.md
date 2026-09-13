@@ -189,8 +189,15 @@ Verified end to end: register → worktree on port 4100 → `package.json (dev s
 
 An agent is a record, not a terminal: a name, a role, an engine, and a worktree it owns. Engines are
 detected by asking each known CLI for its version, so the hire form only offers what is actually on
-this machine. Starting an agent spawns its engine as a pty inside its own worktree, with `--continue`
-or the engine's equivalent when resuming.
+this machine. Starting an agent spawns its engine as a pty inside its own worktree, resuming its own
+conversation by id where the engine keeps one, and with `--continue` or the engine's equivalent
+otherwise — for Claude, only where a conversation was actually left in that folder. Told to continue
+in an empty one, Claude says `No conversation found to continue` and quits: a chief woken by a message
+at a desk it had never spoken at did exactly that, every time.
+
+A pane whose process has exited stays listed so its last screen can be read, and it counts as gone
+everywhere else. Counted as running, it swallowed every message typed at it, and a restart was
+refused as already running.
 
 Verified with Claude Code: hire → start → the engine opens in
 `data/worktrees/<repo>/work1` and its output is captured to `sessions/<id>.log`. Hiring against a
