@@ -3,7 +3,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
     activate_workspace,
     create_workspace,
-    list_engines,
     list_repos,
     list_workspaces,
     remove_workspace,
@@ -14,6 +13,7 @@ import {
     type Workspace,
 } from "@/lib/core";
 import { Picker } from "@/components/Picker";
+import { hireable_engines } from "@/lib/hiring_rules";
 
 interface Props {
     /// Changes when someone else activated a workspace; the tabs re-read on it.
@@ -115,8 +115,8 @@ export function WorkspaceTabs({ turn, active, on_active, on_switched, counts }: 
     }, [name]);
 
     useEffect(() => {
-        list_engines()
-            .then((known) => set_engines(known.filter((engine) => engine.installed)))
+        hireable_engines()
+            .then(set_engines)
             .catch(() => undefined);
     }, []);
 

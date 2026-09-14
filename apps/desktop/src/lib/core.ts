@@ -634,6 +634,53 @@ export function set_account_failover(on: boolean): Promise<AccountsReport> {
     });
 }
 
+/// What the crew may hire onto, as the person set it. Kept as what is closed,
+/// so an engine or a login nobody has mentioned is open.
+export interface HiringRules {
+    closed_engines: string[];
+    /// `engine/label` for a second login, the engine's id alone for the
+    /// machine's own.
+    closed_logins: string[];
+    notes: Record<string, string>;
+}
+
+export interface HireableLogin {
+    /// Null for the login this machine is signed in as.
+    account: string | null;
+    open: boolean;
+    /// Null where the engine cannot be asked.
+    signed_in: boolean | null;
+    room: "plenty" | "tight" | "spent";
+    session_percent: number | null;
+    weekly_percent: number | null;
+}
+
+export interface HireableEngine {
+    id: string;
+    name: string;
+    installed: boolean;
+    takes_the_tools: boolean;
+    open: boolean;
+    note: string | null;
+    logins: HireableLogin[];
+}
+
+export interface HiringReport {
+    rules: HiringRules;
+    engines: HireableEngine[];
+}
+
+export function read_hiring(): Promise<HiringReport> {
+    return request<HiringReport>("/hiring");
+}
+
+export function set_hiring(rules: HiringRules): Promise<HiringReport> {
+    return request<HiringReport>("/hiring", {
+        method: "POST",
+        body: JSON.stringify(rules),
+    });
+}
+
 /// A whisper.cpp model on offer, with what it costs to fetch.
 export interface WhisperModel {
     id: string;

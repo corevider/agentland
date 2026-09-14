@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { AccountsSection } from "@/components/AccountsSection";
+import { HiringSection } from "@/components/HiringSection";
 import { UpdatesSection } from "@/components/UpdatesSection";
 import { PhoneSection } from "@/components/PhoneSection";
 import { StandardsSection } from "@/components/StandardsSection";
@@ -13,11 +14,21 @@ const PANE_CHOICES = [1, 2, 4, 8, 12];
 const RATE_CHOICES = [1_000, 5_000, 10_000, 20_000, 50_000];
 const DURATION_CHOICES = [10_000, 30_000, 60_000];
 
-type SectionId = "updates" | "accounts" | "phone" | "standards" | "voice" | "benchmark" | "terminal" | "diagnostics";
+type SectionId =
+    | "updates"
+    | "accounts"
+    | "hiring"
+    | "phone"
+    | "standards"
+    | "voice"
+    | "benchmark"
+    | "terminal"
+    | "diagnostics";
 
 const SECTIONS: Array<{ id: SectionId; label: string; hint: string }> = [
     { id: "updates", label: "Updates", hint: "What version this is, and what is out" },
     { id: "accounts", label: "Logins", hint: "Which subscription each agent spends from" },
+    { id: "hiring", label: "Hiring", hint: "Which engines and logins the crew may use" },
     { id: "phone", label: "Phone", hint: "Point a camera at it and you are in" },
     { id: "standards", label: "House rules", hint: "What every agent is told, every turn" },
     { id: "voice", label: "Voice", hint: "Speaking to the crew instead of typing" },
@@ -122,6 +133,8 @@ export function SettingsPage({
                     {section === "updates" ? <UpdatesSection /> : null}
 
                     {section === "accounts" ? <AccountsSection /> : null}
+
+                    {section === "hiring" ? <HiringSection /> : null}
 
                     {section === "phone" ? <PhoneSection /> : null}
 

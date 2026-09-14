@@ -18,6 +18,7 @@ pub mod files;
 pub mod gateway;
 pub mod goals;
 pub mod health;
+pub mod hiring;
 pub mod issues;
 pub mod journal;
 pub mod mail;

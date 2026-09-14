@@ -2404,6 +2404,18 @@ Every run above was Claude throughout. Codex has since been measured signed in �
 the Codex section says what that took — and Cursor is still installed on this
 machine without a login.
 
+**Which of them the crew may use is the person's to say.** Settings → Hiring
+lists every installed engine and every login on it. Closing one takes it out of
+what `crew_engines` shows the chief and the commanders and out of every picker in
+the window, and a hire or a move onto it is refused with the open ones named
+instead — so whoever is hiring chooses again rather than stops. Each engine takes
+a line in the person's own words, "implementers and tests, not reviews", which the
+commanders are told to read as the rule for that engine, and each login shows how
+much of its week and five hours is gone, so new hires spread towards the ones
+with room. Nothing is closed until somebody closes it: a new install or a second
+login is usable at once. Changing the rules is refused to the crew's own tokens;
+an agent that could open an engine for itself would make the rule a suggestion.
+
 ## A person beside the crew
 
 Seven things were added for the person watching the crew rather than for the
