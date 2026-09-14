@@ -144,8 +144,14 @@ pub fn reading(engine_id: &str, said: &str) -> (bool, Option<String>, Option<Str
                 .split_whitespace()
                 .find(|word| word.contains('@') && word.contains('.'))
                 .map(|word| word.trim_matches(|c: char| !c.is_ascii_graphic() || c == ',').to_owned());
+            let plan = said
+                .split_once("using ")
+                .filter(|_| signed_in)
+                .and_then(|(_, rest)| rest.split(" - ").next())
+                .map(|how| how.trim().trim_end_matches('.').to_owned())
+                .filter(|how| !how.is_empty());
 
-            (signed_in, who, None)
+            (signed_in, who, plan)
         }
     }
 }
@@ -268,6 +274,21 @@ pub fn forget(data_dir: &Path, engine_id: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
+/// What a status command answered.
+///
+/// Codex writes its answer to stderr and leaves stdout empty — measured on
+/// `codex-cli 0.153.4`, where a login that had just said "Successfully logged
+/// in" read as nobody because only stdout was read. So the other stream is
+/// read when the first one says nothing.
+fn what_it_said(stdout: &[u8], stderr: &[u8]) -> String {
+    let said = String::from_utf8_lossy(stdout);
+    if said.trim().is_empty() {
+        String::from_utf8_lossy(stderr).into_owned()
+    } else {
+        said.into_owned()
+    }
+}
+
 /// What the engine says about one login, asked now.
 pub fn status_of(data_dir: &Path, engine_id: &str, label: &str) -> Account {
     let label = slugify(label);
@@ -285,7 +306,7 @@ pub fn status_of(data_dir: &Path, engine_id: &str, label: &str) -> Account {
             .output()
             .ok()
             .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+            .map(|output| what_it_said(&output.stdout, &output.stderr))
     });
 
     let (signed_in, who, plan) = said
@@ -444,6 +465,26 @@ mod tests {
 
         assert!(!signed_in, "an unreadable answer is not a yes");
         assert!(who.is_none() && plan.is_none());
+    }
+
+    #[test]
+    fn codex_answers_on_stderr_and_is_still_heard() {
+        let said = what_it_said(b"", b"Logged in using ChatGPT\n");
+
+        assert_eq!(reading("codex", &said), (true, None, Some("ChatGPT".to_owned())));
+    }
+
+    #[test]
+    fn an_answer_on_stdout_is_the_one_read() {
+        assert_eq!(what_it_said(b"{\"loggedIn\":true}", b"a warning nobody asked for"), "{\"loggedIn\":true}");
+    }
+
+    #[test]
+    fn a_key_in_the_answer_is_not_repeated_as_the_plan() {
+        let (signed_in, _, plan) = reading("codex", "Logged in using an API key - sk-proj-***abcd");
+
+        assert!(signed_in);
+        assert_eq!(plan.as_deref(), Some("an API key"));
     }
 
     #[test]
