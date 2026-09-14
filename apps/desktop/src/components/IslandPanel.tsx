@@ -23,6 +23,7 @@ import {
 } from "@/lib/core";
 import { probe_gpu } from "@/lib/gpu";
 import { spread_labels, type Label } from "@/lib/labels";
+import { CROWN, crown_of } from "@/lib/commander";
 import { is_tauri } from "@/lib/core";
 
 interface Props {
@@ -31,6 +32,23 @@ interface Props {
 }
 
 /// A step's title is a sentence; on a marker there is room for a few words.
+/// The crown on a name tag, so the chief standing on the island reads as the
+/// chief and not as one more robot — and a commander as a commander.
+function CrownMark({ role, worded = true }: { role: string; worded?: boolean }) {
+    const crown = crown_of(role);
+    if (!crown) {
+        return null;
+    }
+
+    const { glyph, word, colour, says } = CROWN[crown];
+    return (
+        <span data-crown={crown} className="mr-1 font-semibold" style={{ color: colour }} title={says}>
+            {glyph}
+            {worded && word ? ` ${word} ·` : ""}
+        </span>
+    );
+}
+
 function short(title: string, most = 20): string {
     const trimmed = title.trim();
     return trimmed.length <= most ? trimmed : `${trimmed.slice(0, most - 1)}…`;
@@ -498,6 +516,7 @@ export function IslandPanel({ active, on_open_session }: Props) {
                                     key={agent.id}
                                     className="border border-reef px-2 py-1 font-mono text-[11px] rounded-lg"
                                 >
+                                    <CrownMark role={agent.role} worded={false} />
                                     {agent.title ?? agent.name} · {agent.role} · {agent.presence}
                                 </span>
                             ))}
@@ -526,6 +545,7 @@ export function IslandPanel({ active, on_open_session }: Props) {
                                               PRESENCE_COLOR[agent.presence] ?? PRESENCE_COLOR.idle,
                                       }}
                                   />
+                                  <CrownMark role={agent.role} />
                                   {agent.title ?? agent.name}
                               </div>
                           ))

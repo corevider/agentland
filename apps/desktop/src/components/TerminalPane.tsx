@@ -21,6 +21,7 @@ import {
     type SessionInfo,
 } from "@/lib/core";
 import { as_typed } from "@/lib/drops";
+import { CROWN, type Crown } from "@/lib/commander";
 
 /// Its own kind, so a task card dropped on the island and a terminal dragged
 /// across the grid are never mistaken for one another.
@@ -64,10 +65,10 @@ interface Props {
     /// what it is allowed to be doing, which is the thing a person is actually
     /// asking when they look at a pane they renamed a week ago.
     crew_role?: string | null;
-    /// A commander: of a project, or of the whole workspace. Marked because it
-    /// is the one to talk to — it hands the work out and everybody else is
-    /// working to what it decided.
-    crowned?: boolean;
+    /// A commander: of a project, or of the whole workspace — the chief. Marked
+    /// because it is the one to talk to, and marked apart because the chief
+    /// answers for every project and a commander for one.
+    crown?: Crown | null;
     /// Somebody's pane: closing it puts it away and the agent keeps running.
     kept?: boolean;
     on_close?: (id: string) => void;
@@ -111,7 +112,7 @@ function collapse_to_tail(data: Uint8Array): Uint8Array {
     return result;
 }
 
-export function TerminalPane({ session, crowned, kept = false, focused, on_focus, on_metrics, label, place, crew_name, crew_role, on_close, on_zoom, zoomed, on_add, on_tear_out, readable = false, on_readable, on_menu, stats_from, now_from, on_pick_up, on_drop_on, wanted = false }: Props) {
+export function TerminalPane({ session, crown, kept = false, focused, on_focus, on_metrics, label, place, crew_name, crew_role, on_close, on_zoom, zoomed, on_add, on_tear_out, readable = false, on_readable, on_menu, stats_from, now_from, on_pick_up, on_drop_on, wanted = false }: Props) {
     const host_ref = useRef<HTMLDivElement>(null);
     const screen_ref = useRef<Terminal | null>(null);
     const gpu_ref = useRef<WebglAddon | null>(null);
@@ -142,6 +143,7 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
     // The commander is read while something else is being watched: it is the
     // one pane a person glances at to see whether the crew is still moving, so
     // it draws every frame whether or not it has the focus.
+    const crowned = crown != null;
     const crowned_ref = useRef(crowned);
     crowned_ref.current = crowned;
     const [renderer, set_renderer] = useState("dom");
@@ -528,17 +530,28 @@ export function TerminalPane({ session, crowned, kept = false, focused, on_focus
                 title={on_pick_up ? "drag this bar to move the terminal" : undefined}
             >
                 <span className={`size-[7px] shrink-0 rounded-full ${tint}`} title={state} />
-                {crowned ? (
+                {crown ? (
                     <span
-                        className="flex shrink-0 items-center rounded bg-sun px-1.5 py-[2px] text-[13px] leading-none text-lagoon-deep shadow-[0_0_10px_rgba(240,180,60,0.35)]"
-                        title="a commander — it hands the work out rather than doing it"
-                        aria-label="commander"
+                        data-crown={crown}
+                        className="flex shrink-0 items-center gap-1 rounded px-1.5 py-[2px] text-[13px] leading-none text-lagoon-deep"
+                        style={{
+                            backgroundColor: CROWN[crown].colour,
+                            boxShadow: `0 0 10px ${CROWN[crown].colour}59`,
+                        }}
+                        title={CROWN[crown].says}
+                        aria-label={crown}
                     >
-                        ♚
+                        {CROWN[crown].glyph}
+                        {CROWN[crown].word ? (
+                            <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.12em]">
+                                {CROWN[crown].word}
+                            </span>
+                        ) : null}
                     </span>
                 ) : null}
                 <span
-                    className={`truncate text-[12px] ${crowned ? "font-semibold text-sun" : "text-linen"}`}
+                    className={`truncate text-[12px] ${crown ? "font-semibold" : "text-linen"}`}
+                    style={crown ? { color: CROWN[crown].colour } : undefined}
                 >
                     {label ?? session.id}
                 </span>

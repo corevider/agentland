@@ -28,6 +28,33 @@ export interface Commanding {
     workspace_id: string | null;
 }
 
+/// Which crown an agent wears: the chief of a workspace, the commander of a
+/// project, or none.
+///
+/// Both command, and both were marked alike — so a pane or a station that said
+/// "commander" could be either, and the one that answers for the whole
+/// workspace looked like the one that answers for a single project.
+export type Crown = "chief" | "commander";
+
+export function crown_of(role: string | null | undefined): Crown | null {
+    return role === "chief" || role === "commander" ? role : null;
+}
+
+export const CROWN: Record<Crown, { glyph: string; word: string | null; colour: string; says: string }> = {
+    chief: {
+        glyph: "♛",
+        word: "chief",
+        colour: "#46bfb0",
+        says: "the chief — it commands the workspace's projects through their commanders",
+    },
+    commander: {
+        glyph: "♚",
+        word: null,
+        colour: "#f0a95c",
+        says: "a commander — it hands the work out rather than doing it",
+    },
+};
+
 export function chief_of<T extends Commanding>(crew: T[], workspace_id: string | null): T | undefined {
     if (!workspace_id) {
         return undefined;

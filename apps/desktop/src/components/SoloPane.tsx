@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import { Waiting } from "@/components/Spinner";
 import { TerminalPane, type PaneMetrics } from "@/components/TerminalPane";
+import { crown_of } from "@/lib/commander";
 import { list_agents, list_sessions, set_window, type Agent, type SessionInfo } from "@/lib/core";
 
 /// One pane, in a window of its own. The pty is the same one the grid was
@@ -66,7 +67,7 @@ export function SoloPane({ session_id }: { session_id: string }) {
                     <TerminalPane
                         session={session}
                         label={label}
-                        crowned={held?.role === "commander" || held?.role === "chief"}
+                        crown={crown_of(held?.role)}
                         focused
                         readable={readable}
                         on_readable={(wanted) => {

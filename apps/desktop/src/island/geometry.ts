@@ -186,7 +186,8 @@ export function seeded_random(seed: string): () => number {
     };
 }
 
-export const ROLE_SHAPE: Record<string, "workbench" | "watchtower" | "radio" | "crane" | "hut"> = {
+export const ROLE_SHAPE: Record<string, "workbench" | "watchtower" | "radio" | "crane" | "flag" | "hut"> = {
+    chief: "flag",
     implementer: "workbench",
     reviewer: "watchtower",
     tester: "radio",
