@@ -25,7 +25,8 @@ import { CrewPanel } from "@/components/CrewPanel";
 import { RepoPanel } from "@/components/RepoPanel";
 import { NoticeBell } from "@/components/NoticeBell";
 import { Jumper, PlaceTrail } from "@/components/Jumper";
-import { ask_for_card } from "@/lib/asked_card";
+import { ask_for_a_new_card, ask_for_card } from "@/lib/asked_card";
+import { ask_for_file } from "@/lib/asked_file";
 import { SettingsPage } from "@/components/SettingsPage";
 import { TerminalPane, type PaneMetrics } from "@/components/TerminalPane";
 import {
@@ -647,6 +648,36 @@ export default function App() {
         [crew, open_session, focus_panel],
     );
     go_and_see_ref.current = go_and_see;
+
+    // What the jumper can do besides going somewhere: what the header, the
+    // window menu and the board already offer, found by name.
+    const jump_commands = useMemo(
+        () => [
+            ...PRESETS.map((preset) => ({
+                id: `layout:${preset.id}`,
+                label: `Layout · ${preset.label}`,
+                hint: preset.hint,
+                run: () => set_layout(preset.build()),
+            })),
+            {
+                id: "new-card",
+                label: "New card",
+                hint: "write a card on the board",
+                run: () => {
+                    ask_for_a_new_card();
+                    focus_panel("board");
+                },
+            },
+            { id: "settings", label: "Settings", hint: "renderer, panes, updates", run: () => set_settings_open(true) },
+            {
+                id: "reload",
+                label: "Reload the interface",
+                hint: "read everything again",
+                run: () => window.location.reload(),
+            },
+        ],
+        [set_layout, focus_panel],
+    );
     const [crew_count, set_crew_count] = useState(0);
     const [card_count, set_card_count] = useState(0);
 
@@ -851,10 +882,30 @@ export default function App() {
             <Jumper
                 open={jumping}
                 views={PANELS}
+                commands={jump_commands}
+                open_shell_in={(cwd) => {
+                    spawn_default_shell(cwd)
+                        .then(adopt_session)
+                        .catch((cause) => set_error(String(cause)));
+                    focus_panel("panes");
+                }}
                 on_close={() => set_jumping(false)}
                 on_go={(place) => {
                     if (place.kind === "view") {
                         focus_panel(place.id.slice("view:".length));
+                        return;
+                    }
+
+                    // A file opens in Files & Git. Not through `going`, which
+                    // clears the panel's folder and whatever it had open.
+                    if (place.kind === "file" && place.repository_id) {
+                        set_workspace_turn((turn) => turn + 1);
+                        ask_for_file({
+                            repository_id: place.repository_id,
+                            worktree: null,
+                            path: place.alias ?? place.name,
+                        });
+                        focus_panel("project");
                         return;
                     }
 

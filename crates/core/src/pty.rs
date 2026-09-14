@@ -389,6 +389,12 @@ impl PtyManager {
         self.sessions.lock().get(id).cloned()
     }
 
+    /// A session whose process is still running. One that exited stays listed
+    /// so its last screen can be read, and it is nowhere to type.
+    pub fn live(&self, id: &str) -> Option<Arc<Session>> {
+        self.get(id).filter(|session| session.alive())
+    }
+
     pub fn list(&self) -> Vec<SessionInfo> {
         self.sessions
             .lock()
@@ -478,5 +484,32 @@ mod spawn_tests {
             .expect_err("a missing folder is not a place to open a shell");
 
         assert!(refused.to_string().contains("not a folder"), "{refused}");
+    }
+
+    /// The chief this was written for quit the moment it started, and its pane
+    /// stayed listed: messages were typed into it and a restart was refused as
+    /// already running.
+    #[cfg(unix)]
+    #[test]
+    fn a_pane_whose_process_exited_is_listed_but_not_live() {
+        let manager = PtyManager::new();
+        let info = manager
+            .spawn(PtySpawnSpec {
+                command: "sh".into(),
+                args: vec!["-c".into(), "exit 0".into()],
+                cwd: None,
+                cols: 80,
+                rows: 24,
+                env: Default::default(),
+            })
+            .unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while manager.live(&info.id).is_some() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        assert!(manager.get(&info.id).is_some());
+        assert!(manager.live(&info.id).is_none());
     }
 }

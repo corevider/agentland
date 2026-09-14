@@ -108,6 +108,11 @@ const world: World = {
         { id: "board", label: "Board", hint: "cards and their evidence" },
         { id: "approvals", label: "Approvals", hint: "the agents that are blocked on you" },
     ],
+    files: [{ repository_id: "svc-demo", files: ["src/server.js", "src/routes/health.js", "README.md"] }],
+    commands: [
+        { id: "layout:work", label: "Layout · Work", hint: "the board beside the terminals" },
+        { id: "settings", label: "Settings", hint: "renderer, panes, updates" },
+    ],
 };
 
 describe("the places a person can go", () => {
@@ -383,5 +388,40 @@ describe("cards and views in the jumper", () => {
 
     it("still puts a person before the card that mentions them", () => {
         expect(search_places(places, "ada")[0]?.kind).toBe("agent");
+    });
+});
+
+describe("files and commands in the jumper", () => {
+    const places = places_from(world);
+
+    it("finds a file by its name, and says which project and folder it is in", () => {
+        const found = search_places(places, "health");
+
+        expect(found[0]?.id).toBe("file:svc-demo:src/routes/health.js");
+        expect(found[0]?.name).toBe("health.js");
+        expect(found[0]?.detail).toBe("svc-demo · src/routes");
+        expect(places.find((place) => place.id === "file:svc-demo:README.md")?.detail).toBe("svc-demo · /");
+    });
+
+    it("finds a file by a piece of its path", () => {
+        expect(search_places(places, "routes/health")[0]?.id).toBe("file:svc-demo:src/routes/health.js");
+    });
+
+    it("files a file under its project's workspace", () => {
+        const file = places.find((place) => place.id === "file:svc-demo:src/server.js")!;
+
+        expect(file.workspace_id).toBe("w2");
+        expect(needs_switch(file, "w1")).toBe(true);
+    });
+
+    it("finds a command by its words, and it switches nothing", () => {
+        const found = search_places(places, "layout work")[0];
+
+        expect(found?.id).toBe("command:layout:work");
+        expect(needs_switch(found!, "w2")).toBe(false);
+    });
+
+    it("shows no file while nobody has typed anything", () => {
+        expect(search_places(places, "").some((place) => place.kind === "file")).toBe(false);
     });
 });

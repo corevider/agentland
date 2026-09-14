@@ -9,6 +9,9 @@ export interface Pick {
     text: string;
     styles: Record<string, string>;
     box: { x: number; y: number; width: number; height: number };
+    /// How far the page had been scrolled, so the element can be found again
+    /// on the page itself.
+    scroll?: { x: number; y: number };
     viewport: { width: number; height: number };
 }
 
@@ -57,9 +60,21 @@ export function page_on(service: Service, seen: string): string {
     }
 }
 
+/// The page's path and query, which is what the dev server is asked for when
+/// the page is rendered again.
+export function path_of(seen: string): string {
+    try {
+        const at = new URL(seen);
+        return `${at.pathname}${at.search}` || "/";
+    } catch {
+        return "/";
+    }
+}
+
 /// What the agent reads: the person's words first, then where the element is
-/// and what it is made of — enough to find it in the code without asking.
-export function design_note(pick: Pick, said: string, service: Service): string {
+/// and what it is made of — enough to find it in the code without asking —
+/// and a picture of it when one could be taken.
+export function design_note(pick: Pick, said: string, service: Service, picture?: string | null): string {
     const styles = Object.entries(pick.styles)
         .filter(([, value]) => worth_saying(value))
         .map(([name, value]) => `  ${name}: ${value};`);
@@ -76,6 +91,11 @@ export function design_note(pick: Pick, said: string, service: Service): string 
         pick.html,
         "```",
         ...(styles.length > 0 ? ["- the styles set on it:", "```css", ...styles, "```"] : []),
+        ...(picture
+            ? [
+                  `- a picture of it, cut from the page rendered again at the same width (a menu held open or text typed in is not in it): ${picture}`,
+              ]
+            : []),
         "",
         "Find where this is rendered in the code, make the change, and say what you changed.",
     ].join("\n");

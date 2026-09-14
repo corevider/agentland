@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Agent, Service } from "@/lib/core";
-import { design_note, page_on, recipients, worth_saying, type Pick } from "@/lib/design";
+import { design_note, page_on, path_of, recipients, worth_saying, type Pick } from "@/lib/design";
 
 const service: Service = {
     key: "shop/ada-tree",
@@ -59,5 +59,20 @@ describe("a pick from the preview", () => {
         expect(note).toContain("  display: inline-flex;");
         expect(note).not.toContain("margin");
         expect(note).not.toContain("40331");
+        expect(note).not.toContain("a picture of it");
+    });
+
+    it("asks the dev server for the page's path and query, not its fragment", () => {
+        expect(path_of(pick.url)).toBe("/cart?step=2");
+        expect(path_of("not a url")).toBe("/");
+    });
+
+    it("hands over the picture when one was taken, and says what it is", () => {
+        const note = design_note(pick, "Bigger", service, "/data/drops/shots/1789-element.png");
+
+        expect(note).toContain(
+            "- a picture of it, cut from the page rendered again at the same width (a menu held open or text typed in is not in it): /data/drops/shots/1789-element.png",
+        );
+        expect(note.trim().endsWith("say what you changed.")).toBe(true);
     });
 });

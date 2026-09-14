@@ -19,6 +19,21 @@ export function take_asked_card(): string | null {
     return held;
 }
 
+let asked_new = false;
+
+/// Ask the board to start a new card, the way "+ new card" does.
+export function ask_for_a_new_card(): void {
+    asked_new = true;
+    window.dispatchEvent(new CustomEvent(ASKED));
+}
+
+/// Whether a new card was asked for, once: taking it clears it.
+export function take_new_card_ask(): boolean {
+    const held = asked_new;
+    asked_new = false;
+    return held;
+}
+
 export function on_card_asked(listen: () => void): () => void {
     window.addEventListener(ASKED, listen);
     return () => window.removeEventListener(ASKED, listen);

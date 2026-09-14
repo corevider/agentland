@@ -1,8 +1,17 @@
 import { use_poll } from "@/lib/poll";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { list_agents, list_services, open_preview, send_mail, type Agent, type Service } from "@/lib/core";
-import { design_note, recipients, type Pick } from "@/lib/design";
+import {
+    list_agents,
+    list_services,
+    open_preview,
+    photograph_pick,
+    send_mail,
+    type Agent,
+    type PickPicture,
+    type Service,
+} from "@/lib/core";
+import { design_note, path_of, recipients, type Pick } from "@/lib/design";
 import { Picker } from "@/components/Picker";
 
 interface Props {
@@ -30,6 +39,33 @@ export function PreviewPanel({ active }: Props) {
     const [said, set_said] = useState("");
     const [sent, set_sent] = useState<string | null>(null);
 
+    /// A picture of what was picked: being taken, taken, or why it could not be.
+    const [shot, set_shot] = useState<"taking" | PickPicture | { error: string } | null>(null);
+    const port_ref = useRef<number | null>(null);
+    const turn_ref = useRef(0);
+
+    // Taken the moment a pick arrives, from the dev server the pick came from.
+    // A picture that comes back after another pick was made belongs to the
+    // old one and is dropped.
+    const take_picture = (picked: Pick) => {
+        const port = port_ref.current;
+        turn_ref.current += 1;
+        const turn = turn_ref.current;
+        if (port === null) {
+            set_shot(null);
+            return;
+        }
+        set_shot("taking");
+        photograph_pick(port, {
+            path: path_of(picked.url),
+            box: picked.box,
+            scroll: picked.scroll ?? { x: 0, y: 0 },
+            viewport: picked.viewport,
+        })
+            .then((taken) => turn === turn_ref.current && set_shot(taken))
+            .catch((cause) => turn === turn_ref.current && set_shot({ error: message_of(cause) }));
+    };
+
     const refresh = useCallback(async () => {
         try {
             const running = await list_services();
@@ -47,6 +83,7 @@ export function PreviewPanel({ active }: Props) {
 
     const current = services.find((service) => service.key === selected) ?? null;
     const design = designing && current && designing.key === current.key ? designing : null;
+    port_ref.current = current?.port ?? null;
 
     // The crew is read with the dev servers while design mode is on, so a pick
     // can be addressed the moment it is made.
@@ -81,6 +118,7 @@ export function PreviewPanel({ active }: Props) {
                 set_picking(false);
                 set_pick(message.pick);
                 set_sent(null);
+                take_picture(message.pick);
             } else if (message.agentland === "stopped") {
                 set_picking(false);
             }
@@ -130,7 +168,8 @@ export function PreviewPanel({ active }: Props) {
         if (!pick || !current || !chosen || !said.trim()) {
             return;
         }
-        send_mail("a person", chosen, design_note(pick, said, current))
+        const picture = shot && typeof shot === "object" && "path" in shot ? shot.path : null;
+        send_mail("a person", chosen, design_note(pick, said, current, picture))
             .then(() => {
                 set_sent(`sent to ${chosen} · it reads this when its pane is quiet`);
                 set_said("");
@@ -201,6 +240,19 @@ export function PreviewPanel({ active }: Props) {
                     {pick.text ? (
                         <div className="truncate text-[11px] text-shell">“{pick.text.replace(/\s+/g, " ").slice(0, 160)}”</div>
                     ) : null}
+                    <div data-pick-picture className="font-mono text-[10px] text-shade">
+                        {shot === "taking" ? (
+                            "taking a picture of it…"
+                        ) : shot && "png" in shot ? (
+                            <img
+                                src={`data:image/png;base64,${shot.png}`}
+                                alt="the picked element, rendered again"
+                                className="max-h-24 max-w-full rounded border border-reef"
+                            />
+                        ) : shot && "error" in shot ? (
+                            <span className="text-coral">no picture: {shot.error}</span>
+                        ) : null}
+                    </div>
                     <textarea
                         autoFocus
                         value={said}

@@ -10,16 +10,18 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agentland-core"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "axum",
  "axum-server",
+ "base64 0.22.1",
  "bytes",
  "crossterm",
  "futures-util",
  "keyring",
  "parking_lot",
+ "png 0.17.16",
  "portable-pty",
  "qrcode",
  "rcgen",
@@ -38,7 +40,7 @@ dependencies = [
 
 [[package]]
 name = "agentland-desktop"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "agentland-core",
  "anyhow",

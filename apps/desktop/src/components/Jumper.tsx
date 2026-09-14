@@ -4,6 +4,7 @@ import { Waiting } from "@/components/Spinner";
 
 import {
     activate_workspace,
+    every_file,
     list_agents,
     list_repos,
     list_tasks,
@@ -18,7 +19,9 @@ import {
     places_from,
     search_places,
     trail,
+    type Command,
     type Place,
+    type ProjectFiles,
     type View,
     type World,
 } from "@/lib/places";
@@ -31,6 +34,8 @@ const KIND_WORD: Record<Place["kind"], string> = {
     agent: "agent",
     card: "card",
     view: "view",
+    file: "file",
+    command: "command",
 };
 
 const KIND_TINT: Record<Place["kind"], string> = {
@@ -40,31 +45,66 @@ const KIND_TINT: Record<Place["kind"], string> = {
     agent: "text-shell",
     card: "text-coral",
     view: "text-driftwood",
+    file: "text-linen",
+    command: "text-foam",
 };
+
+/// A command the jumper can run.
+export interface RunnableCommand extends Command {
+    run: () => void;
+}
+
+/// The most projects whose files are read when the jumper opens: the ones on
+/// screen, and past this many the list is slower to read than to scroll.
+const MOST_PROJECTS_READ = 6;
 
 interface Props {
     open: boolean;
     /// The window's panels, reachable by name from any workspace.
     views: View[];
+    /// What the window can do from here, found by name.
+    commands: RunnableCommand[];
+    /// Open a shell in a folder: offered for every project on screen.
+    open_shell_in: (cwd: string) => void;
     on_close: () => void;
     /// Where to go once a place is chosen: the workspace is switched here first
     /// if the place lives in another one.
     on_go: (place: Place) => void;
 }
 
-/// The workspaces, projects, worktrees and crew, and the board's cards when
-/// they are wanted: the trail in the header polls this and has no use for them.
-async function read_world(with_cards: boolean): Promise<World> {
+/// The workspaces, projects, worktrees and crew, and — when somebody is about
+/// to search — the board's cards and the files of the projects on screen. The
+/// trail in the header polls this and has no use for either.
+async function read_world(searching: boolean): Promise<World> {
     const [workspaces, repositories, agents, cards] = await Promise.all([
         list_workspaces(),
         list_repos(),
         list_agents(),
-        with_cards ? list_tasks().catch(() => [] as Task[]) : Promise.resolve([] as Task[]),
+        searching ? list_tasks().catch(() => [] as Task[]) : Promise.resolve([] as Task[]),
     ]);
 
-    const trees = await Promise.all(
-        repositories.map((repository) => list_worktrees(repository.id).catch(() => [] as WorktreeStatus[])),
-    );
+    const on_screen = workspaces.active
+        ? repositories.filter((repository) =>
+              workspaces.workspaces
+                  .find((workspace) => workspace.id === workspaces.active)
+                  ?.repository_ids.includes(repository.id),
+          )
+        : repositories;
+
+    const [trees, files] = await Promise.all([
+        Promise.all(
+            repositories.map((repository) => list_worktrees(repository.id).catch(() => [] as WorktreeStatus[])),
+        ),
+        searching
+            ? Promise.all(
+                  on_screen.slice(0, MOST_PROJECTS_READ).map((repository) =>
+                      every_file(repository.id)
+                          .then((held): ProjectFiles => ({ repository_id: repository.id, files: held.files }))
+                          .catch(() => null),
+                  ),
+              )
+            : Promise.resolve([]),
+    ]);
 
     return {
         workspaces: workspaces.workspaces,
@@ -74,6 +114,8 @@ async function read_world(with_cards: boolean): Promise<World> {
         agents,
         cards,
         views: [],
+        files: files.filter((held): held is ProjectFiles => held !== null),
+        commands: [],
     };
 }
 
@@ -84,7 +126,7 @@ async function read_world(with_cards: boolean): Promise<World> {
 /// between all day. The cards on the board and the window's own views are two
 /// more. Typing a few letters finds any of them, a card by its id as well as
 /// its title, and choosing one switches the workspace on the way if it has to.
-export function Jumper({ open, views, on_close, on_go }: Props) {
+export function Jumper({ open, views, commands, open_shell_in, on_close, on_go }: Props) {
     const [world, set_world] = useState<World | null>(null);
     const [query, set_query] = useState("");
     const [cursor, set_cursor] = useState(0);
@@ -101,22 +143,46 @@ export function Jumper({ open, views, on_close, on_go }: Props) {
         box.current?.focus();
     }, [open]);
 
+    // The window's own commands, and a shell in each project's folder.
+    const runnable = useMemo<RunnableCommand[]>(
+        () => [
+            ...commands,
+            ...(world?.repositories ?? []).map((repository) => ({
+                id: `shell:${repository.id}`,
+                label: `Open a shell in ${repository.name}`,
+                hint: home_from([repository.primary_path])
+                    ? repository.primary_path.replace(home_from([repository.primary_path]), "~")
+                    : repository.primary_path,
+                run: () => open_shell_in(repository.primary_path),
+            })),
+        ],
+        [commands, world, open_shell_in],
+    );
+
     const found = useMemo(
         () =>
             world
                 ? search_places(
                       places_from(
-                          { ...world, views },
+                          { ...world, views, commands: runnable },
                           home_from(world.repositories.map((repo) => repo.primary_path)),
                       ),
                       query,
                   )
                 : [],
-        [world, views, query],
+        [world, views, runnable, query],
     );
 
     const go = useCallback(
         (place: Place) => {
+            // A command happens where the person already is: nothing to switch
+            // to and nowhere to go.
+            if (place.kind === "command") {
+                runnable.find((command) => `command:${command.id}` === place.id)?.run();
+                on_close();
+                return;
+            }
+
             // A place whose project belongs to no workspace is one this cannot
             // switch to, and asking to stand nowhere is refused now — so it is
             // not asked. The jump still happens; only the switch is skipped.
@@ -132,7 +198,7 @@ export function Jumper({ open, views, on_close, on_go }: Props) {
                     on_close();
                 });
         },
-        [world, on_go, on_close],
+        [world, runnable, on_go, on_close],
     );
 
     if (!open) {
@@ -152,7 +218,7 @@ export function Jumper({ open, views, on_close, on_go }: Props) {
                     ref={box}
                     autoFocus
                     className="w-full border-b border-reef bg-lagoon-deep px-3 py-2 text-[13px] text-linen outline-none"
-                    placeholder="go to a workspace, project, worktree, agent, card or view…"
+                    placeholder="go to a project, worktree, agent, card, file or view — or do something…"
                     value={query}
                     onChange={(event) => {
                         set_query(event.target.value);

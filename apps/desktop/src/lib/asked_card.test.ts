@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ask_for_card, on_card_asked, take_asked_card } from "@/lib/asked_card";
+import { ask_for_a_new_card, ask_for_card, on_card_asked, take_asked_card, take_new_card_ask } from "@/lib/asked_card";
 
 describe("a card asked for from outside the board", () => {
     beforeEach(() => {
@@ -28,6 +28,14 @@ describe("a card asked for from outside the board", () => {
         ask_for_card("t9");
 
         expect(heard).toEqual(["t8"]);
+    });
+
+    it("asks for a new card apart from any card, and once", () => {
+        ask_for_a_new_card();
+
+        expect(take_asked_card()).toBeNull();
+        expect(take_new_card_ask()).toBe(true);
+        expect(take_new_card_ask()).toBe(false);
     });
 
     it("keeps only the latest ask", () => {

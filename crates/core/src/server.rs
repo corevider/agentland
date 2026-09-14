@@ -435,6 +435,7 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
         .route("/races/{id}/winner", post(pick_the_winner))
         .route("/tasks/{id}/race", post(start_race))
         .route("/previews/{port}", post(open_preview))
+        .route("/previews/{port}/shots", post(photograph_a_pick))
         .route("/notes/{*slug}", get(read_note).delete(forget_note))
         .route("/ui/commands", get(take_ui_commands).post(queue_ui_command))
         .route(
@@ -450,6 +451,9 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
         .route("/dispatch/tasks/{id}", post(dispatch_task))
         .route("/repos/{id}/files", get(list_project_files))
         .route("/repos/{id}/file", get(read_project_file))
+        .route("/repos/{id}/every-file", get(list_every_file))
+        .route("/repos/{id}/issues", get(list_issues))
+        .route("/repos/{id}/issues/{number}/card", post(card_from_issue))
         .route("/repos/{id}/review", get(review_project))
         .route("/repos/{id}/worktrees/{name}/review", get(review_worktree))
         .route("/repos/{id}/worktrees/{name}/commit", post(commit_worktree))
@@ -1582,7 +1586,7 @@ fn spawn_supervisor(state: AppState) {
                 let live = agent
                     .session_id
                     .as_ref()
-                    .filter(|id| state.manager.get(id).is_some())
+                    .filter(|id| state.manager.live(id).is_some())
                     .cloned();
 
                 let session_id = match live {
@@ -1595,16 +1599,13 @@ fn spawn_supervisor(state: AppState) {
                             continue;
                         }
 
-                        let Some(worktree) = state.repos.worktrees().into_iter().find(|entry| {
-                            entry.worktree.repository_id == agent.repository_id
-                                && entry.worktree.name == agent.worktree
-                        }) else {
+                        let Ok(sits) = where_it_sits(&state, &agent) else {
                             state.crew_words.lock().remove(&agent_id);
                             continue;
                         };
 
                         let text = words.join("\n\n");
-                        match state.crew.start(&agent.id, &worktree.worktree.path, true, Some(&text)) {
+                        match state.crew.start(&agent.id, &sits, true, Some(&text)) {
                             Ok(started) => {
                                 state.crew_words.lock().remove(&agent_id);
                                 state.journal.write(
@@ -2009,6 +2010,7 @@ fn spawn_routine_ticker(state: AppState) {
                             repository_id: agent.repository_id.clone(),
                             // A routine runs where its agent lives.
                             worktree: Some(agent.worktree.clone()),
+                            issue: None,
                         });
 
                         match card {
@@ -2677,7 +2679,7 @@ async fn hand_the_work_over(
     let live = agent
         .session_id
         .as_ref()
-        .filter(|id| state.manager.get(id).is_some())
+        .filter(|id| state.manager.live(id).is_some())
         .cloned();
 
     let Some(session_id) = live else {
@@ -3381,6 +3383,93 @@ async fn list_project_files(
     Ok(Json(crate::files::list(&root, &query.path)?))
 }
 
+/// Every file of a checkout at once, for finding one by name.
+async fn list_every_file(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<FilesQuery>,
+) -> Result<Json<crate::files::EveryFile>, ApiError> {
+    let root = checkout_of(&state, &id, query.worktree.as_deref())?;
+    Ok(Json(crate::files::every_file(&root).await?))
+}
+
+fn on_github(state: &AppState, id: &str) -> Result<crate::repo::Repository, ApiError> {
+    let repository = state
+        .repos
+        .repositories()
+        .into_iter()
+        .find(|repository| repository.id == id)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("unknown repository: {id}")))?;
+    if !crate::issues::on_github(&repository) {
+        return Err(anyhow::anyhow!("{id} has no remote on GitHub, so it has no issues to read").into());
+    }
+    Ok(repository)
+}
+
+#[derive(Serialize)]
+struct IssueRow {
+    #[serde(flatten)]
+    issue: crate::issues::GitHubIssue,
+    /// The card already made from it, when there is one.
+    card: Option<String>,
+}
+
+/// A project's open GitHub issues, each with the card made from it if one was.
+async fn list_issues(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<IssueRow>>, ApiError> {
+    let repository = on_github(&state, &id)?;
+    let issues = crate::issues::open_issues(&repository.primary_path).await?;
+    let cards = state.board.list();
+
+    Ok(Json(
+        issues
+            .into_iter()
+            .map(|issue| IssueRow {
+                card: cards
+                    .iter()
+                    .find(|card| {
+                        card.repository_id == id && card.issue.as_ref().is_some_and(|held| held.number == issue.number)
+                    })
+                    .map(|card| card.id.clone()),
+                issue,
+            })
+            .collect(),
+    ))
+}
+
+/// Make a card out of an issue. One card per issue: a second would split the
+/// work, and both would try to close it.
+async fn card_from_issue(
+    State(state): State<AppState>,
+    Path((id, number)): Path<(String, u64)>,
+) -> Result<Json<Task>, ApiError> {
+    let repository = on_github(&state, &id)?;
+    if let Some(made) = state.board.list().into_iter().find(|card| {
+        card.repository_id == id && card.issue.as_ref().is_some_and(|held| held.number == number)
+    }) {
+        return Err(anyhow::anyhow!("{} was already made from #{number}", made.id).into());
+    }
+
+    let issue = crate::issues::issue(&repository.primary_path, number).await?;
+    let task = state.board.create(crate::issues::card_from(&issue, &id))?;
+    let task = state
+        .board
+        .attach(
+            &task.id,
+            Evidence::Note {
+                text: format!("made from GitHub issue #{number}"),
+            },
+            "a person",
+            now_secs(),
+        )
+        .unwrap_or(task);
+    note(&state, "card.from_issue", "a person", &task.id, &issue.url);
+
+    Ok(Json(task))
+}
+
 async fn read_project_file(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -3629,7 +3718,7 @@ async fn merge_worktree(
 async fn open_pull_request(
     State(state): State<AppState>,
     Path((id, name)): Path<(String, String)>,
-    Json(body): Json<PullRequestBody>,
+    Json(mut body): Json<PullRequestBody>,
 ) -> Result<Json<PullRequest>, ApiError> {
     // An entrant works toward a person's choice, not toward a review: its
     // pull request would move the card before anybody had compared the rest.
@@ -3640,6 +3729,17 @@ async fn open_pull_request(
             race.id
         )
         .into());
+    }
+
+    // A card made from an issue closes it: GitHub does that when a pull
+    // request whose body says "Closes #N" is merged.
+    if let Some(issue) = body
+        .task_id
+        .as_deref()
+        .and_then(|task_id| state.board.get(task_id))
+        .and_then(|task| task.issue)
+    {
+        body.body = crate::issues::closing(&body.body, issue.number);
     }
 
     let request = state
@@ -4238,7 +4338,7 @@ async fn send_mail(
         .into_iter()
         .find(|agent| agent.id == sent.to)
         .and_then(|agent| agent.session_id)
-        .is_some_and(|id| state.manager.get(&id).is_some());
+        .is_some_and(|id| state.manager.live(&id).is_some());
 
     if !listening {
         return Ok(Json(sent));
@@ -4920,6 +5020,47 @@ async fn open_preview(
     Ok(Json(serde_json::json!({ "url": format!("http://127.0.0.1:{proxy}/") })))
 }
 
+#[derive(Deserialize)]
+struct ShotBody {
+    /// The page, as a path on the dev server: "/cart?step=2".
+    path: String,
+    #[serde(flatten)]
+    placed: crate::shots::Placed,
+}
+
+/// A picture of the element a person picked, rendered again from the dev
+/// server itself and kept where agents may read it. Only a path on a dev
+/// server the crew started: the headless browser opens nothing else.
+async fn photograph_a_pick(
+    State(state): State<AppState>,
+    Path(port): Path<u16>,
+    Json(body): Json<ShotBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    use base64::Engine;
+
+    let service = state
+        .services
+        .list()
+        .into_iter()
+        .find(|service| service.port == port)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("no dev server of the crew's is running on port {port}")))?;
+    if !body.path.starts_with('/') || body.path.starts_with("//") {
+        return Err(anyhow::anyhow!("a page is a path on the dev server, starting with one /").into());
+    }
+
+    let url = format!("{}{}", service.url.trim_end_matches('/'), body.path);
+    let folder = drops_of(&state.config.data_dir).join("shots");
+    let path = crate::shots::photograph(&url, &body.placed, &folder).await?;
+    keep_the_newest(&folder, DROPS_KEEP);
+
+    let picture = std::fs::read(&path).map_err(anyhow::Error::from)?;
+    let path = std::fs::canonicalize(&path).unwrap_or(path);
+    Ok(Json(serde_json::json!({
+        "path": path.to_string_lossy(),
+        "png": base64::engine::general_purpose::STANDARD.encode(picture),
+    })))
+}
+
 /// Where the vault is on disk, so the human can open the same folder in whatever
 /// they keep notes in.
 async fn where_the_vault_is(State(state): State<AppState>) -> Json<VaultReport> {
@@ -5158,7 +5299,7 @@ fn holdings_of(state: &AppState, agent: &crate::crew::Agent) -> Holdings {
     let pane_running = agent
         .session_id
         .as_ref()
-        .is_some_and(|id| state.manager.get(id).is_some());
+        .is_some_and(|id| state.manager.live(id).is_some());
 
     let uncommitted = held.as_ref().map_or(0, |status| status.dirty_files);
     let unpushed = held.as_ref().map_or(0, |status| status.ahead);
@@ -5766,7 +5907,7 @@ fn projects_under(state: &AppState, workspace: &Workspace) -> Vec<UnderTheChief>
             let at_its_desk = commander
                 .as_ref()
                 .and_then(|held| held.session_id.clone())
-                .is_some_and(|id| state.manager.get(&id).is_some());
+                .is_some_and(|id| state.manager.live(&id).is_some());
 
             UnderTheChief {
                 repository_id: repository.id.clone(),
@@ -6453,7 +6594,7 @@ async fn said_elsewhere(
         let session_id = held
             .session_id
             .clone()
-            .filter(|id| state.manager.get(id).is_some())
+            .filter(|id| state.manager.live(id).is_some())
             .ok_or_else(|| anyhow::anyhow!("{} has no pane open", held.name))?;
 
         if !say_it(&state, &session_id, &text).await {

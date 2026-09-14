@@ -1008,9 +1008,10 @@ impl Crew {
             .ok_or_else(|| anyhow!("unknown agent: {id}"))?;
 
         if let Some(session_id) = &agent.session_id {
-            if self.manager.get(session_id).is_some() {
+            if self.manager.live(session_id).is_some() {
                 bail!("{id} is already running");
             }
+            let _ = self.manager.remove(session_id);
         }
 
         // A pane opened at a folder that is not there does not fail: it opens in
@@ -1109,16 +1110,19 @@ impl Crew {
                         && other.worktree == agent.worktree
                         && other.workspace_id == agent.workspace_id
                 });
-                let still_there = match (conversation.as_deref(), conversations_home(login.as_ref())) {
-                    (Some(id), Some(home)) => conversation_kept(&home, id),
+                let home = conversations_home(login.as_ref());
+                let still_there = match (conversation.as_deref(), home.as_deref()) {
+                    (Some(id), Some(home)) => conversation_kept(home, id),
                     _ => false,
                 };
+                let may_continue =
+                    !shared && home.is_some_and(|home| conversation_left_in(&home, worktree_path));
                 let (words, kept) = conversation_args(
                     flags,
                     conversation.as_deref(),
                     resume,
                     still_there,
-                    shared,
+                    may_continue,
                     engine.resume,
                     || a_conversation_id(&agent.id),
                 );
@@ -1321,14 +1325,20 @@ pub fn permission_for_role(role: &str) -> &'static str {
 /// the code; a reviewer woke inside the author's. So an agent is resumed by the
 /// id of its own conversation. One whose conversation is gone starts a new one
 /// rather than failing to start at all, and one from before ids were kept is
-/// resumed the old way only where nobody else stands — elsewhere it starts
-/// fresh, because a shorter memory is better than somebody else's.
+/// resumed the old way only where nobody else stands and a conversation was
+/// left behind — elsewhere it starts fresh, because a shorter memory is better
+/// than somebody else's.
+///
+/// And far better than none. An engine told to continue in a folder with
+/// nothing in it says so and quits: a chief woken by a message before it had
+/// ever spoken sat exited at an empty desk, kept no conversation of its own,
+/// and was woken into the same wall by every message after.
 fn conversation_args(
     flags: (&str, &str),
     kept: Option<&str>,
     resume: bool,
     still_there: bool,
-    shared: bool,
+    may_continue: bool,
     the_old_way: &[&str],
     fresh: impl FnOnce() -> String,
 ) -> (Vec<String>, Option<String>) {
@@ -1336,7 +1346,7 @@ fn conversation_args(
         if let Some(id) = kept.filter(|_| still_there) {
             return (vec![flags.1.to_owned(), id.to_owned()], Some(id.to_owned()));
         }
-        if kept.is_none() && !shared && !the_old_way.is_empty() {
+        if kept.is_none() && may_continue && !the_old_way.is_empty() {
             return (the_old_way.iter().map(|word| (*word).to_owned()).collect(), None);
         }
     }
@@ -1395,6 +1405,49 @@ fn conversation_kept(home: &Path, id: &str) -> bool {
     let wanted = format!("{id}.jsonl");
     fs::read_dir(home.join("projects"))
         .map(|folders| folders.flatten().any(|folder| folder.path().join(&wanted).is_file()))
+        .unwrap_or(false)
+}
+
+/// How long a folder's name may be before the engine cuts it and adds a hash.
+const LONGEST_PROJECT_NAME: usize = 200;
+
+/// Whether the engine left a conversation in this folder for a plain resume to
+/// open.
+///
+/// The engine files a folder's conversations under its path with every
+/// character that is not a letter or a digit made a dash, and cuts a long one
+/// short with a hash after it — so a long one is matched on its start. A name
+/// guessed wrong says there is nothing, and the agent starts fresh.
+fn conversation_left_in(home: &Path, folder: &Path) -> bool {
+    let named: String = folder
+        .to_string_lossy()
+        .chars()
+        .map(|character| if character.is_ascii_alphanumeric() { character } else { '-' })
+        .collect();
+    let start = &named[..named.len().min(LONGEST_PROJECT_NAME)];
+    let is_ours = |name: &str| {
+        name.eq_ignore_ascii_case(&named)
+            || (named.len() > LONGEST_PROJECT_NAME
+                && name.len() > start.len()
+                && name.get(..start.len()).is_some_and(|head| head.eq_ignore_ascii_case(start)))
+    };
+
+    fs::read_dir(home.join("projects"))
+        .map(|folders| {
+            folders.flatten().any(|entry| {
+                is_ours(&entry.file_name().to_string_lossy()) && holds_a_transcript(&entry.path())
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn holds_a_transcript(folder: &Path) -> bool {
+    fs::read_dir(folder)
+        .map(|files| {
+            files
+                .flatten()
+                .any(|file| file.path().extension().is_some_and(|extension| extension == "jsonl"))
+        })
         .unwrap_or(false)
 }
 
@@ -1719,25 +1772,72 @@ mod model_tests {
 
     const FLAGS: (&str, &str) = ("--session-id", "--resume");
 
-    fn opens(kept: Option<&str>, resume: bool, still_there: bool, shared: bool) -> (Vec<String>, Option<String>) {
-        super::conversation_args(FLAGS, kept, resume, still_there, shared, &["--continue"], || "new".to_owned())
+    fn opens(kept: Option<&str>, resume: bool, still_there: bool, may_continue: bool) -> (Vec<String>, Option<String>) {
+        super::conversation_args(FLAGS, kept, resume, still_there, may_continue, &["--continue"], || "new".to_owned())
     }
 
     /// The run this was written for: a tester, brought back with a plain resume
     /// in a worktree it shared, woke inside the implementer's conversation.
     #[test]
     fn a_resume_opens_the_agents_own_conversation_even_in_a_shared_folder() {
-        assert_eq!(opens(Some("abc"), true, true, true), (vec!["--resume".into(), "abc".into()], Some("abc".into())));
+        assert_eq!(opens(Some("abc"), true, true, false), (vec!["--resume".into(), "abc".into()], Some("abc".into())));
     }
 
     #[test]
     fn a_shared_folder_never_continues_somebody_elses_conversation() {
-        assert_eq!(opens(None, true, false, true), (vec!["--session-id".into(), "new".into()], Some("new".into())));
+        assert_eq!(opens(None, true, false, false), (vec!["--session-id".into(), "new".into()], Some("new".into())));
     }
 
     #[test]
     fn an_agent_from_before_ids_that_stands_alone_continues_as_it_did() {
-        assert_eq!(opens(None, true, false, false), (vec!["--continue".into()], None));
+        assert_eq!(opens(None, true, false, true), (vec!["--continue".into()], None));
+    }
+
+    fn a_home_with(folders: &[(&str, &[&str])]) -> std::path::PathBuf {
+        let home = std::env::temp_dir().join(format!("agentland-left-{}", super::a_conversation_id("home")));
+        for (folder, files) in folders {
+            let at = home.join("projects").join(folder);
+            std::fs::create_dir_all(&at).unwrap();
+            for file in *files {
+                std::fs::write(at.join(file), "{}").unwrap();
+            }
+        }
+        home
+    }
+
+    #[test]
+    fn a_conversation_is_found_left_in_the_folder_it_was_had_in() {
+        let home = a_home_with(&[(
+            "C--Users-ege12-AppData-Local-Agentland-data-desks-ws1",
+            &["abc.jsonl"],
+        )]);
+
+        let desk = |name: &str| format!(r"C:\Users\ege12\AppData\Local\Agentland\data\desks\{name}");
+        assert!(super::conversation_left_in(&home, Path::new(&desk("ws1"))));
+        assert!(!super::conversation_left_in(&home, Path::new(&desk("ws2"))));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// The chief this was written for: woken by a message at a desk it had
+    /// never spoken at, told to continue, and gone before anybody could see.
+    #[test]
+    fn an_empty_desk_has_nothing_to_continue() {
+        let home = a_home_with(&[("-data-desks-ws2", &["notes.txt"])]);
+
+        assert!(!super::conversation_left_in(&home, Path::new("/data/desks/ws2")));
+        assert!(!super::conversation_left_in(&home.join("nowhere"), Path::new("/data/desks/ws2")));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn a_long_folder_is_matched_on_the_start_the_engine_keeps() {
+        let folder = format!("/{}", "deep/".repeat(60));
+        let named: String = folder.chars().map(|character| if character == '/' { '-' } else { character }).collect();
+        let cut = format!("{}-1a2b3c", &named[..200]);
+        let home = a_home_with(&[(cut.as_str(), &["abc.jsonl"])]);
+
+        assert!(super::conversation_left_in(&home, Path::new(&folder)));
+        let _ = std::fs::remove_dir_all(home);
     }
 
     #[test]

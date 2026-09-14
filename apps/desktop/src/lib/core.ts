@@ -1436,6 +1436,8 @@ export interface Task {
     /// Where it sits in its column, smallest first.
     position?: number;
     attachments?: Attachment[];
+    /// The GitHub issue it was made from, which its pull request closes.
+    issue?: { number: number; url: string } | null;
 }
 
 export interface CommitInfo {
@@ -1534,6 +1536,52 @@ export async function drop_on_pane(session_id: string, file: File): Promise<stri
 /// an element can be picked out and handed to an agent.
 export function open_preview(port: number): Promise<{ url: string }> {
     return request<{ url: string }>(`/previews/${port}`, { method: "POST" });
+}
+
+/// A picture of a picked element: where it is kept, and the PNG itself.
+export interface PickPicture {
+    path: string;
+    png: string;
+}
+
+/// Have the core render the page again and cut the picked element out of it.
+export function photograph_pick(
+    port: number,
+    placed: {
+        path: string;
+        box: { x: number; y: number; width: number; height: number };
+        scroll: { x: number; y: number };
+        viewport: { width: number; height: number };
+    },
+): Promise<PickPicture> {
+    return request<PickPicture>(`/previews/${port}/shots`, { method: "POST", body: JSON.stringify(placed) });
+}
+
+/// Every file of a project's own checkout, as git sees it: tracked, or new
+/// and not ignored. Cut off past a limit, and says so.
+export function every_file(repository_id: string): Promise<{ files: string[]; cut: boolean }> {
+    return request<{ files: string[]; cut: boolean }>(`/repos/${encodeURIComponent(repository_id)}/every-file`);
+}
+
+/// One open issue on a project's GitHub, with the card made from it if one was.
+export interface GitHubIssue {
+    number: number;
+    title: string;
+    body: string;
+    url: string;
+    labels: { name: string }[];
+    author: { login: string };
+    updatedAt: string;
+    card: string | null;
+}
+
+export function list_issues(repository_id: string): Promise<GitHubIssue[]> {
+    return request<GitHubIssue[]>(`/repos/${encodeURIComponent(repository_id)}/issues`);
+}
+
+/// Make a card out of an issue; its pull request will close the issue.
+export function card_from_issue(repository_id: string, number: number): Promise<Task> {
+    return request<Task>(`/repos/${encodeURIComponent(repository_id)}/issues/${number}/card`, { method: "POST" });
 }
 
 /// Write down what was drawn on a picture on a card.
