@@ -884,10 +884,16 @@ export function create_workspace(
     name: string,
     repository_ids: string[],
     chief?: string,
+    engine_id?: string,
 ): Promise<Workspace> {
     return request<Workspace>("/workspaces", {
         method: "POST",
-        body: JSON.stringify({ name, repository_ids, ...(chief ? { chief } : {}) }),
+        body: JSON.stringify({
+            name,
+            repository_ids,
+            ...(chief ? { chief } : {}),
+            ...(engine_id ? { engine_id } : {}),
+        }),
     });
 }
 
@@ -1336,7 +1342,14 @@ export function forget_note(slug: string): Promise<void> {
 
 export function shape_agent(
     id: string,
-    wanted: { model?: string; title?: string; colour?: string; permissions?: string; account?: string },
+    wanted: {
+        model?: string;
+        title?: string;
+        colour?: string;
+        permissions?: string;
+        account?: string;
+        engine_id?: string;
+    },
 ): Promise<Agent> {
     return request<Agent>(`/agents/${encodeURIComponent(id)}`, {
         method: "POST",

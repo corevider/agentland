@@ -2018,10 +2018,17 @@ and waits for a person to choose one — in a crew pane, an agent that never
 starts. The words that continue are `resume --last`, so an engine's resume is
 now a list of words rather than a single flag.
 
-**A resume cannot carry the brief.** `codex resume [SESSION_ID] [PROMPT]` binds
-one positional to the session, so a brief handed there would be read as the name
-of a session nobody has. An engine whose resume cannot carry a brief is started
-fresh when there is one: a shorter memory beats a brief that vanishes.
+**A resume carries the brief once Codex's own id is known.** `codex resume
+[SESSION_ID] [PROMPT]` binds a lone word to the session, so `resume --last
+<brief>` would read the brief as the name of a session nobody has — and an
+engine whose resume cannot carry a brief is started fresh when there is one: a
+shorter memory beats a brief that vanishes. But Codex also opens a session by
+the id it gave it, and then the prompt is the prompt. It takes no id from us, so
+the id is found after the pane opens: the first session in the agent's folder
+since the pane started, read from `$CODEX_HOME/sessions`, that no other agent
+has claimed. Measured: found ten seconds after a fresh start, and the next start
+ran `codex resume <id> <brief>` into the same conversation with the brief
+arriving in it.
 
 **Codex has three rungs where Agentland has four.** `--sandbox` takes
 `read-only`, `workspace-write` or `danger-full-access`, with `--ask-for-approval`
@@ -2050,9 +2057,45 @@ first Codex agent this crew ever hired started with `--model haiku`, naming a
 model that does not exist. A model alias belongs to the engine that knows it;
 every other engine now keeps its own default.
 
-One link is still unverified, and it needs a Codex login rather than more work:
-that a running Codex session actually launches the server it was configured
-with. Everything up to that point is measured.
+**The last link held, and a gate stood behind it.** Signed in with ChatGPT, a
+running Codex session launched the server it was configured with and listed the
+crew's tools — then refused to call one: "MCP tool call requires approval". In a
+crew pane that is a commander stopping at every card it moves. The asking is
+waived for Agentland's own server and nothing else, with
+`default_tools_approval_mode="approve"`; the sandbox still decides what a
+command may do.
+
+**Two questions waited at the door.** A fresh worktree stopped at "Do you trust
+the contents of this directory?", and every start with a newer version out
+stopped at "Update available". A hired agent sat on the first for as long as it
+was left. Both are answered on the command line for that one process:
+`check_for_update_on_startup=false`, and the folder with the repository it
+belongs to named as trusted projects, since Codex keys trust on the repository.
+The table is written whole — `projects={"/repo"={trust_level="trusted"}}` —
+because the dotted spelling is not read as a path: measured, the question still
+came. Nothing is written to `config.toml`.
+
+**What Codex keeps is read where it keeps it.** The status line the budget reads
+is Claude Code's. Codex writes its account into its session record instead, as
+`rate_limits` on each `token_count`: the five-hour window is read as the session
+and the week as the week, so a Codex login is held to its own allowance, and
+each turn's tokens count towards the per-minute ceiling with the cached part
+taken out of Codex's input, which includes it. Whether a brief already arrived
+is asked of the same record, so a Codex commander is not handed its brief again
+every time it wakes. A second Codex login is read from its own folder, except
+for that last check, which reads only this machine's.
+
+**A question Codex asks is a question for a person.** Its approval — "Would you
+like to run the following command? … Press enter to confirm or esc to cancel" —
+reads as a pane holding a question open, the same as Claude Code's, and an idle
+Codex pane reads as waiting at its prompt.
+
+**Any seat, either engine.** A chief is hired on the engine named when its
+workspace is made, a commander on the one named when its project starts, and
+anybody already hired can be moved from the crew panel while stopped. The move
+leaves the old engine's conversation, model and login behind, since none of them
+mean anything to the new one. Hiring checks the week of the engine it hires
+onto; it used to check Claude Code's whatever was chosen.
 
 ## Gemini and Cursor, and the gate each keeps
 
@@ -2357,10 +2400,9 @@ Each agent names its engine when it is hired — `crew_hire` takes `engine_id`, 
 implementer on Codex, Gemini or Cursor, each in its own worktree and pane, all
 talking to the same board through the same tools. Four of the eight engines in the
 catalog take those tools; the other four run in a pane but cannot report back.
-Every run above was Claude throughout: Codex and Cursor are installed on this
-machine but not signed in, and the one link still unmeasured is the one the Codex
-section already names — a Codex session starting the server it was configured
-with.
+Every run above was Claude throughout. Codex has since been measured signed in —
+the Codex section says what that took — and Cursor is still installed on this
+machine without a login.
 
 ## A person beside the crew
 

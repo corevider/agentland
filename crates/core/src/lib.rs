@@ -33,6 +33,7 @@ pub mod preview;
 pub mod pulls;
 pub mod races;
 pub mod repo;
+pub mod rollouts;
 pub mod routines;
 pub mod services;
 pub mod stacks;

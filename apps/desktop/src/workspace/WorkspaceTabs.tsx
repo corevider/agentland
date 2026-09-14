@@ -3,14 +3,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
     activate_workspace,
     create_workspace,
+    list_engines,
     list_repos,
     list_workspaces,
     remove_workspace,
     set_workspace_repos,
     suggest_a_chief,
+    type Engine,
     type Repository,
     type Workspace,
 } from "@/lib/core";
+import { Picker } from "@/components/Picker";
 
 interface Props {
     /// Changes when someone else activated a workspace; the tabs re-read on it.
@@ -31,6 +34,8 @@ export function WorkspaceTabs({ turn, active, on_active, on_switched, counts }: 
     const [name, set_name] = useState("");
     const [chief, set_chief] = useState("");
     const [suggested, set_suggested] = useState("");
+    const [engine_id, set_engine] = useState("");
+    const [engines, set_engines] = useState<Engine[]>([]);
     const [error, set_error] = useState<string | null>(null);
 
     // The App hands over a fresh on_active on every render, and answering it
@@ -78,16 +83,17 @@ export function WorkspaceTabs({ turn, active, on_active, on_switched, counts }: 
         // An empty field means the name it offered. The suggestion is not
         // written into the field, so a person who types nothing is agreeing to
         // what they can already read rather than to something invisible.
-        create_workspace(trimmed, [], chief.trim() || suggested)
+        create_workspace(trimmed, [], chief.trim() || suggested, engine_id)
             .then((created) => {
                 set_name("");
                 set_chief("");
+                set_engine("");
                 set_drafting(false);
                 set_editing(created.id);
                 return activate_workspace(created.id).then(() => refresh());
             })
             .catch((cause) => set_error(cause instanceof Error ? cause.message : String(cause)));
-    }, [chief, name, suggested, refresh]);
+    }, [chief, engine_id, name, suggested, refresh]);
 
     // What this workspace's chief would be called, asked as the name is typed.
     // The core picks it: the list of names and the crew already answering to
@@ -107,6 +113,12 @@ export function WorkspaceTabs({ turn, active, on_active, on_switched, counts }: 
 
         return () => window.clearTimeout(handle);
     }, [name]);
+
+    useEffect(() => {
+        list_engines()
+            .then((known) => set_engines(known.filter((engine) => engine.installed)))
+            .catch(() => undefined);
+    }, []);
 
     const toggle_repo = useCallback(
         (workspace: Workspace, repository_id: string) => {
@@ -159,11 +171,13 @@ export function WorkspaceTabs({ turn, active, on_active, on_switched, counts }: 
             {drafting || workspaces.length === 0 ? (
                 <div
                     className="flex items-center gap-1"
-                    // Closing on blur belongs to the pair of fields, not to
-                    // either one: moving from the workspace's name to its
-                    // chief's used to shut the form on the way.
+                    // Closing on blur belongs to the fields together, not to
+                    // any one: moving from the workspace's name to its chief's
+                    // used to shut the form on the way. The engine list hangs
+                    // from the window, so focus landing in it is still inside.
                     onBlur={(event) => {
-                        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                        const next = event.relatedTarget as Element | null;
+                        if (!event.currentTarget.contains(next) && !next?.closest("[data-picker-popup]")) {
                             set_drafting(false);
                         }
                     }}
@@ -200,6 +214,16 @@ export function WorkspaceTabs({ turn, active, on_active, on_switched, counts }: 
                                 set_drafting(false);
                             }
                         }}
+                    />
+                    <Picker
+                        className="w-32 rounded border border-reef bg-lagoon-deep px-1.5 py-[2px] text-[12px]"
+                        title="the engine this workspace's chief runs on"
+                        value={engine_id}
+                        choices={[
+                            { value: "", label: "engine · whichever takes the crew's tools" },
+                            ...engines.map((engine) => ({ value: engine.id, label: engine.name })),
+                        ]}
+                        on_pick={set_engine}
                     />
                 </div>
             ) : (

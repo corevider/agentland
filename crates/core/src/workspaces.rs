@@ -33,6 +33,10 @@ pub struct CreateWorkspace {
     /// suggested from the workspace's own name.
     #[serde(default)]
     pub chief: Option<String>,
+    /// Which engine that chief runs on. Left out, the first installed one that
+    /// takes the crew's tools.
+    #[serde(default)]
+    pub engine_id: Option<String>,
 }
 
 pub struct Workspaces {
@@ -208,6 +212,7 @@ mod tests {
                 name: "Product".into(),
                 repository_ids: vec!["agentland".into()],
                 chief: None,
+                engine_id: None,
             })
             .expect("create");
 
@@ -218,6 +223,7 @@ mod tests {
                 name: "Infra".into(),
                 repository_ids: vec![],
                 chief: None,
+                engine_id: None,
             })
             .expect("create a second");
 
@@ -236,6 +242,7 @@ mod tests {
                 name: "   ".into(),
                 repository_ids: vec![],
                 chief: None,
+                engine_id: None,
             })
             .expect_err("should refuse");
         assert!(error.to_string().contains("needs a name"));
@@ -249,6 +256,7 @@ mod tests {
                 name: "Product".into(),
                 repository_ids: vec!["agentland".into()],
                 chief: None,
+                engine_id: None,
             })
             .expect("create");
 
@@ -265,6 +273,7 @@ mod tests {
                 name: "Product".into(),
                 repository_ids: vec![],
                 chief: None,
+                engine_id: None,
             })
             .expect("create");
         let second = store
@@ -272,6 +281,7 @@ mod tests {
                 name: "Infra".into(),
                 repository_ids: vec![],
                 chief: None,
+                engine_id: None,
             })
             .expect("create a second");
 
@@ -297,6 +307,7 @@ mod tests {
                 name: "Product".into(),
                 repository_ids: vec!["agentland".into(), "ccdo".into()],
                 chief: None,
+                engine_id: None,
             })
             .expect("create");
 
@@ -314,6 +325,7 @@ mod tests {
                 name: "Product".into(),
                 repository_ids: vec!["a".into()],
                 chief: None,
+                engine_id: None,
             })
             .expect("create");
 
@@ -332,6 +344,7 @@ mod tests {
                 name: "test".to_owned(),
                 repository_ids: Vec::new(),
                 chief: None,
+                engine_id: None,
             })
             .unwrap();
 

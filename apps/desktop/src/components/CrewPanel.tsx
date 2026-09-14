@@ -303,10 +303,22 @@ export function CrewPanel({ active, on_open_session }: Props) {
                             {agent.name}
                         </span>
                         <span className="text-shell">{agent.role}</span>
-                        <span className="text-turquoise">
-                            {agent.engine_id}
-                            {agent.model ? ` · ${agent.model}` : ""}
-                        </span>
+                        <Picker
+                            className="rounded border border-reef bg-lagoon-deep px-1 py-[1px] font-mono text-[10px] text-turquoise"
+                            title="the engine this agent runs on — a stopped agent moves at once and starts fresh there; stop a running one first"
+                            value={agent.engine_id}
+                            placeholder={agent.engine_id}
+                            choices={installed.map((engine) => ({ value: engine.id, label: engine.name }))}
+                            on_pick={(held) => {
+                                if (held === agent.engine_id) {
+                                    return;
+                                }
+                                shape_agent(agent.id, { engine_id: held })
+                                    .then(() => refresh())
+                                    .catch((cause) => set_error(String(cause)));
+                            }}
+                        />
+                        {agent.model ? <span className="text-turquoise">{agent.model}</span> : null}
                         <Picker
                             className={`rounded border border-reef bg-lagoon-deep px-1 py-[1px] font-mono text-[10px] ${
                                 agent.permissions === "bypassPermissions" ? "text-coral" : "text-shade"
