@@ -7,7 +7,7 @@ import "@xterm/xterm/css/xterm.css";
 import { ReadablePane } from "@/components/ReadablePane";
 import { upgrade_soon } from "@/lib/gpu_queue";
 import { names_the_agent } from "@/lib/shells";
-import { SETTINGS_EVENT, load_settings, resolve_renderer, type Settings } from "@/lib/settings";
+import { SETTINGS_EVENT, load_settings, pane_renderer, type Settings } from "@/lib/settings";
 import { detect_surface } from "@/lib/surface";
 import { use_poll } from "@/lib/poll";
 import {
@@ -211,8 +211,9 @@ export function TerminalPane({ session, crown, kept = false, focused, on_focus, 
         let webgl: WebglAddon | null = null;
 
         const wanted_renderer = () =>
-            resolve_renderer(
-                choice_ref.current === "auto" ? load_settings().renderer : choice_ref.current,
+            pane_renderer(
+                choice_ref.current,
+                load_settings().renderer,
                 detect_surface(),
                 crowned_ref.current,
             );
@@ -423,8 +424,9 @@ export function TerminalPane({ session, crown, kept = false, focused, on_focus, 
 
         return () => {
             const terminal = screen_ref.current;
-            const wanted = resolve_renderer(
-                choice_ref.current === "auto" ? load_settings().renderer : choice_ref.current,
+            const wanted = pane_renderer(
+                choice_ref.current,
+                load_settings().renderer,
                 detect_surface(),
                 crowned_ref.current,
             );

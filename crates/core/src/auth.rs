@@ -83,6 +83,7 @@ pub fn permits(scope: Scope, method: &str, path: &str) -> bool {
                     | "/memories"
                     | "/dispatch"
                     | "/routines"
+                    | "/routines/templates"
                     | "/skills"
             ) || is_agent_skills(path)
         }

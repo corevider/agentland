@@ -48,14 +48,21 @@ proposals nobody answered, corrections that left both sides in force.
 A login is a folder an engine signs into. The panel lists what this machine
 actually holds and what each engine says about it — signed in only where the
 engine's own status command says so, never because a login pane was once opened.
+Each login says how much of its week is gone and who is spending from it, and
+with the hand-over on, an agent whose week runs out is carried to a login that
+still has one — the hand-overs are listed under the switch.
 
-![The logins panel: two Claude logins, neither signed in, and the hand-over switch](docs/the-logins-they-hold.png)
+![The logins panel: the machine's own Claude login with 96% of its week spent and nobody left on it, a second Claude login that Ada, Kai and Mira were handed to, two Codex logins, the hand-over switch on and the three hand-overs it made](docs/the-logins-they-hold.png)
 
 These six are made by `node scripts/shots.mjs`, which stands up a core of its
 own on its own port, seeds a crew that exists nowhere else, photographs the built
 interface in a headless browser and takes it all down again. Nobody's real
 repositories, cards or notes are in them, and re-running it after an interface
-change is how they stay true.
+change is how they stay true. The logins picture is the one whose answers are
+made up: the browser is handed signed-in logins and a week already run out,
+because signing a real account into a scratch folder, or spending a week to get
+there, is what that panel exists to avoid. `node scripts/shots.mjs
+the-logins-they-hold` takes that picture alone.
 
 ## Why M0 comes first
 
@@ -2219,6 +2226,33 @@ each is really signed in, and both `crew_hire` and `crew_shape` take an
 `account`. Spreading a crew across the logins that exist is how a week lasts the
 week.
 
+### The logins in turn
+
+Tools that pool subscriptions — 9router, claude-unlimited — sit in front of the
+engine as a proxy, hold every account's token themselves and swap one in on
+each request. Anthropic's terms for Claude Code rule out exactly that: no routing
+requests through Pro or Max credentials, no collecting, storing or intermediating
+Claude.ai tokens. So the rotation happens where it always could, one pane at a
+time: each login stays a folder the engine signed into through its own flow,
+and what changes is which folder the next pane starts in.
+
+The logins are put in an order, the machine's own login among them — first,
+last or anywhere between. With the switch on, a new agent starts on the first
+login in that order with room, and an agent whose login passes a point the
+person picks (92% of a week unless told otherwise), or whose engine says the
+login is out, is moved to the next one. The same point decides both ways, so a
+login just past it is never picked only to be left again on the next tick. The
+machine's own login can be moved back to when its week comes round; it used to
+be the one place an agent was never carried back to.
+
+The move waits for the pane to be at rest. It trades the pane for a fresh one,
+and it used to do that whenever the number crossed the line, turn in flight or
+not. The new pane resumes the same conversation and, when the agent had work in
+hand, is told to carry on with it — it used to come back to an empty prompt and
+stop there — and the steps being watched follow it to the new pane rather than
+being judged against one that is gone. Each login in the panel shows its week
+against the point, who is spending from it, and where it stands in the order.
+
 ## Checks, and a person at the end of them
 
 Work used to stop at the implementer. A card was committed, the pane went quiet,
@@ -2567,3 +2601,101 @@ Tried against a public repository with a hundred open issues, #3822 became card
 `t1`, the list showed `t1` beside it, and asking again answered *t1 was already
 made from #3822*. Nothing was written to GitHub: the `Closes` line is covered by
 tests, not by a pull request opened for the purpose.
+
+## A crew that waits out its limit
+
+A turn that runs into a usage limit does not fail. The engine prints one line —
+*You've hit your session limit · resets 3pm*, or Codex's *■ You've hit your usage
+limit … try again at 3:45 PM* — ends the turn and sits at its prompt. To the
+supervisor that was an agent at rest, and at rest is what finished looks like:
+the step was judged settled, the card was sent on with the work half done, and
+nobody came back to the pane when the window reset. A crew left overnight
+stopped at the first wall and stayed stopped until a person went round every
+pane typing the same sentence.
+
+The core now reads that line off the bottom of the pane and holds the agent. The
+match is on how an engine's own message *starts*, after the glyphs drawn in
+front of it, so an agent reading this file, a test printing its fixtures, or
+the words it is told afterwards are not taken for a limit; and a limit with a
+message sent after it is history. When it resets is read from however the
+engine said it — a time today, a date, a weekday, *in 2 hours 5 minutes*, or
+the older `|1789500000` — on the machine's own clock. A time of day that has
+already been is due now rather than tomorrow: no session window is a day long.
+
+While an agent is held its step is neither judged nor re-sent, its login counts
+as spent so nothing new is started on it, and its presence reads *stopped at
+its session limit — carries on at 15:02*. Two minutes after the reset it is
+told, in the words the person used to type by hand:
+
+```
+I hit my usage limit while you were working, but it has reset now. Please continue from where you left off.
+```
+
+A live pane at rest is typed into; a pane that died while it waited is resumed
+with the same words. A pane holding a question is left to the person. Words
+that do not start a turn are said again after fifteen minutes, six times at
+most, and then a person is asked instead. The holds are written down, so a
+restart in the middle of a wait does not lose it.
+
+## The vault, followed by Obsidian
+
+The vault opened in Obsidian and looked fine until anything was clicked. Every
+map listed its notes as `[[The port contract]]`, and Obsidian finds a note by
+its file name — `the-port-contract.md` — so every entry was an unresolved link
+in the graph, and clicking one made an empty note at the root. Agentland read
+the same links by slug and never noticed. The maps now write each entry as its
+path with the title shown, `[[shared/memory/the-reviewer-prefers-small-commits|the
+reviewer prefers small commits]]`, and a link an agent writes to a note that
+exists is stored the same way when it is written. A link to nothing is left as
+it was, for the check to name.
+
+Path links are read as paths now. Folding the slashes into dashes had turned
+`[[shared/memory/x]]` into a link to a note called `shared-memory-x`; a heading
+or block after `#` or `^` and a trailing `.md` no longer change which note is
+meant.
+
+A memory on its map says where it stands — *told to the crew*, *waiting for a
+person*, *taken back* — so the folder answers what the crew is being told
+without opening each file. The maps are redrawn when a memory is proposed,
+answered or forgotten and when a note is forgotten; before, a deleted note
+stayed listed until the next note was written. And a root map drawn before the
+vault explained itself — this machine's own — has the explanation written above
+its line once, where it was empty.
+
+## Routines, shaped
+
+A routine used to be an agent, a brief and an interval, so a morning triage ran
+at whatever minute the app had been opened and a check meant for working hours
+ran all night. A routine now runs at set times — *weekdays at 09:00*, *Fridays at
+17:00* — or every so often inside an optional window of the day, *every 4 hours,
+09:00–19:00, weekdays*, on the machine's own clock. A run missed while the app
+was closed is due once, not once per miss.
+
+Its brief goes on a new card, for work that should be reviewed, or into the
+agent's own pane with no card, for a commander or a chief whose job on a timer is
+to look around and decide. Both go through the same hand-over as every other
+piece of work. That fixed the oldest bug in the feature: a routine started its
+agent unconditionally, a pane already running refused with *already running*,
+and two of those paused a routine aimed at a commander that simply happened to
+be up. A pane mid-turn, or an agent waiting out its limit, is now waited for —
+half an hour, then the run is written down as skipped. A skip is never a
+failure.
+
+A brief may carry `{date}` `{time}` `{weekday}` `{routine}` `{agent}`
+`{last_run}` `{last_result}`, filled in each run. A routine can leave a run out
+when the week is tight or while the card from its last run is still open, pause
+after its own number of failures, and keeps its last twenty runs. Six templates
+come from the core — morning triage, an open pull request sweep, a nightly
+dependency check, a weekly recap, a vault tidy, a flaky test hunt — so the panel
+and the crew offer the same ones.
+
+The crew can set them up too: `routine_list`, `routine_templates`,
+`routine_propose`, `routine_update` and `routine_run` bring the tool program to
+forty-four. **A routine an agent proposes starts paused**, and a person is
+asked to turn it on: it spends the crew's allowance on a timer, and only a
+person decides that. An agent may pause one, and changing more than the switch
+of one that is on pauses it again for the same reason.
+
+The chief's and the commanders' panes open on the DOM renderer on every surface
+now, whatever the settings say for the rest — they are the panes a person types
+into and glances at, and the pane's own footer still moves one to WebGL.

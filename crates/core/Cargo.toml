@@ -29,3 +29,4 @@ tokio.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber = "0.3"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }

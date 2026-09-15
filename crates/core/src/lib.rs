@@ -21,6 +21,7 @@ pub mod health;
 pub mod hiring;
 pub mod issues;
 pub mod journal;
+pub mod limits;
 pub mod mail;
 pub mod memory;
 pub mod meter;

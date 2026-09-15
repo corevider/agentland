@@ -9,7 +9,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post};
 use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
@@ -28,7 +28,7 @@ use crate::gateway::{CallRequest, ConnectRequest, Gateway, Integration};
 use crate::mail::{MailPolicy, Mailbox, Message as MailMessage, SendMessage};
 use crate::memory::{Memory, MemoryStore, ProposeMemory, Recalled};
 use crate::plans::{DraftPlan, Plan, Plans, StepState};
-use crate::routines::{CreateRoutine, Routine, Routines};
+use crate::routines::{CreateRoutine, Delivery, Outcome, Routine, Routines, UpdateRoutine};
 use crate::metrics::{MetricsStore, Sample};
 use crate::repo::{Commit, PullRequest, RepoRegistry, Repository, Review, Worktree, WorktreeStatus};
 use crate::services::{Service, ServiceRegistry};
@@ -101,6 +101,8 @@ struct AppState {
     memories: Arc<MemoryStore>,
     mail: Arc<Mailbox>,
     routines: Arc<Routines>,
+    /// Agents stopped at a usage limit, and when each is told to carry on.
+    limits: Arc<crate::limits::Limits>,
     gateway: Arc<Gateway>,
     approvals: Arc<Approvals>,
     tokens: Arc<TokenStore>,
@@ -223,6 +225,7 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
         memories: Arc::new(MemoryStore::new(vault.clone(), data_dir.clone())),
         mail: Arc::new(Mailbox::new(data_dir.clone())),
         routines: Arc::new(Routines::new(data_dir.clone())),
+        limits: Arc::new(crate::limits::Limits::new(data_dir.clone())),
         gateway: Arc::new(Gateway::new(data_dir.clone())),
         approvals: Arc::new(Approvals::new(data_dir.clone())),
         tokens: Arc::new(TokenStore::new(token_for_store, data_dir.clone())),
@@ -368,8 +371,10 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
         .route("/mail", get(list_mail).post(send_mail))
         .route("/mail/policy", get(mail_policy).post(set_mail_policy))
         .route("/routines", get(list_routines).post(create_routine))
-        .route("/routines/{id}", delete(delete_routine))
+        .route("/routines/templates", get(routine_templates))
+        .route("/routines/{id}", delete(delete_routine).patch(update_routine))
         .route("/routines/{id}/enabled", post(set_routine_enabled))
+        .route("/routines/{id}/run", post(run_routine_now))
         .route("/integrations", get(list_integrations).post(connect_integration))
         .route("/integrations/{id}", delete(disconnect_integration))
         .route("/integrations/call", post(call_integration))
@@ -398,6 +403,7 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
         .route("/permits", get(read_permits).delete(forget_permit))
         .route("/accounts", get(list_accounts).post(add_account))
         .route("/accounts/failover", post(set_failover))
+        .route("/accounts/rotation", post(set_rotation))
         .route("/accounts/{engine_id}/{label}", delete(forget_account))
         .route("/accounts/{engine_id}/{label}/login", post(sign_in_account))
         .route("/hiring", get(read_hiring).post(set_hiring))
@@ -1005,10 +1011,20 @@ fn spawn_supervisor(state: AppState) {
             interval.tick().await;
             let now = now_secs();
             tracing::debug!(watches = state.supervisor.working().len(), "supervisor tick");
+            carry_on_after_limits(&state, now).await;
 
             for watch in state.supervisor.working() {
                 let previous = last_frames.get(&watch.session_id).cloned().unwrap_or_default();
                 let seen = look_at(&state, &watch, &previous, now);
+
+                // A pane stopped at its usage limit is at rest, and at rest is
+                // what finished looks like: the step would be settled and its
+                // card sent on with the work half done. It is neither judged
+                // nor sent the brief again until it is working once more.
+                if state.limits.is_held(&watch.agent_id) {
+                    last_frames.insert(watch.session_id.clone(), seen.tail);
+                    continue;
+                }
 
                 let landed = match seen.transcript_says {
                     Some(told) => told,
@@ -1168,7 +1184,9 @@ fn spawn_supervisor(state: AppState) {
                     .iter()
                     .any(|other| other.session_id == watch.session_id);
 
-                if !should_reap(&watch, &seen, &state.supervisor.rules, busy_with_new_work, now) {
+                if state.limits.is_held(&watch.agent_id)
+                    || !should_reap(&watch, &seen, &state.supervisor.rules, busy_with_new_work, now)
+                {
                     continue;
                 }
 
@@ -1261,12 +1279,6 @@ fn spawn_supervisor(state: AppState) {
                     // to a single global number: two subscriptions are two
                     // weeks and neither says anything about the other.
                     state.quota.lock().insert(identity_of(&agent), (usage, now));
-
-                    // A week that is gone is the end of the work only when there
-                    // is nowhere else to do it.
-                    if usage.room() == crate::budget::Room::Spent {
-                        hand_over_to_a_stand_in(&state, &agent).await;
-                    }
                 }
 
                 let limit = crate::context::read_rate_limit(&tail);
@@ -1275,6 +1287,22 @@ fn spawn_supervisor(state: AppState) {
 
                 if state.crew.mark_busy(&agent.id, working) {
                     tracing::debug!(agent = %agent.id, "the pane changed what the agent is doing");
+                }
+
+                watch_the_limit(&state, &agent, &tail, working, now);
+
+                // A login past the point the person chose, or one its engine
+                // says is out, is the end of the work only when there is
+                // nowhere else to do it. The move waits for the pane to be at
+                // rest: it trades the pane for a new one, and doing that in the
+                // middle of a turn throws the turn away.
+                let past_the_switch = usage.is_some_and(|held| held.weekly >= switch_at(&state));
+                if (past_the_switch || state.limits.is_held(&agent.id))
+                    && !working
+                    && !asking
+                    && hand_over_to_a_stand_in(&state, &agent).await
+                {
+                    continue;
                 }
 
                 // Said once, when it starts. A throttled pane redraws its
@@ -2018,55 +2046,212 @@ fn spawn_routine_ticker(state: AppState) {
             let now = now_secs();
 
             for routine in state.routines.due(now) {
-                let agent = state
-                    .crew
-                    .list()
-                    .into_iter()
-                    .find(|entry| entry.id == routine.agent_id);
-
-                let outcome = match agent {
-                    None => Err(format!("no agent called {}", routine.agent_id)),
-                    Some(agent) => {
-                        let card = state.board.create(CreateTask {
-                            title: routine.name.clone(),
-                            body: routine.brief.clone(),
-                            repository_id: agent.repository_id.clone(),
-                            // A routine runs where its agent lives.
-                            worktree: Some(agent.worktree.clone()),
-                            issue: None,
-                        });
-
-                        match card {
-                            Err(error) => Err(error.to_string()),
-                            Ok(task) => {
-                                let mut base = routine.brief.clone();
-                                if routine.draft_only {
-                                    base.push_str(
-                                        "\n\nPrepare the work and stop before anything leaves this machine.",
-                                    );
-                                }
-
-                                match start_agent_with_brief(&state, &agent, &base).await {
-                                    Ok(()) => {
-                                        let _ = state.board.record_assignment(
-                                            &task.id,
-                                            &agent.id,
-                                            &agent.worktree,
-                                            &agent.worktree,
-                                        );
-                                        Ok(format!("card {} handed to {}", task.id, agent.name))
-                                    }
-                                    Err(error) => Err(error.0.to_string()),
-                                }
-                            }
-                        }
-                    }
-                };
-
-                state.routines.record(&routine.id, now, outcome);
+                let attempt = run_routine(&state, &routine, now, false).await;
+                settle_a_run(&state, &routine, now, attempt);
             }
         }
     });
+}
+
+/// Whether an agent's engine is holding it at a usage limit until it resets.
+///
+/// A brief typed into an engine that is waiting out its limit is a brief it
+/// will refuse, so the run waits instead, the same as for a busy pane. The
+/// limits are read by the supervisor; this is the one place the routine
+/// ticker asks.
+fn held_by_a_limit(state: &AppState, agent: &Agent) -> bool {
+    state.limits.is_held(&agent.id)
+}
+
+/// Whether the agent's live pane is in the middle of something.
+///
+/// Asked before the brief is composed rather than left to the hand-over:
+/// composing a brief empties the agent's inbox into it, and a brief that is
+/// then not delivered would take that mail with it.
+fn agent_is_mid_turn(state: &AppState, agent: &Agent) -> bool {
+    let Some(session_id) = agent
+        .session_id
+        .as_ref()
+        .filter(|id| state.manager.live(id).is_some())
+    else {
+        return false;
+    };
+
+    let tail = state
+        .manager
+        .read_log(session_id, 8 * 1024)
+        .map(|raw| strip_ansi(&raw))
+        .unwrap_or_default();
+
+    crate::supervisor::turn_running(&tail) || crate::supervisor::asking_the_human(&tail)
+}
+
+/// What trying to run a routine came to.
+enum Attempt {
+    Done(Outcome),
+    /// Not now, and not a failure: tried again on the next tick.
+    Wait(String),
+}
+
+const DRAFT_ONLY: &str = "\n\nPrepare the work and stop before anything leaves this machine.";
+
+/// Run one routine: decide whether it should run at all, then hand the brief
+/// over the way every other piece of work is handed over.
+///
+/// It used to start the agent's pane unconditionally, and a pane that was
+/// already running refused with "already running" — so a routine aimed at a
+/// commander failed every time the commander happened to be up, and two of
+/// those paused it. A pane at rest is now told where it stands, a pane mid-turn
+/// is waited for, and only an agent with no pane gets a new one.
+async fn run_routine(state: &AppState, routine: &Routine, now: u64, force: bool) -> Attempt {
+    let Some(agent) = state
+        .crew
+        .list()
+        .into_iter()
+        .find(|entry| entry.id == routine.agent_id)
+    else {
+        return Attempt::Done(Outcome::Failed(format!(
+            "no agent called {} — that agent is gone",
+            routine.agent_id
+        )));
+    };
+
+    if held_by_a_limit(state, &agent) {
+        return Attempt::Wait(format!("{} is waiting out a usage limit", agent.name));
+    }
+
+    if !force {
+        let identity = identity_of(&agent);
+        let room = room_for(state, &identity);
+        if routine.skip_when_tight && !room.may_start_work() {
+            return Attempt::Done(Outcome::Skipped(format!(
+                "skipped — on {identity}, {}",
+                room.in_a_line()
+            )));
+        }
+
+        if routine.one_at_a_time {
+            if let Some(card) = routine.last_card.as_deref() {
+                if state.board.get(card).is_some_and(|task| task.column != Column::Done) {
+                    return Attempt::Done(Outcome::Skipped(format!(
+                        "skipped — card {card} from the last run is still open"
+                    )));
+                }
+            }
+        }
+    }
+
+    if agent_is_mid_turn(state, &agent) {
+        return Attempt::Wait(format!("{} is mid-turn", agent.name));
+    }
+
+    let path = match where_it_sits(state, &agent) {
+        Ok(path) => path,
+        Err(error) => return Attempt::Done(Outcome::Failed(error.0.to_string())),
+    };
+
+    let mut text = crate::routines::expand(
+        &routine.brief,
+        &crate::routines::values_in(routine, &agent.name, now, &chrono::Local),
+    );
+    if routine.draft_only {
+        text.push_str(DRAFT_ONLY);
+    }
+
+    match routine.delivery {
+        Delivery::Pane => {
+            let brief = compose_brief(state, &agent, &text).await;
+            match hand_the_work_over(state, &agent, &path, &brief).await {
+                Ok(HandOver::Typed) => Attempt::Done(Outcome::Ran {
+                    detail: format!("said to {} in its pane", agent.name),
+                    card: None,
+                }),
+                Ok(HandOver::Started) => Attempt::Done(Outcome::Ran {
+                    detail: format!("started {}'s pane with it", agent.name),
+                    card: None,
+                }),
+                Ok(HandOver::Busy) => Attempt::Wait(format!("{} is mid-turn", agent.name)),
+                Err(error) => Attempt::Done(Outcome::Failed(error.0.to_string())),
+            }
+        }
+        Delivery::Card => {
+            let task = match state.board.create(CreateTask {
+                title: routine.name.clone(),
+                body: text,
+                repository_id: agent.repository_id.clone(),
+                // A routine runs where its agent lives.
+                worktree: Some(agent.worktree.clone()),
+                issue: None,
+            }) {
+                Ok(task) => task,
+                Err(error) => return Attempt::Done(Outcome::Failed(error.to_string())),
+            };
+
+            let brief = compose_brief(state, &agent, &task.brief()).await;
+            match hand_the_work_over(state, &agent, &path, &brief).await {
+                Ok(HandOver::Busy) => Attempt::Done(Outcome::Ran {
+                    detail: format!(
+                        "card {} left in the backlog — {} turned busy",
+                        task.id, agent.name
+                    ),
+                    card: Some(task.id),
+                }),
+                Ok(_) => {
+                    let _ = state.board.record_assignment(
+                        &task.id,
+                        &agent.id,
+                        &agent.worktree,
+                        &agent.worktree,
+                    );
+                    Attempt::Done(Outcome::Ran {
+                        detail: format!("card {} handed to {}", task.id, agent.name),
+                        card: Some(task.id),
+                    })
+                }
+                Err(error) => Attempt::Done(Outcome::Failed(format!(
+                    "card {} was made but not handed over: {}",
+                    task.id, error.0
+                ))),
+            }
+        }
+    }
+}
+
+/// Write down what a run came to, and say so where a person looks when it
+/// changes something they would want to know: a routine that paused itself.
+fn settle_a_run(state: &AppState, routine: &Routine, now: u64, attempt: Attempt) -> Option<Routine> {
+    let outcome = match attempt {
+        Attempt::Wait(why) => return state.routines.defer(&routine.id, now, &why),
+        Attempt::Done(outcome) => outcome,
+    };
+
+    let (kind, detail) = match &outcome {
+        Outcome::Ran { detail, .. } => ("routine.ran", detail.clone()),
+        Outcome::Failed(detail) => ("routine.failed", detail.clone()),
+        Outcome::Skipped(detail) => ("routine.skipped", detail.clone()),
+    };
+    note(state, kind, "routines", &routine.id, &detail);
+
+    let updated = state.routines.record(&routine.id, now, outcome)?;
+
+    if routine.enabled && !updated.enabled {
+        state.notices.push(
+            crate::notices::NewNotice {
+                kind: crate::notices::Kind::Trouble,
+                text: format!(
+                    "the routine \"{}\" paused itself: {}",
+                    updated.name,
+                    updated.last_result.clone().unwrap_or_default()
+                ),
+                agent_id: Some(updated.agent_id.clone()),
+                opens: Some("routines".to_owned()),
+                ..Default::default()
+            },
+            now,
+        );
+    }
+
+    Some(updated)
 }
 
 fn is_public_asset(path: &str) -> bool {
@@ -2294,6 +2479,185 @@ fn note(state: &AppState, kind: &str, actor: &str, subject: &str, detail: &str) 
     state.journal.write(kind, actor, subject, detail, now_secs());
 }
 
+/// A moment said the way a person reads a clock: the time alone when it is
+/// today, and the day with it when it is not.
+fn local_clock(at: u64, now: u64) -> String {
+    use chrono::TimeZone;
+
+    let (Some(moment), Some(today)) = (
+        chrono::Local.timestamp_opt(at as i64, 0).single(),
+        chrono::Local.timestamp_opt(now as i64, 0).single(),
+    ) else {
+        return "later".to_owned();
+    };
+
+    if moment.date_naive() == today.date_naive() {
+        moment.format("%H:%M").to_string()
+    } else {
+        moment.format("%a %d %b %H:%M").to_string()
+    }
+}
+
+/// Hold an agent whose pane says it ran into a usage limit, and let it go the
+/// moment it is working again — whether it was told to carry on or somebody
+/// got to it first.
+fn watch_the_limit(state: &AppState, agent: &Agent, tail: &str, working: bool, now: u64) {
+    if working {
+        if let Some(hold) = state.limits.release(&agent.id, now) {
+            let text = match hold.told_at {
+                Some(_) => format!("{} carried on after its {} reset", agent.name, hold.window.in_words()),
+                None => format!(
+                    "{} is working again — somebody got to it before its {} reset",
+                    agent.name,
+                    hold.window.in_words()
+                ),
+            };
+
+            tracing::info!(agent = %agent.id, "off its usage limit");
+            note(state, "engine.limit_lifted", "the supervisor", &agent.id, &text);
+            state.notices.push(
+                crate::notices::NewNotice {
+                    kind: crate::notices::Kind::Word,
+                    text,
+                    repository_id: Some(agent.repository_id.clone()),
+                    agent_id: Some(agent.id.clone()),
+                    opens: Some(format!("agent:{}", agent.id)),
+                    ..Default::default()
+                },
+                now,
+            );
+        }
+        return;
+    }
+
+    let Some(limit) = crate::limits::read_limit(tail, &chrono::Local::now()) else {
+        return;
+    };
+
+    let (hold, again) = match state.limits.notice(&agent.id, &identity_of(agent), &limit, now) {
+        crate::limits::Noticed::New(hold) => (hold, false),
+        crate::limits::Noticed::Again(hold) => (hold, true),
+        crate::limits::Noticed::Same => return,
+    };
+
+    let when = local_clock(hold.resets_at, now);
+    let text = match (hold.stated, again) {
+        (true, false) => format!(
+            "{} hit its {} — it will be told to carry on at {when}",
+            agent.name,
+            hold.window.in_words()
+        ),
+        (true, true) => format!(
+            "{} was stopped again at its {} — it will be told to carry on at {when}",
+            agent.name,
+            hold.window.in_words()
+        ),
+        (false, _) => format!(
+            "{} hit its {} and the engine did not say until when — it will be asked again at {when}",
+            agent.name,
+            hold.window.in_words()
+        ),
+    };
+
+    tracing::warn!(agent = %agent.id, resets_at = hold.resets_at, "an agent is stopped at its usage limit");
+    note(state, "engine.limit_hit", "the supervisor", &agent.id, &limit.said);
+    state.notices.push(
+        crate::notices::NewNotice {
+            kind: crate::notices::Kind::Trouble,
+            text,
+            repository_id: Some(agent.repository_id.clone()),
+            agent_id: Some(agent.id.clone()),
+            opens: Some(format!("agent:{}", agent.id)),
+            ..Default::default()
+        },
+        now,
+    );
+}
+
+/// Tell every agent whose usage limit has reset to carry on.
+///
+/// A live pane at rest is typed into, the way a person would have done it. A
+/// pane that died while it waited is resumed with the same words, so the
+/// conversation comes back and is told what to do in one step. A pane that
+/// is asking a person something is left to the person, and one that has been
+/// told as many times as is worth telling is handed to the person too.
+async fn carry_on_after_limits(state: &AppState, now: u64) {
+    for hold in state.limits.due(now) {
+        let Some(agent) = state.crew.list().into_iter().find(|agent| agent.id == hold.agent_id) else {
+            state.limits.forget(&hold.agent_id);
+            continue;
+        };
+
+        if hold.attempts >= crate::limits::MOST_ATTEMPTS {
+            state.limits.release(&agent.id, now);
+            let text = format!(
+                "{} is still stopped at its {} after {} tries — it needs a word from you",
+                agent.name,
+                hold.window.in_words(),
+                hold.attempts
+            );
+            note(state, "engine.limit_gave_up", "the supervisor", &agent.id, &text);
+            state.notices.push(
+                crate::notices::NewNotice {
+                    kind: crate::notices::Kind::Trouble,
+                    text,
+                    repository_id: Some(agent.repository_id.clone()),
+                    agent_id: Some(agent.id.clone()),
+                    opens: Some(format!("agent:{}", agent.id)),
+                    ..Default::default()
+                },
+                now,
+            );
+            continue;
+        }
+
+        let live = agent
+            .session_id
+            .as_ref()
+            .filter(|id| state.manager.live(id).is_some())
+            .cloned();
+
+        match live {
+            Some(session_id) => {
+                let tail = state
+                    .manager
+                    .read_log(&session_id, 8 * 1024)
+                    .map(|raw| strip_ansi(&raw))
+                    .unwrap_or_default();
+
+                if crate::supervisor::turn_running(&tail) || crate::supervisor::asking_the_human(&tail) {
+                    continue;
+                }
+
+                state.limits.told(&agent.id, now);
+                note(state, "engine.limit_carry_on", "the supervisor", &agent.id, crate::limits::CARRY_ON);
+                tracing::info!(agent = %agent.id, "told to carry on after its usage limit");
+
+                let state = state.clone();
+                tokio::spawn(async move {
+                    if !say_it(&state, &session_id, crate::limits::CARRY_ON).await {
+                        tracing::warn!(session = %session_id, "the words to carry on did not land; they are said again later");
+                    }
+                });
+            }
+            None => {
+                let Ok(sits) = where_it_sits(state, &agent) else {
+                    continue;
+                };
+
+                state.limits.told(&agent.id, now);
+                match state.crew.start(&agent.id, &sits, true, Some(crate::limits::CARRY_ON)) {
+                    Ok(_) => {
+                        tracing::info!(agent = %agent.id, "resumed after its usage limit");
+                        note(state, "engine.limit_carry_on", "the supervisor", &agent.id, "resumed with the words to carry on");
+                    }
+                    Err(error) => tracing::warn!(agent = %agent.id, %error, "cannot resume after the usage limit"),
+                }
+            }
+        }
+    }
+}
+
 /// Which allowance this agent spends from.
 fn identity_of(agent: &Agent) -> String {
     crate::budget::identity_of(&agent.engine_id, agent.account.as_deref())
@@ -2315,6 +2679,13 @@ fn ceilings_for(state: &AppState, identity: &str) -> crate::meter::Ceilings {
 /// that account has spoken yet is an app that never starts, and the first pane
 /// to open answers the question within a tick.
 fn room_for(state: &AppState, identity: &str) -> crate::budget::Room {
+    // An engine that has said the login is out is the plainest reading there
+    // is. Starting anything else on it until the reset only earns the same
+    // line in another pane.
+    if state.limits.spent(identity, now_secs()) {
+        return crate::budget::Room::Spent;
+    }
+
     let week = state
         .quota
         .lock()
@@ -4243,6 +4614,7 @@ async fn propose_memory(
     let scope = scope_for(&state, &request.scope);
     let proposed_by = request.proposed_by.clone();
     let memory = state.memories.propose(request, &scope, now_secs())?;
+    let _ = state.vault.reindex(now_secs());
 
     // A proposal is inert until somebody says yes, and nothing on the screen
     // said one had arrived — an agent could write down the thing that would
@@ -4367,6 +4739,9 @@ async fn approve_memory(
 ) -> Result<Json<crate::memory::Approved>, ApiError> {
     let answered = state.memories.approve(&body.slug, body.approved)?;
 
+    // The maps say which memories the crew is told. An answer changes that.
+    let _ = state.vault.reindex(now_secs());
+
     if answered.memory.approved {
         if let Some(vector) = embed_text(&state, answered.memory.text.clone()).await {
             state.memories.remember_vector(&answered.memory.id, vector);
@@ -4385,6 +4760,7 @@ async fn forget_memory(
     Path(slug): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     state.memories.forget(&slug)?;
+    let _ = state.vault.reindex(now_secs());
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -4450,14 +4826,95 @@ async fn set_mail_policy(
 }
 
 async fn list_routines(State(state): State<AppState>) -> Json<Vec<Routine>> {
-    Json(state.routines.list())
+    Json(state.routines.list(now_secs()))
+}
+
+/// The routines worth starting from, and the words a brief may carry.
+async fn routine_templates() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "templates": crate::routines::templates(),
+        "variables": crate::routines::VARIABLES
+            .iter()
+            .map(|(name, says)| serde_json::json!({ "name": name, "says": says }))
+            .collect::<Vec<_>>(),
+    }))
+}
+
+fn asked_by_an_agent(scope: &Option<Extension<TokenScope>>) -> bool {
+    matches!(scope, Some(Extension(TokenScope::Agent)))
+}
+
+/// Refused to an agent, whatever it says about itself: a routine spends tokens
+/// on a timer, and only a person decides that the crew spends them.
+const ONLY_A_PERSON_TURNS_IT_ON: &str =
+    "a routine an agent proposes stays paused until a person turns it on in Routines";
+
+/// Put a routine an agent touched in front of the person who has to say yes.
+fn ask_about_a_routine(state: &AppState, routine: &Routine, by: Option<&str>, did: &str) {
+    let who = by
+        .and_then(|id| state.crew.list().into_iter().find(|agent| agent.id == id))
+        .map(|agent| agent.name)
+        .or_else(|| by.map(str::to_owned))
+        .unwrap_or_else(|| "an agent".to_owned());
+
+    state.notices.push(
+        crate::notices::NewNotice {
+            kind: crate::notices::Kind::Waiting,
+            text: format!("{who} {did}: {} — turn it on in Routines", routine.name),
+            agent_id: by.map(str::to_owned),
+            opens: Some("routines".to_owned()),
+            ..Default::default()
+        },
+        now_secs(),
+    );
 }
 
 async fn create_routine(
     State(state): State<AppState>,
+    scope: Option<Extension<TokenScope>>,
     Json(request): Json<CreateRoutine>,
 ) -> Result<Json<Routine>, ApiError> {
-    Ok(Json(state.routines.create(request)?))
+    let from_an_agent = asked_by_an_agent(&scope);
+    if from_an_agent && request.enabled == Some(true) {
+        return Err(anyhow::anyhow!(ONLY_A_PERSON_TURNS_IT_ON).into());
+    }
+
+    let routine = state.routines.create(request, now_secs(), from_an_agent)?;
+    if from_an_agent {
+        ask_about_a_routine(&state, &routine, routine.created_by.as_deref(), "proposed a routine");
+    }
+
+    Ok(Json(routine))
+}
+
+/// Change a routine. An agent may reshape one, but a routine it changed goes
+/// back to waiting on a person: a new brief or a tighter schedule is a new
+/// decision about what the crew spends, and it was a person who made the old one.
+async fn update_routine(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    scope: Option<Extension<TokenScope>>,
+    Json(mut change): Json<UpdateRoutine>,
+) -> Result<Json<Routine>, ApiError> {
+    let from_an_agent = asked_by_an_agent(&scope);
+    if from_an_agent && change.enabled == Some(true) {
+        return Err(anyhow::anyhow!(ONLY_A_PERSON_TURNS_IT_ON).into());
+    }
+
+    let pausing = from_an_agent
+        && change.changes_more_than_the_switch()
+        && state.routines.get(&id).is_some_and(|held| held.enabled);
+    if pausing {
+        change.enabled = Some(false);
+    }
+
+    let by = change.by.clone();
+    let routine = state.routines.update(&id, change, now_secs())?;
+    if pausing {
+        ask_about_a_routine(&state, &routine, by.as_deref(), "changed a routine, so it is paused");
+    }
+
+    Ok(Json(routine))
 }
 
 #[derive(Deserialize)]
@@ -4468,15 +4925,66 @@ struct EnabledBody {
 async fn set_routine_enabled(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    scope: Option<Extension<TokenScope>>,
     Json(body): Json<EnabledBody>,
 ) -> Result<Json<Routine>, ApiError> {
+    if asked_by_an_agent(&scope) && body.enabled {
+        return Err(anyhow::anyhow!(ONLY_A_PERSON_TURNS_IT_ON).into());
+    }
+
     Ok(Json(state.routines.set_enabled(&id, body.enabled)?))
 }
 
+#[derive(Deserialize)]
+struct RunQuery {
+    /// Run even when the week is tight or the last run's card is still open.
+    #[serde(default)]
+    force: bool,
+}
+
+/// Run a routine now, whatever its schedule says. A pane mid-turn is not
+/// waited for here: somebody pressed a button and is owed an answer.
+async fn run_routine_now(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    scope: Option<Extension<TokenScope>>,
+    Query(query): Query<RunQuery>,
+) -> Result<Json<Routine>, ApiError> {
+    let routine = state
+        .routines
+        .get(&id)
+        .ok_or_else(|| anyhow::anyhow!("unknown routine: {id}"))?;
+
+    if asked_by_an_agent(&scope) && !routine.enabled {
+        return Err(anyhow::anyhow!(
+            "{} is paused — a person turns it on before it runs",
+            routine.name
+        )
+        .into());
+    }
+
+    let now = now_secs();
+    match run_routine(&state, &routine, now, query.force).await {
+        Attempt::Wait(why) => Err(anyhow::anyhow!("{why} — nothing was sent; run it again when it is at rest").into()),
+        attempt => settle_a_run(&state, &routine, now, attempt)
+            .map(|updated| Json(state.routines.list(now).into_iter().find(|held| held.id == updated.id).unwrap_or(updated)))
+            .ok_or_else(|| anyhow::anyhow!("unknown routine: {id}").into()),
+    }
+}
+
+/// A routine a person made is theirs to delete. An agent may clear away what
+/// the crew itself proposed.
 async fn delete_routine(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    scope: Option<Extension<TokenScope>>,
 ) -> Result<StatusCode, ApiError> {
+    if asked_by_an_agent(&scope)
+        && state.routines.get(&id).is_some_and(|held| held.created_by.is_none())
+    {
+        return Err(anyhow::anyhow!("a routine a person made is theirs to delete — pause it and say why instead").into());
+    }
+
     state.routines.delete(&id)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -4596,6 +5104,21 @@ fn presence_of(state: &AppState, agent: &Agent, now: u64) -> AgentPresence {
                 .map(|raw| strip_ansi(&raw))
                 .unwrap_or_default();
 
+            // Stopped at a usage limit reads as an agent at rest, which is
+            // what finished looks like. It is waiting on a clock, not a person.
+            if let Some(hold) = state.limits.held(&agent.id) {
+                return AgentPresence {
+                    agent: agent.clone(),
+                    presence: "waiting",
+                    since: silence,
+                    reason: format!(
+                        "stopped at its {} — carries on at {}",
+                        hold.window.in_words(),
+                        local_clock(hold.resets_at, now)
+                    ),
+                };
+            }
+
             // Being throttled comes before everything the pane looks like it is
             // doing: a retry counter redraws exactly like a turn, so this is
             // the one state that would otherwise be reported as work.
@@ -4670,7 +5193,7 @@ async fn list_agents(State(state): State<AppState>) -> Json<Vec<AgentPresence>> 
 /// A commander that has not been given `commanding-a-crew` plans nothing, so the
 /// skill goes on at the moment of hiring rather than being something a person
 /// has to remember. Every path that hires goes through here for that reason.
-fn take_on(state: &AppState, request: HireRequest) -> Result<Agent, ApiError> {
+fn take_on(state: &AppState, mut request: HireRequest) -> Result<Agent, ApiError> {
     // A chief commands a workspace, so it is hired into one — never into a
     // project's worktree. Hired here it would be a chief of nothing, standing in
     // one project's checkout with no workspace to read.
@@ -4690,6 +5213,25 @@ fn take_on(state: &AppState, request: HireRequest) -> Result<Agent, ApiError> {
             request.repository_id,
             request.worktree
         )));
+    }
+
+    // With the logins used in turn, somebody hired without a login named starts
+    // on the first one in the person's order that has room, rather than on the
+    // machine's own login whatever is left of its week.
+    let unnamed = request
+        .account
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .is_empty();
+    if unnamed && failover_is_on(state) && crate::accounts::can_hold_accounts(&request.engine_id) {
+        let engine = request.engine_id.clone();
+        let exhausted = |label: Option<&str>| !login_has_room(state, &engine, label);
+        if let Some(Some(label)) =
+            crate::accounts::first_choice(&state.config.data_dir, &engine, &login_order(state), &exhausted)
+        {
+            request.account = Some(label);
+        }
     }
 
     may_hire_onto(state, &request.engine_id, request.account.as_deref())?;
@@ -5234,6 +5776,10 @@ async fn forget_note(
     Path(slug): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     state.vault.forget(&slug)?;
+
+    // A map listing a note that is gone is a link to nothing, and Obsidian
+    // makes an empty note of it the moment somebody clicks.
+    let _ = state.vault.reindex(now_secs());
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -5501,6 +6047,7 @@ async fn dismiss_agent(
         .unwrap_or_default();
 
     state.crew.dismiss(&id)?;
+    state.limits.forget(&id);
     state.skills.forget_agent(&id);
 
     // Everything else the app decides is on the record; three agents left and
@@ -6396,74 +6943,129 @@ fn failover_is_on(state: &AppState) -> bool {
     state.settings.lock().get(FAILOVER).map(String::as_str) == Some("on")
 }
 
-/// Move an agent whose week is gone onto a login that still has one, and start
-/// it again where it left off.
+/// The order the person put the logins in, first choice first, each as
+/// `engine` or `engine/label`.
+const ORDER: &str = "accounts_order";
+
+/// The share of a week at which an agent is moved on to the next login.
+const SWITCH_AT: &str = "accounts_switch_at";
+
+fn login_order(state: &AppState) -> Vec<String> {
+    state
+        .settings
+        .lock()
+        .get(ORDER)
+        .and_then(|held| serde_json::from_str(held).ok())
+        .unwrap_or_default()
+}
+
+/// Where agents are moved on, as a percentage of the week. Unset, it is where
+/// a week counts as spent, which is where the hand-over always happened.
+fn switch_at(state: &AppState) -> f32 {
+    state
+        .settings
+        .lock()
+        .get(SWITCH_AT)
+        .and_then(|held| held.parse::<f32>().ok())
+        .filter(|percent| (50.0..=99.0).contains(percent))
+        .unwrap_or(crate::budget::SPENT)
+}
+
+/// Whether a login may take an agent on: open to hiring, with room in its
+/// week and its minute, not stopped by its engine, and short of the point the
+/// person moves agents on at. The same point both ways, or an agent moved to a
+/// login just past it would be moved straight back out again on the next tick.
+fn login_has_room(state: &AppState, engine: &str, label: Option<&str>) -> bool {
+    let identity = crate::budget::identity_of(engine, label);
+    let switch = switch_at(state);
+    let short_of_the_switch = state
+        .quota
+        .lock()
+        .get(&identity)
+        .is_none_or(|(usage, _)| usage.weekly < switch);
+
+    hiring_rules(state).login_open(engine, label) && room_for(state, &identity).may_start_work() && short_of_the_switch
+}
+
+/// What an agent carried to another login is told when it had work in hand.
+const MOVED_ON: &str = "The login you were working on ran out, so you have been moved to another one. Please continue from where you left off.";
+
+/// Move an agent onto the next login in the person's order that still has
+/// room, and start it again where it left off.
 ///
 /// The pane has to be traded rather than talked to: the variable that decides
 /// which login a process spends from is read once, when it starts. Resuming is
 /// what keeps it the same conversation — the logins of one engine share their
 /// transcripts, so `--continue` in the same worktree finds the work rather than
-/// an empty prompt.
-async fn hand_over_to_a_stand_in(state: &AppState, agent: &crate::crew::Agent) {
+/// an empty prompt. It used to come back to that prompt and stop there, with
+/// the work it had been doing unmentioned; an agent that had work in hand is
+/// now told to carry on, and the steps being watched follow it to the new
+/// pane. One resting with nothing to do comes back resting.
+async fn hand_over_to_a_stand_in(state: &AppState, agent: &crate::crew::Agent) -> bool {
     if !failover_is_on(state) {
-        return;
+        return false;
     }
 
     let data_dir = state.config.data_dir.clone();
     let engine = agent.engine_id.clone();
+    let order = login_order(state);
+    let exhausted = |label: Option<&str>| !login_has_room(state, &engine, label);
 
-    let rules = hiring_rules(state);
-    let spent = |label: &str| {
-        !rules.login_open(&engine, Some(label))
-            || !room_for(state, &crate::budget::identity_of(&engine, Some(label))).may_start_work()
+    let Some(stand_in) =
+        crate::accounts::stand_in(&data_dir, &engine, agent.account.as_deref(), &order, &exhausted)
+    else {
+        return false;
     };
 
-    let Some(stand_in) = crate::accounts::stand_in(&data_dir, &engine, agent.account.as_deref(), &spent)
-    else {
-        return;
-    };
-
-    let Some(worktree) = state
-        .repos
-        .worktrees()
-        .into_iter()
-        .find(|held| {
-            held.worktree.repository_id == agent.repository_id && held.worktree.name == agent.worktree
-        })
-        .map(|held| held.worktree)
-    else {
-        return;
+    let Ok(sits) = where_it_sits(state, agent) else {
+        return false;
     };
 
     let moved = state.crew.shape(
         &agent.id,
         crate::crew::Shaping {
-            account: Some(stand_in.label.clone()),
+            account: Some(stand_in.clone().unwrap_or_default()),
             ..Default::default()
         },
     );
 
     if let Err(error) = moved {
         tracing::warn!(agent = %agent.id, %error, "the stand-in login would not take the agent");
-        return;
+        return false;
     }
 
+    let held_by_a_limit = state.limits.is_held(&agent.id);
+    let had_work = held_by_a_limit
+        || state
+            .supervisor
+            .working()
+            .iter()
+            .any(|watch| watch.agent_id == agent.id);
+
     let _ = state.crew.stop(&agent.id);
-    match state.crew.start(&agent.id, &worktree.path, true, None) {
-        Ok(_) => {
+    match state.crew.start(&agent.id, &sits, true, had_work.then_some(MOVED_ON)) {
+        Ok(started) => {
+            if let Some(session_id) = started.session_id.as_deref() {
+                state.supervisor.follow(&agent.id, session_id);
+            }
+            state.limits.release(&agent.id, now_secs());
+
             let said = format!(
-                "{} ran out of week on {} and carried on as {}",
+                "{} {} on {} and carried on as {}",
                 agent.id,
+                if held_by_a_limit { "hit its limit" } else { "ran out of week" },
                 agent.account.as_deref().unwrap_or("the default login"),
-                stand_in.label
+                stand_in.as_deref().unwrap_or("the default login"),
             );
 
-            tracing::info!(agent = %agent.id, account = %stand_in.label, "handed to a stand-in login");
+            tracing::info!(agent = %agent.id, account = ?stand_in, "handed to a stand-in login");
             note(state, "accounts.handed_over", "the supervisor", &agent.id, &said);
             state.leader_words.lock().push(said);
+            true
         }
         Err(error) => {
             tracing::warn!(agent = %agent.id, %error, "the stand-in pane would not start");
+            false
         }
     }
 }
@@ -6476,18 +7078,36 @@ async fn hand_over_to_a_stand_in(state: &AppState, agent: &crate::crew::Agent) {
 /// subscription is worth reading.
 async fn list_accounts(State(state): State<AppState>) -> Json<AccountsReport> {
     let data_dir = state.config.data_dir.clone();
+    let accounts = crate::accounts::all(&data_dir);
+    let engines: Vec<AccountableEngine> = crate::crew::engines()
+        .into_iter()
+        .filter(|engine| engine.installed && crate::accounts::can_hold_accounts(engine.id))
+        .map(|engine| AccountableEngine {
+            id: engine.id.to_owned(),
+            name: engine.name.to_owned(),
+        })
+        .collect();
+
+    // Each engine's own login is placed alongside the ones added here: it is
+    // where the crew spends until told otherwise, and it can be first or last.
+    let mut identities: Vec<String> = Vec::new();
+    for engine in engines
+        .iter()
+        .map(|held| held.id.clone())
+        .chain(accounts.iter().map(|held| held.engine_id.clone()))
+    {
+        if !identities.contains(&engine) {
+            identities.push(engine);
+        }
+    }
+    identities.extend(accounts.iter().map(|held| format!("{}/{}", held.engine_id, held.label)));
 
     Json(AccountsReport {
         failover: failover_is_on(&state),
-        accounts: crate::accounts::all(&data_dir),
-        engines: crate::crew::engines()
-            .into_iter()
-            .filter(|engine| engine.installed && crate::accounts::can_hold_accounts(engine.id))
-            .map(|engine| AccountableEngine {
-                id: engine.id.to_owned(),
-                name: engine.name.to_owned(),
-            })
-            .collect(),
+        order: crate::accounts::in_order(identities, &login_order(&state)),
+        switch_at: switch_at(&state),
+        accounts,
+        engines,
     })
 }
 
@@ -6495,8 +7115,54 @@ async fn list_accounts(State(state): State<AppState>) -> Json<AccountsReport> {
 struct AccountsReport {
     accounts: Vec<crate::accounts::Account>,
     engines: Vec<AccountableEngine>,
-    /// Whether a spent week moves an agent to the other login by itself.
+    /// Whether the logins are used in turn: new agents on the first with room,
+    /// and agents moved on when theirs runs out.
     failover: bool,
+    /// Every login, first choice first, as `engine` or `engine/label`.
+    order: Vec<String>,
+    /// The share of a week, in percent, at which an agent is moved on.
+    switch_at: f32,
+}
+
+#[derive(Deserialize)]
+struct Rotation {
+    #[serde(default)]
+    order: Option<Vec<String>>,
+    #[serde(default)]
+    switch_at: Option<f32>,
+}
+
+/// Put the logins in order, or move the point agents are moved on at.
+async fn set_rotation(
+    State(state): State<AppState>,
+    Json(wanted): Json<Rotation>,
+) -> Result<Json<AccountsReport>, ApiError> {
+    if let Some(percent) = wanted.switch_at {
+        if !(50.0..=99.0).contains(&percent) {
+            return Err(anyhow::anyhow!(
+                "move agents on somewhere between 50% and 99% of a week — {percent}% is not a point a week can be planned around"
+            )
+            .into());
+        }
+    }
+
+    {
+        let mut settings = state.settings.lock();
+        if let Some(order) = wanted.order {
+            let kept: Vec<String> = order
+                .into_iter()
+                .map(|identity| identity.trim().to_owned())
+                .filter(|identity| !identity.is_empty())
+                .collect();
+            settings.insert(ORDER.to_owned(), serde_json::to_string(&kept).unwrap_or_default());
+        }
+        if let Some(percent) = wanted.switch_at {
+            settings.insert(SWITCH_AT.to_owned(), format!("{}", percent.round()));
+        }
+        crate::db::save_state(&state.config.data_dir, "settings", &*settings);
+    }
+
+    Ok(list_accounts(State(state)).await)
 }
 
 #[derive(Deserialize)]

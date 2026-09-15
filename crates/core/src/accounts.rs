@@ -357,24 +357,133 @@ pub fn all(data_dir: &Path) -> Vec<Account> {
     CAN_HOLD.iter().flat_map(|engine| list(data_dir, engine)).collect()
 }
 
-/// Another login on the same engine that could take this work on.
-///
-/// Signed in, not the one that ran out, and — where the caller knows — not one
-/// whose own week is spent either. Order is the order on disk, so the answer is
-/// the same every time rather than whichever the filesystem felt like.
-pub fn stand_in(
-    data_dir: &Path,
-    engine_id: &str,
-    spent: Option<&str>,
-    exhausted: &dyn Fn(&str) -> bool,
-) -> Option<Account> {
-    let spent = spent.map(slugify);
+/// Logins in the order a person put them in, `engine` or `engine/label`. Any
+/// the person never placed keep the order they came in, after the placed ones.
+pub fn in_order(identities: Vec<String>, order: &[String]) -> Vec<String> {
+    let mut ranked = identities;
+    ranked.sort_by_key(|identity| order.iter().position(|held| held == identity).unwrap_or(usize::MAX));
+    ranked
+}
 
+/// Where an agent on this engine could run, first choice first: `None` for
+/// the machine's own login, `Some(label)` for each login signed in here.
+///
+/// The machine's own login is a choice like any other. It used to be the one
+/// place an agent could never be carried back to, so an agent moved to a
+/// second login stayed there even after the first week had come round again.
+pub fn choices(engine_id: &str, signed_in: &[String], order: &[String]) -> Vec<Option<String>> {
+    let mut identities = vec![engine_id.to_owned()];
+    identities.extend(signed_in.iter().map(|label| format!("{engine_id}/{label}")));
+
+    in_order(identities, order)
+        .into_iter()
+        .map(|identity| identity.split_once('/').map(|(_, label)| label.to_owned()))
+        .collect()
+}
+
+/// The first choice that is not the login being left and still has room.
+pub fn first_with_room(
+    choices: Vec<Option<String>>,
+    leaving: Option<Option<&str>>,
+    exhausted: &dyn Fn(Option<&str>) -> bool,
+) -> Option<Option<String>> {
+    choices
+        .into_iter()
+        .filter(|choice| leaving.is_none_or(|left| choice.as_deref() != left))
+        .find(|choice| !exhausted(choice.as_deref()))
+}
+
+fn signed_in_labels(data_dir: &Path, engine_id: &str) -> Vec<String> {
     list(data_dir, engine_id)
         .into_iter()
         .filter(|account| account.signed_in)
-        .filter(|account| Some(&account.label) != spent.as_ref())
-        .find(|account| !exhausted(&account.label))
+        .map(|account| account.label)
+        .collect()
+}
+
+/// Another login on the same engine that could take this work on: the next in
+/// the person's order that is signed in, is not the one being left, and — as
+/// far as the caller can say — has room. `Some(None)` is the machine's own.
+pub fn stand_in(
+    data_dir: &Path,
+    engine_id: &str,
+    leaving: Option<&str>,
+    order: &[String],
+    exhausted: &dyn Fn(Option<&str>) -> bool,
+) -> Option<Option<String>> {
+    let leaving = leaving.map(slugify);
+    first_with_room(
+        choices(engine_id, &signed_in_labels(data_dir, engine_id), order),
+        Some(leaving.as_deref()),
+        exhausted,
+    )
+}
+
+/// The login a new agent on this engine starts on: the first in the person's
+/// order that has room.
+pub fn first_choice(
+    data_dir: &Path,
+    engine_id: &str,
+    order: &[String],
+    exhausted: &dyn Fn(Option<&str>) -> bool,
+) -> Option<Option<String>> {
+    first_with_room(choices(engine_id, &signed_in_labels(data_dir, engine_id), order), None, exhausted)
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::*;
+
+    #[test]
+    fn the_logins_a_person_placed_come_first_and_the_rest_keep_their_order() {
+        let ranked = in_order(
+            vec!["claude".to_owned(), "claude/a".to_owned(), "claude/b".to_owned()],
+            &["claude/b".to_owned()],
+        );
+        assert_eq!(ranked, vec!["claude/b", "claude", "claude/a"]);
+    }
+
+    #[test]
+    fn the_machines_own_login_is_a_choice_like_any_other() {
+        let order = vec!["claude/second".to_owned(), "claude".to_owned()];
+        assert_eq!(
+            choices("claude", &["second".to_owned()], &order),
+            vec![Some("second".to_owned()), None]
+        );
+        assert_eq!(
+            choices("claude", &["second".to_owned()], &[]),
+            vec![None, Some("second".to_owned())],
+            "unplaced, the machine's own login comes first"
+        );
+    }
+
+    #[test]
+    fn the_next_login_skips_the_one_being_left_and_any_without_room() {
+        let held = vec![None, Some("second".to_owned()), Some("third".to_owned())];
+        let second_is_full = |label: Option<&str>| label == Some("second");
+
+        assert_eq!(
+            first_with_room(held.clone(), Some(None), &second_is_full),
+            Some(Some("third".to_owned())),
+            "leaving the machine's own login, past a full second, to the third"
+        );
+        assert_eq!(
+            first_with_room(held.clone(), Some(Some("third")), &|_| false),
+            Some(None),
+            "and back to the machine's own login when it has room again"
+        );
+        assert_eq!(first_with_room(held, None, &|_| true), None, "nowhere with room is nowhere");
+    }
+
+    #[test]
+    fn a_new_agent_starts_on_the_first_choice_with_room() {
+        let held = vec![None, Some("second".to_owned())];
+        assert_eq!(
+            first_with_room(held.clone(), None, &|label: Option<&str>| label.is_none()),
+            Some(Some("second".to_owned()))
+        );
+        assert_eq!(first_with_room(held, None, &|_| false), Some(None));
+    }
 }
 
 #[cfg(test)]
@@ -584,9 +693,14 @@ mod tests {
         add(&data, "claude", "first").expect("the first folder");
         add(&data, "claude", "second").expect("the second folder");
 
-        // Nothing here is signed in — the engine says so — and an account
-        // nobody is signed in as cannot take work on.
-        assert_eq!(stand_in(&data, "claude", Some("first"), &|_| false), None);
+        // Nothing here is signed in — the engine says so — and a folder nobody
+        // is signed in as cannot take work on. What is left is the machine's
+        // own login, and only while it has room.
+        assert_eq!(stand_in(&data, "claude", Some("first"), &[], &|_| false), Some(None));
+        assert_eq!(
+            stand_in(&data, "claude", Some("first"), &[], &|label: Option<&str>| label.is_none()),
+            None
+        );
 
         let _ = fs::remove_dir_all(&data);
     }

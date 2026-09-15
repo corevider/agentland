@@ -597,6 +597,18 @@ export interface AccountsReport {
     /// The engines on this machine that can hold more than one login.
     engines: Array<{ id: string; name: string }>;
     failover: boolean;
+    /// Every login as `engine` or `engine/label`, first choice first.
+    order?: string[];
+    /// The share of a week, in percent, at which an agent is moved on.
+    switch_at?: number;
+}
+
+/// The order logins are used in, and where an agent is moved on from one.
+export function set_account_rotation(change: { order?: string[]; switch_at?: number }): Promise<AccountsReport> {
+    return request<AccountsReport>("/accounts/rotation", {
+        method: "POST",
+        body: JSON.stringify(change),
+    });
 }
 
 export function list_accounts(): Promise<AccountsReport> {
@@ -1135,31 +1147,103 @@ export function set_embedder(settings: EmbedderSettings): Promise<EmbedderReport
     });
 }
 
+export type RoutineDay = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
+
+/// When a routine runs, on the machine's own clock: every so often inside an
+/// optional window, or at set times. No days means every day.
+export type RoutineSchedule =
+    | { kind: "every"; minutes: number; from?: string | null; to?: string | null; days: RoutineDay[] }
+    | { kind: "daily"; times: string[]; days: RoutineDay[] };
+
+/// A card handed to the agent, or words said into its own pane.
+export type RoutineDelivery = "card" | "pane";
+
+export interface RoutineRun {
+    at: number;
+    outcome: "ran" | "failed" | "skipped";
+    detail: string;
+    card: string | null;
+}
+
 export interface Routine {
     id: string;
     name: string;
     agent_id: string;
     brief: string;
-    every_minutes: number;
+    schedule: RoutineSchedule;
+    delivery: RoutineDelivery;
     draft_only: boolean;
+    skip_when_tight: boolean;
+    one_at_a_time: boolean;
+    pause_after_failures: number;
     enabled: boolean;
+    /// The agent that proposed it; null is a person.
+    created_by: string | null;
+    created_at: number;
     last_run: number;
     consecutive_failures: number;
     last_result: string | null;
+    last_card: string | null;
+    /// When the current run began waiting for a busy agent; 0 when it is not.
+    waiting_since: number;
+    /// Newest first.
+    history: RoutineRun[];
+    /// Worked out by the core, so the schedule is never recomputed here.
+    next_run: number | null;
+}
+
+/// Everything a person decides about a routine.
+export interface RoutinePayload {
+    name: string;
+    agent_id: string;
+    brief: string;
+    schedule: RoutineSchedule;
+    delivery: RoutineDelivery;
+    draft_only: boolean;
+    skip_when_tight: boolean;
+    one_at_a_time: boolean;
+    pause_after_failures: number;
+}
+
+export interface RoutineTemplate {
+    id: string;
+    name: string;
+    summary: string;
+    suits: "any" | "commander";
+    brief: string;
+    schedule: RoutineSchedule;
+    delivery: RoutineDelivery;
+    draft_only: boolean;
+    skip_when_tight: boolean;
+    one_at_a_time: boolean;
+}
+
+export interface RoutineTemplates {
+    templates: RoutineTemplate[];
+    variables: { name: string; says: string }[];
 }
 
 export function list_routines(): Promise<Routine[]> {
     return request<Routine[]>("/routines");
 }
 
-export function create_routine(payload: {
-    name: string;
-    agent_id: string;
-    brief: string;
-    every_minutes: number;
-    draft_only: boolean;
-}): Promise<Routine> {
+export function routine_templates(): Promise<RoutineTemplates> {
+    return request<RoutineTemplates>("/routines/templates");
+}
+
+export function create_routine(payload: RoutinePayload): Promise<Routine> {
     return request<Routine>("/routines", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function update_routine(id: string, change: Partial<RoutinePayload> & { enabled?: boolean }): Promise<Routine> {
+    return request<Routine>(`/routines/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: JSON.stringify(change),
+    });
+}
+
+export function run_routine(id: string, force = false): Promise<Routine> {
+    return request<Routine>(`/routines/${encodeURIComponent(id)}/run?force=${force}`, { method: "POST" });
 }
 
 export function set_routine_enabled(id: string, enabled: boolean): Promise<Routine> {

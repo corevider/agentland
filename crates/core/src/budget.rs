@@ -50,7 +50,7 @@ pub enum Room {
 /// what was already spent on it. Above the second, only a person's own request
 /// gets through.
 const TIGHT: f32 = 80.0;
-const SPENT: f32 = 92.0;
+pub const SPENT: f32 = 92.0;
 
 impl Usage {
     pub fn room(self) -> Room {

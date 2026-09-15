@@ -1,15 +1,67 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Waiting } from "@/components/Spinner";
 import {
     add_account,
     forget_account,
     list_accounts,
+    list_agents,
+    read_budget,
+    read_journal,
     set_account_failover,
+    set_account_rotation,
     sign_in_account,
     type AccountsReport,
+    type Agent,
+    type Allowance,
+    type JournalEntry,
 } from "@/lib/core";
+import {
+    hand_overs,
+    login_rows,
+    ordinal,
+    rank_among,
+    reorder,
+    week_words,
+    who_spends,
+    type LoginRow,
+} from "@/lib/logins";
+import { exactly, when } from "@/lib/when";
 import { Picker } from "@/components/Picker";
+
+const ROOM_COLOUR: Record<Allowance["room"], string> = {
+    plenty: "bg-palm",
+    tight: "bg-sun",
+    spent: "bg-coral",
+};
+
+const SWITCH_AT_DEFAULT = 92;
+
+/// How much of a login's week is gone, as a bar with the words beside it.
+function Week({ row, switch_at }: { row: LoginRow; switch_at: number }) {
+    const spent = row.allowance?.weekly_percent;
+    const known = spent !== undefined && spent !== null;
+
+    return (
+        <div className="flex flex-wrap items-center gap-2">
+            <span className="relative h-1.5 w-28 overflow-hidden rounded-full bg-reef/60">
+                {known ? (
+                    <span
+                        className={`block h-full ${ROOM_COLOUR[row.allowance?.room ?? "plenty"]}`}
+                        style={{ width: `${Math.min(100, Math.max(0, spent))}%` }}
+                    />
+                ) : null}
+                <span
+                    className="absolute top-0 h-full w-px bg-linen/70"
+                    style={{ left: `${switch_at}%` }}
+                    title={`agents are moved on at ${switch_at}%`}
+                />
+            </span>
+            <span className="font-mono text-[10px] text-shell">{week_words(row.allowance)}</span>
+            <span className="font-mono text-[10px] text-shade">· {who_spends(row.agents)}</span>
+        </div>
+    );
+}
 
 /// The logins this machine holds.
 ///
@@ -18,16 +70,34 @@ import { Picker } from "@/components/Picker";
 /// to the provider's own endpoint, and routing it elsewhere spends API credit
 /// instead. So an account here is a folder the engine signs into, and the crew
 /// picks which folder each agent starts in.
+///
+/// Each login says how much of its week is gone and who is spending from it,
+/// where it stands in the order they are used in, and the hand-overs are listed
+/// under the switch: a list of logins with no numbers on it could not show the
+/// one thing a second login is for.
 export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: string) => void }) {
     const [held, set_held] = useState<AccountsReport | null>(null);
+    const [allowances, set_allowances] = useState<Allowance[]>([]);
+    const [crew, set_crew] = useState<Agent[]>([]);
+    const [journal, set_journal] = useState<JournalEntry[]>([]);
     const [engine, set_engine] = useState<string>("");
     const [label, set_label] = useState("");
+    const [switch_draft, set_switch_draft] = useState<string>("");
     const [notice, set_notice] = useState<string | null>(null);
     const [busy, set_busy] = useState(false);
 
     const refresh = useCallback(async () => {
-        const report = await list_accounts();
+        const [report, budget, agents, entries] = await Promise.all([
+            list_accounts(),
+            read_budget().catch(() => null),
+            list_agents().catch(() => [] as Agent[]),
+            read_journal({ kind: "accounts.handed_over", limit: 10 }).catch(() => [] as JournalEntry[]),
+        ]);
+
         set_held(report);
+        set_allowances(budget?.allowances ?? []);
+        set_crew(agents);
+        set_journal(entries);
         set_engine((current) => current || (report.engines[0]?.id ?? ""));
     }, []);
 
@@ -35,7 +105,30 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
         refresh().catch((cause) => set_notice(String(cause)));
     }, [refresh]);
 
+    const rows = useMemo(() => (held ? login_rows(held, allowances, crew) : []), [allowances, crew, held]);
+    const handed = useMemo(() => hand_overs(journal), [journal]);
+    const switch_at = held?.switch_at ?? SWITCH_AT_DEFAULT;
+    const now = Math.floor(Date.now() / 1000);
+
     const say = (cause: unknown) => set_notice(cause instanceof Error ? cause.message : String(cause));
+
+    const rotate = useCallback((change: { order?: string[]; switch_at?: number }) => {
+        set_account_rotation(change)
+            .then((report) => {
+                set_held(report);
+                set_notice(null);
+            })
+            .catch(say);
+    }, []);
+
+    const commit_switch = useCallback(() => {
+        const wanted = Number(switch_draft);
+        set_switch_draft("");
+        if (!switch_draft.trim() || !Number.isFinite(wanted) || wanted === switch_at) {
+            return;
+        }
+        rotate({ switch_at: Math.round(wanted) });
+    }, [rotate, switch_at, switch_draft]);
 
     const add = useCallback(async () => {
         if (!engine || !label.trim()) {
@@ -102,47 +195,87 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
             ) : null}
 
             <div className="flex flex-col gap-2">
-                {held.accounts.length === 0 ? (
+                {rows.length === 0 ? (
                     <p className="font-mono text-[11px] text-shade">
                         Nothing here yet — the crew spends from whoever this machine is signed in as.
                     </p>
                 ) : null}
 
-                {held.accounts.map((account) => (
-                    <div
-                        key={`${account.engine_id}/${account.label}`}
-                        className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-reef bg-lagoon-deep px-2 py-1.5"
-                    >
-                        <div className="flex flex-col">
-                            <span className="font-mono text-[11px] text-linen">
-                                {account.engine_id} · {account.label}
-                            </span>
-                            <span className="font-mono text-[10px] text-shade">
-                                {!account.askable
-                                    ? "this engine has no way to say who it is — open its pane to find out"
-                                    : account.signed_in
-                                      ? `${account.who ?? "signed in"}${account.plan ? ` · ${account.plan}` : ""}`
-                                      : "the engine says nobody is signed in here"}
-                            </span>
-                        </div>
+                {rows.map((row) => {
+                    const { rank, of } = rank_among(rows, row);
 
-                        <div className="flex items-center gap-2">
-                            <button
-                                className="rounded-lg border border-reef px-2 py-1 font-mono text-[11px] text-shell hover:border-turquoise hover:text-turquoise"
-                                onClick={() => void sign_in(account.engine_id, account.label)}
-                            >
-                                {account.askable && account.signed_in ? "sign in again" : "sign in"}
-                            </button>
-                            <button
-                                className="rounded-lg border border-reef px-2 py-1 font-mono text-[11px] text-shell hover:border-coral hover:text-coral"
-                                onClick={() => void forget(account.engine_id, account.label)}
-                                title="The folder goes, and the credential in it goes with it."
-                            >
-                                forget
-                            </button>
+                    return (
+                        <div
+                            key={row.identity}
+                            className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-lagoon-deep px-2 py-1.5 ${
+                                row.allowance?.room === "spent" ? "border-coral/60" : "border-reef"
+                            }`}
+                        >
+                            <div className="flex min-w-0 items-center gap-2">
+                                {of > 1 ? (
+                                    <div className="flex flex-col items-center">
+                                        <button
+                                            className="font-mono text-[10px] leading-none text-shade hover:text-turquoise disabled:opacity-30"
+                                            disabled={rank === 1}
+                                            title="use this login before the one above it"
+                                            onClick={() => rotate({ order: reorder(rows, row.identity, -1) })}
+                                        >
+                                            ▲
+                                        </button>
+                                        <span
+                                            className="my-0.5 font-mono text-[10px] text-driftwood"
+                                            title="the order agents are started on, and moved on to"
+                                        >
+                                            {ordinal(rank)}
+                                        </span>
+                                        <button
+                                            className="font-mono text-[10px] leading-none text-shade hover:text-turquoise disabled:opacity-30"
+                                            disabled={rank === of}
+                                            title="use this login after the one below it"
+                                            onClick={() => rotate({ order: reorder(rows, row.identity, 1) })}
+                                        >
+                                            ▼
+                                        </button>
+                                    </div>
+                                ) : null}
+
+                                <div className="flex min-w-0 flex-col gap-0.5">
+                                    <span className="font-mono text-[11px] text-linen">
+                                        {row.engine_id} · {row.label ?? "this machine's own login"}
+                                    </span>
+                                    <span className="font-mono text-[10px] text-shade">
+                                        {!row.account
+                                            ? "signed in outside Agentland — where the crew spends until told otherwise"
+                                            : !row.account.askable
+                                              ? "this engine has no way to say who it is — open its pane to find out"
+                                              : row.account.signed_in
+                                                ? `${row.account.who ?? "signed in"}${row.account.plan ? ` · ${row.account.plan}` : ""}`
+                                                : "the engine says nobody is signed in here — it is skipped until somebody is"}
+                                    </span>
+                                    <Week row={row} switch_at={switch_at} />
+                                </div>
+                            </div>
+
+                            {row.account ? (
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        className="rounded-lg border border-reef px-2 py-1 font-mono text-[11px] text-shell hover:border-turquoise hover:text-turquoise"
+                                        onClick={() => void sign_in(row.engine_id, row.label ?? "")}
+                                    >
+                                        {row.account.askable && row.account.signed_in ? "sign in again" : "sign in"}
+                                    </button>
+                                    <button
+                                        className="rounded-lg border border-reef px-2 py-1 font-mono text-[11px] text-shell hover:border-coral hover:text-coral"
+                                        onClick={() => void forget(row.engine_id, row.label ?? "")}
+                                        title="The folder goes, and the credential in it goes with it."
+                                    >
+                                        forget
+                                    </button>
+                                </div>
+                            ) : null}
                         </div>
-                    </div>
-                ))}
+                    );
+                })}
             </div>
 
             {held.engines.length > 0 ? (
@@ -180,27 +313,66 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
                 </div>
             ) : null}
 
-            <label className="flex items-start gap-2 rounded-lg border border-reef bg-lagoon-deep px-2 py-2">
-                <input
-                    type="checkbox"
-                    className="mt-0.5"
-                    checked={held.failover}
-                    onChange={(event) => {
-                        set_account_failover(event.target.checked).then(set_held).catch(say);
-                    }}
-                />
-                <span className="flex flex-col gap-0.5">
-                    <span className="font-mono text-[11px] text-linen">
-                        Carry on with the other login when a week runs out
+            <div className="flex flex-col gap-2 rounded-lg border border-reef bg-lagoon-deep px-2 py-2">
+                <label className="flex items-start gap-2">
+                    <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={held.failover}
+                        onChange={(event) => {
+                            set_account_failover(event.target.checked).then(set_held).catch(say);
+                        }}
+                    />
+                    <span className="flex flex-col gap-0.5">
+                        <span className="font-mono text-[11px] text-linen">Use the logins in turn</span>
+                        <span className="font-mono text-[10px] text-shade">
+                            A new agent starts on the first login in this order that has room. An agent
+                            whose login passes the point below, or whose engine says it is out, is moved
+                            to the next one once its pane is at rest, resumes the same conversation, and
+                            is told to carry on. Off unless you say otherwise — it spends subscriptions
+                            you may not have meant to spend this week.
+                        </span>
                     </span>
-                    <span className="font-mono text-[10px] text-shade">
-                        Off unless you say otherwise — it spends a second subscription you did not
-                        ask to spend this week. A pane already running keeps the login it started
-                        with; the hand-over trades it for a fresh one and resumes the same
-                        conversation.
+                </label>
+
+                <label className="ml-5 flex flex-wrap items-center gap-1.5 font-mono text-[11px] text-shell">
+                    move an agent on at
+                    <input
+                        type="number"
+                        min={50}
+                        max={99}
+                        className="w-14 rounded-md border border-reef bg-lagoon px-1.5 py-0.5 font-mono text-[11px]"
+                        value={switch_draft === "" ? switch_at : switch_draft}
+                        onChange={(event) => set_switch_draft(event.target.value)}
+                        onBlur={commit_switch}
+                        onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                                commit_switch();
+                            }
+                        }}
+                    />
+                    % of a week
+                    <span className="text-[10px] text-shade">
+                        — the mark on each bar; earlier leaves room to finish a turn on the old login
                     </span>
-                </span>
-            </label>
+                </label>
+            </div>
+
+            {handed.length > 0 ? (
+                <div className="flex flex-col gap-1">
+                    <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-shade">
+                        handed over lately
+                    </span>
+                    {handed.map((entry) => (
+                        <div key={`${entry.at}-${entry.subject}`} className="flex gap-2 font-mono text-[11px]">
+                            <span className="w-16 shrink-0 text-shade" title={exactly(entry.at)}>
+                                {when(entry.at, now)}
+                            </span>
+                            <span className="text-driftwood">{entry.detail}</span>
+                        </div>
+                    ))}
+                </div>
+            ) : null}
 
             {notice ? <p className="font-mono text-[11px] text-sun">{notice}</p> : null}
         </section>
