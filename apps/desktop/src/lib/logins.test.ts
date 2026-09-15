@@ -8,8 +8,10 @@ import {
     login_rows,
     nearness,
     ordinal,
+    out_words,
     rank_among,
     reorder,
+    wait_words,
     week_words,
     who_spends,
 } from "@/lib/logins";
@@ -30,6 +32,24 @@ describe("a login's five hours", () => {
     it("does not show a login as full on a reading older than the window", () => {
         expect(five_hours_words(read(99, FIVE_HOURS))).toContain("come round");
         expect(five_hours_words(read(99, FIVE_HOURS - 1))).toBe("99% of its five hours");
+    });
+
+    it("says when a login its engine said is out comes back, and on which wall", () => {
+        const out = (limit_window: Allowance["limit_window"], back_in: number) =>
+            ({ ...allowance("claude", []), limit_back_at: 10_000 + back_in, limit_window }) as Allowance;
+
+        expect(out_words(out("session", 72 * 60), 10_000)).toBe("out on its five hours — back in 1h 12m");
+        expect(out_words(out("weekly", 2 * 86_400 + 3 * 3600), 10_000)).toBe("out on its week — back in 2d 3h");
+        expect(out_words(out("unknown", 30), 10_000)).toBe("out — back in under a minute");
+        expect(out_words(out("session", 0), 10_000)).toBeNull();
+        expect(out_words(allowance("claude", []), 10_000)).toBeNull();
+    });
+
+    it("says a wait the way a person would", () => {
+        expect(wait_words(59)).toBe("under a minute");
+        expect(wait_words(45 * 60)).toBe("45m");
+        expect(wait_words(3 * 3600)).toBe("3h");
+        expect(wait_words(86_400)).toBe("1d");
     });
 
     it("colours a bar by how near it is to the point agents are moved on at", () => {

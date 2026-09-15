@@ -8193,6 +8193,13 @@ struct Allowance {
     session_percent: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     read_seconds_ago: Option<u64>,
+    /// When a limit the engine reported on this login comes round, and which
+    /// wall it was. The engine's own time, so it is a promise where a
+    /// percentage is only a reading.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limit_back_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limit_window: Option<crate::limits::Window>,
     last_minute: crate::meter::Rate,
     ceilings: crate::meter::Ceilings,
     closest_to: &'static str,
@@ -8240,8 +8247,16 @@ async fn read_budget(State(state): State<AppState>) -> Json<BudgetReport> {
                 .map(|window| window.in_the_last_minute(now))
                 .unwrap_or_default();
             let room = room_for(&state, &identity);
+            let out = state
+                .limits
+                .list()
+                .into_iter()
+                .filter(|hold| hold.identity == identity && hold.resets_at > now)
+                .max_by_key(|hold| hold.resets_at);
 
             Allowance {
+                limit_back_at: out.as_ref().map(|hold| hold.resets_at),
+                limit_window: out.map(|hold| hold.window),
                 weekly_percent: held.map(|(usage, _)| usage.weekly),
                 session_percent: held.map(|(usage, _)| usage.session),
                 read_seconds_ago: held.map(|(_, at)| now.saturating_sub(at)),

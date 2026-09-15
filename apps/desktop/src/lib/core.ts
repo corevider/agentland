@@ -442,6 +442,10 @@ export interface Allowance {
     weekly_percent?: number;
     session_percent?: number;
     read_seconds_ago?: number;
+    /// When a limit the engine reported on this login comes round, and which
+    /// wall it was. Absent when the login is not out.
+    limit_back_at?: number | null;
+    limit_window?: "session" | "weekly" | "unknown" | null;
     last_minute: Rate;
     ceilings: Ceilings;
     closest_to: string;

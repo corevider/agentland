@@ -29,6 +29,7 @@ import {
     FIVE_HOURS,
     five_hours_words,
     nearness,
+    out_words,
     type LoginRow,
 } from "@/lib/logins";
 import { exactly, when } from "@/lib/when";
@@ -81,9 +82,21 @@ function Meter({
 
 /// A login's two walls — its week, and the five hours that run out first on a
 /// busy day — and who is spending from it.
-function Allowances({ row, week_at, five_hours_at }: { row: LoginRow; week_at: number; five_hours_at: number }) {
+function Allowances({
+    row,
+    week_at,
+    five_hours_at,
+    now,
+}: {
+    row: LoginRow;
+    week_at: number;
+    five_hours_at: number;
+    now: number;
+}) {
     const five_hours_stale = (row.allowance?.read_seconds_ago ?? 0) >= FIVE_HOURS;
     const five_hours = five_hours_stale ? null : row.allowance?.session_percent;
+    const out = out_words(row.allowance, now);
+    const out_on_five_hours = out !== null && row.allowance?.limit_window === "session";
 
     return (
         <div className="flex flex-col gap-0.5">
@@ -98,12 +111,13 @@ function Allowances({ row, week_at, five_hours_at }: { row: LoginRow; week_at: n
                 <span className="font-mono text-[10px] text-shade">· {who_spends(row.agents)}</span>
             </div>
             <Meter
-                percent={five_hours}
+                percent={out_on_five_hours ? 100 : five_hours}
                 point={five_hours_at}
-                colour={nearness(five_hours, five_hours_at)}
+                colour={out_on_five_hours ? "spent" : nearness(five_hours, five_hours_at)}
                 says={five_hours_words(row.allowance)}
                 of="five hours"
             />
+            {out ? <span className="font-mono text-[10px] text-coral">{out}</span> : null}
         </div>
     );
 }
@@ -326,7 +340,12 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
                                                 ? `${row.account.who ?? "signed in"}${row.account.plan ? ` · ${row.account.plan}` : ""}`
                                                 : "the engine says nobody is signed in here — it is skipped until somebody is"}
                                     </span>
-                                    <Allowances row={row} week_at={switch_at} five_hours_at={session_switch_at} />
+                                    <Allowances
+                                        row={row}
+                                        week_at={switch_at}
+                                        five_hours_at={session_switch_at}
+                                        now={now}
+                                    />
                                 </div>
                             </div>
 
