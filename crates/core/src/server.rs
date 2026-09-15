@@ -4445,6 +4445,7 @@ async fn propose_memory(
     let scope = scope_for(&state, &request.scope);
     let proposed_by = request.proposed_by.clone();
     let memory = state.memories.propose(request, &scope, now_secs())?;
+    let _ = state.vault.reindex(now_secs());
 
     // A proposal is inert until somebody says yes, and nothing on the screen
     // said one had arrived — an agent could write down the thing that would
@@ -4569,6 +4570,9 @@ async fn approve_memory(
 ) -> Result<Json<crate::memory::Approved>, ApiError> {
     let answered = state.memories.approve(&body.slug, body.approved)?;
 
+    // The maps say which memories the crew is told. An answer changes that.
+    let _ = state.vault.reindex(now_secs());
+
     if answered.memory.approved {
         if let Some(vector) = embed_text(&state, answered.memory.text.clone()).await {
             state.memories.remember_vector(&answered.memory.id, vector);
@@ -4587,6 +4591,7 @@ async fn forget_memory(
     Path(slug): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     state.memories.forget(&slug)?;
+    let _ = state.vault.reindex(now_secs());
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -5451,6 +5456,10 @@ async fn forget_note(
     Path(slug): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     state.vault.forget(&slug)?;
+
+    // A map listing a note that is gone is a link to nothing, and Obsidian
+    // makes an empty note of it the moment somebody clicks.
+    let _ = state.vault.reindex(now_secs());
     Ok(StatusCode::NO_CONTENT)
 }
 

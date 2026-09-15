@@ -188,15 +188,135 @@ fn collect_links(text: &str, found: &mut Vec<String>) {
             break;
         };
 
-        let inside = &after[..end];
-        let target = inside.split('|').next().unwrap_or(inside);
-        let slug = slug_for(target);
+        let slug = target_of(&after[..end]);
         if !slug.is_empty() && !found.contains(&slug) {
             found.push(slug);
         }
 
         rest = &after[end + 2..];
     }
+}
+
+/// The note a link's inside names, the way Obsidian reads it.
+///
+/// `[[shared/memory/the-port-contract|the port contract]]` is a path from the
+/// vault's root, a display name after the bar, and possibly a heading or block
+/// after a `#` or `^`. Each part of the path is a slug of its own: folding the
+/// slashes into dashes made a path link point at a note nobody had written.
+fn target_of(inside: &str) -> String {
+    let target = inside.split('|').next().unwrap_or(inside);
+    let target = target.split(['#', '^']).next().unwrap_or(target);
+    let target = target.trim().trim_end_matches(".md");
+
+    target
+        .split('/')
+        .map(slug_for)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Rewrite the links in a body so Obsidian can follow them.
+///
+/// Agentland finds a note by the slug of whatever a link says, so
+/// `[[The port contract]]` reaches `demos/svc/the-port-contract`. Obsidian finds
+/// a note by its file name, and there is no file called `The port contract.md`:
+/// every such link showed as unresolved in the graph, and clicking one made a
+/// new empty note at the vault's root. A link to a note that exists is written
+/// as its path with the words it was written in kept as the display name. One
+/// that reaches nothing is left alone — that is a dead link, and the check
+/// names it rather than this hiding it. Code is not touched.
+pub fn obsidian_links(body: &str, notes: &[Note]) -> String {
+    let by_slug: BTreeSet<&str> = notes.iter().map(|note| note.slug.as_str()).collect();
+    let mut by_leaf: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for note in notes {
+        by_leaf.entry(leaf_of(&note.slug)).or_default().push(note.slug.as_str());
+    }
+
+    let resolve = |target: &str| -> Option<String> {
+        if by_slug.contains(target) {
+            return Some(target.to_owned());
+        }
+        match by_leaf.get(leaf_of(target)).map(Vec::as_slice) {
+            Some([only]) if !target.contains('/') => Some((*only).to_owned()),
+            _ => None,
+        }
+    };
+
+    let mut fenced = false;
+    let mut lines = Vec::new();
+
+    for line in body.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            fenced = !fenced;
+            lines.push(line.to_owned());
+            continue;
+        }
+        if fenced {
+            lines.push(line.to_owned());
+            continue;
+        }
+
+        let rewritten: Vec<String> = line
+            .split('`')
+            .enumerate()
+            .map(|(index, piece)| {
+                if index % 2 == 1 {
+                    return piece.to_owned();
+                }
+                rewrite_links(piece, &resolve)
+            })
+            .collect();
+        lines.push(rewritten.join("`"));
+    }
+
+    let mut rewritten = lines.join("\n");
+    if body.ends_with('\n') {
+        rewritten.push('\n');
+    }
+    rewritten
+}
+
+fn rewrite_links(text: &str, resolve: &dyn Fn(&str) -> Option<String>) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+
+    while let Some(start) = rest.find("[[") {
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("]]") else {
+            break;
+        };
+
+        out.push_str(&rest[..start]);
+        let inside = &after[..end];
+        let (target, shown) = match inside.split_once('|') {
+            Some((target, shown)) => (target, shown.trim()),
+            None => (inside, inside.trim()),
+        };
+        let anchor = target.find(['#', '^']).map(|at| &target[at..]).unwrap_or("");
+
+        match resolve(&target_of(target)) {
+            Some(slug) => out.push_str(&format!("[[{slug}{anchor}|{shown}]]")),
+            None => out.push_str(&format!("[[{inside}]]")),
+        }
+
+        rest = &after[end + 2..];
+    }
+
+    out.push_str(rest);
+    out
+}
+
+/// A title as the words shown on a link: the characters that would end the
+/// link or change what it points at are left out.
+fn shown_as(title: &str) -> String {
+    title
+        .chars()
+        .filter(|c| !matches!(c, '[' | ']' | '|' | '#' | '^'))
+        .collect::<String>()
+        .trim()
+        .to_owned()
 }
 
 /// Who points at whom, across the whole vault.
@@ -571,6 +691,7 @@ impl Vault {
         let folder = scope.folder();
         let slug = format!("{folder}/{leaf}");
         std::fs::create_dir_all(self.root.join(&folder))?;
+        let body = obsidian_links(body.trim(), &self.list());
 
         let note = Note {
             slug: slug.clone(),
@@ -578,11 +699,11 @@ impl Vault {
             tags,
             written_by: by.to_owned(),
             written_at: now,
-            body: body.trim().to_owned(),
+            links: links_in(&body),
+            body,
             approved: None,
             retired: false,
             supersedes: None,
-            links: links_in(body),
             backlinks: Vec::new(),
         };
 
@@ -638,6 +759,7 @@ impl Vault {
         let folder = Self::memory_folder(scope);
         std::fs::create_dir_all(self.root.join(&folder))?;
         let slug = format!("{folder}/{leaf}");
+        let body = obsidian_links(text, &self.list());
 
         let note = Note {
             slug: slug.clone(),
@@ -645,14 +767,14 @@ impl Vault {
             tags: vec!["memory".to_owned()],
             written_by: by.to_owned(),
             written_at: now,
-            body: text.to_owned(),
+            links: links_in(&body),
+            body,
             approved: Some(false),
             retired: false,
             supersedes: supersedes
                 .map(str::trim)
                 .filter(|slug| !slug.is_empty())
                 .map(str::to_owned),
-            links: links_in(text),
             backlinks: Vec::new(),
         };
 
@@ -726,13 +848,24 @@ impl Vault {
                 lines.push(format!("## Notes here ({})", held.len()));
             }
 
+            // Each entry is the note's path with its title shown. A bare title
+            // is a link Obsidian cannot follow: it looks for a file by that
+            // name, and the file is named by the slug. A memory also says
+            // where it stands, so the map answers what the crew is being told
+            // without opening each one.
             for note in &held {
                 let tags = if note.tags.is_empty() {
                     String::new()
                 } else {
                     format!(" — *{}*", note.tags.join(", "))
                 };
-                lines.push(format!("- [[{}]]{tags}", note.title));
+                let standing = match (note.approved, note.retired) {
+                    (_, true) => " · taken back",
+                    (Some(true), false) => " · told to the crew",
+                    (Some(false), false) => " · waiting for a person",
+                    (None, false) => "",
+                };
+                lines.push(format!("- [[{}|{}]]{tags}{standing}", note.slug, shown_as(&note.title)));
             }
 
             // Only the places directly below this one: a map that lists every
@@ -781,6 +914,16 @@ impl Vault {
         let held = std::fs::read_to_string(&path).unwrap_or_default();
 
         let above = match held.split_once(Self::MAP_MARK) {
+            // A vault first drawn before the root map explained itself has a
+            // root map with nothing above the line, and it never would have:
+            // the words were only written into a map being drawn for the first
+            // time. An empty space above the line is filled once; anything a
+            // person wrote there is theirs and is kept as it is.
+            Some((above, _))
+                if folder.is_empty() && parse(&slug, above.trim_end()).body.trim().is_empty() =>
+            {
+                format!("{}\n\n{}", above.trim_end(), HOW_THIS_VAULT_WORKS.trim())
+            }
             Some((above, _)) => above.trim_end().to_owned(),
             None => {
                 let title = if folder.is_empty() {
@@ -1118,7 +1261,11 @@ mod scope_tests {
         vault.reindex(12).expect("reindex");
 
         let map = vault.get("atolye/svc-demo/index").expect("the project's map");
-        assert!(map.body.contains("[[The port contract]]"), "it lists what is there: {}", map.body);
+        assert!(
+            map.body.contains("[[atolye/svc-demo/the-port-contract|The port contract]]"),
+            "it lists what is there, by a path Obsidian can follow: {}",
+            map.body
+        );
         assert!(map.body.contains("*ports*"), "with what the note is about");
 
         let root = vault.get("index").expect("the root map");
@@ -1136,7 +1283,10 @@ mod scope_tests {
 
         let again = std::fs::read_to_string(&path).expect("read");
         assert!(again.contains("Start with the port contract."), "the words above the line survive");
-        assert!(again.contains("[[Health endpoint]]"), "the list below it is rebuilt");
+        assert!(
+            again.contains("[[atolye/svc-demo/health-endpoint|Health endpoint]]"),
+            "the list below it is rebuilt"
+        );
         assert!(!again.contains("old list"), "and the old list is gone");
 
         let _ = std::fs::remove_dir_all(&home);
@@ -1177,5 +1327,160 @@ mod scope_tests {
         assert_eq!(again.matches("plain markdown").count(), 1, "and is not written over: {again}");
 
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_root_map_drawn_before_it_explained_itself_is_explained_once() {
+        let home = std::env::temp_dir().join(format!("agentland-vault-old-root-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("home");
+
+        // The root map as the vault on this machine had it: front matter, the
+        // line, a list, and not one word for whoever opens it.
+        std::fs::write(
+            home.join("index.md"),
+            format!(
+                "---\ntitle: The crew's vault — index\ntags: [index]\nwritten_by: agentland\nwritten_at: 1\n---\n\n{}\n\n## Notes here (0)\n",
+                Vault::MAP_MARK
+            ),
+        )
+        .expect("write");
+
+        let vault = Vault::open_at(home.clone()).expect("a vault");
+        vault.write(&Scope::Shared, "How we write notes", "short, linked", vec![], "x", 10).expect("write");
+        vault.reindex(11).expect("reindex");
+        vault.reindex(12).expect("reindex");
+
+        let root = std::fs::read_to_string(home.join("index.md")).expect("read");
+        assert_eq!(root.matches("plain markdown").count(), 1, "explained, once: {root}");
+        assert!(root.starts_with("---\ntitle: The crew's vault"), "the front matter is kept: {root}");
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_memory_on_the_map_says_whether_the_crew_is_told_it() {
+        let home = std::env::temp_dir().join(format!("agentland-vault-standing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let vault = Vault::open_at(home.clone()).expect("a vault");
+
+        let told = vault.write_memory(&Scope::Shared, "the reviewer prefers small commits", "ada", None, 10).expect("write");
+        vault.set_approved(&told.slug, true).expect("approve");
+        vault.write_memory(&Scope::Shared, "migrations live under db/migrations", "ada", None, 11).expect("write");
+        let taken = vault.write_memory(&Scope::Shared, "port 3000 is always free", "ada", None, 12).expect("write");
+        vault.set_approved(&taken.slug, true).expect("approve");
+        vault.set_approved(&taken.slug, false).expect("take back");
+
+        vault.reindex(13).expect("reindex");
+        let map = vault.get("shared/memory/index").expect("the memory map");
+
+        assert!(map.body.contains("|the reviewer prefers small commits]] — *memory* · told to the crew"), "{}", map.body);
+        assert!(map.body.contains("|migrations live under db/migrations]] — *memory* · waiting for a person"), "{}", map.body);
+        assert!(map.body.contains("|port 3000 is always free]] — *memory* · taken back"), "{}", map.body);
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_link_written_as_a_title_is_stored_as_a_path_obsidian_can_follow() {
+        let home = std::env::temp_dir().join(format!("agentland-vault-obsidian-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let vault = Vault::open_at(home.clone()).expect("a vault");
+        let project = Scope::Project { workspace: "atolye".into(), project: "svc-demo".into() };
+
+        vault.write(&project, "Worktree ports", "One listener per worktree.", vec![], "x", 10).expect("write");
+        let written = vault
+            .write(&Scope::Shared, "How ports work", "See [[Worktree ports]] and [[nobody wrote this]].", vec![], "x", 11)
+            .expect("write");
+
+        assert_eq!(
+            written.body,
+            "See [[atolye/svc-demo/worktree-ports|Worktree ports]] and [[nobody wrote this]].",
+        );
+        assert_eq!(
+            vault.get("atolye/svc-demo/worktree-ports").expect("the note").backlinks,
+            vec!["shared/how-ports-work".to_owned()],
+            "and Agentland still finds who points at it",
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    fn note(slug: &str) -> Note {
+        Note {
+            slug: slug.to_owned(),
+            ..Note::default()
+        }
+    }
+
+    #[test]
+    fn a_path_link_points_at_the_note_at_that_path() {
+        assert_eq!(
+            links_in("see [[shared/memory/the-port-contract|the port contract]]"),
+            vec!["shared/memory/the-port-contract"],
+        );
+        assert_eq!(links_in("[[atolye/svc-demo/index|svc demo]]"), vec!["atolye/svc-demo/index"]);
+    }
+
+    #[test]
+    fn a_heading_a_block_or_an_extension_does_not_change_which_note() {
+        assert_eq!(links_in("[[The port contract#Why]]"), vec!["the-port-contract"]);
+        assert_eq!(links_in("[[the-port-contract^abc123]]"), vec!["the-port-contract"]);
+        assert_eq!(links_in("[[the-port-contract.md]]"), vec!["the-port-contract"]);
+    }
+
+    #[test]
+    fn a_link_that_reaches_a_note_is_rewritten_and_one_that_does_not_is_left() {
+        let notes = vec![note("demos/svc/the-port-contract"), note("shared/index")];
+
+        assert_eq!(
+            obsidian_links("[[The port contract]] and [[Missing note]]", &notes),
+            "[[demos/svc/the-port-contract|The port contract]] and [[Missing note]]",
+        );
+        assert_eq!(
+            obsidian_links("[[the port contract|the contract]]", &notes),
+            "[[demos/svc/the-port-contract|the contract]]",
+            "the words somebody chose to show are kept",
+        );
+        assert_eq!(
+            obsidian_links("[[The port contract#Why]]", &notes),
+            "[[demos/svc/the-port-contract#Why|The port contract#Why]]",
+            "and so is the heading it pointed into",
+        );
+    }
+
+    #[test]
+    fn a_link_already_written_as_a_path_stays_as_it_was_meant() {
+        let notes = vec![note("demos/svc/the-port-contract")];
+        assert_eq!(
+            obsidian_links("[[demos/svc/the-port-contract|contract]]", &notes),
+            "[[demos/svc/the-port-contract|contract]]",
+        );
+    }
+
+    #[test]
+    fn a_name_two_notes_share_is_not_guessed_at() {
+        let notes = vec![note("a/the-port-contract"), note("b/the-port-contract")];
+        assert_eq!(obsidian_links("[[The port contract]]", &notes), "[[The port contract]]");
+    }
+
+    #[test]
+    fn code_keeps_its_brackets() {
+        let notes = vec![note("x/one")];
+        let body = "```js\nconst pairs = [[one]];\n```\nand `[[one]]` inline, but [[one]] here.";
+        assert_eq!(
+            obsidian_links(body, &notes),
+            "```js\nconst pairs = [[one]];\n```\nand `[[one]]` inline, but [[x/one|one]] here.",
+        );
+    }
+
+    #[test]
+    fn a_title_shown_on_a_link_cannot_end_the_link() {
+        assert_eq!(shown_as("a [[strange]] | title#1"), "a strange  title1");
     }
 }
