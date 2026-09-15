@@ -250,7 +250,7 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
             &data_dir, "settings",
         ))),
         permits: Arc::new(crate::permits::Permits::new(data_dir.clone())),
-        quota: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
+        quota: Arc::new(parking_lot::Mutex::new(crate::db::load_state(&data_dir, "quota"))),
         spending: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
         ceilings: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
         ui_commands: Arc::new(parking_lot::Mutex::new(Vec::new())),
@@ -1006,6 +1006,11 @@ fn spawn_supervisor(state: AppState) {
         let mut last_frames: BTreeMap<String, String> = BTreeMap::new();
         let mut asked_before: BTreeMap<String, bool> = BTreeMap::new();
         let mut throttled: BTreeMap<String, bool> = BTreeMap::new();
+        // The last model switch each agent's engine made, so a switch still on
+        // the screen is said once and not on every tick.
+        let mut switched: BTreeMap<String, String> = BTreeMap::new();
+        // When every Codex login's own sessions were last read for its limits.
+        let mut codex_read_at: u64 = 0;
 
         loop {
             interval.tick().await;
@@ -1240,6 +1245,23 @@ fn spawn_supervisor(state: AppState) {
                 *state.spending.lock() = fresh;
             }
 
+            // Every login's limits from the engines' own records rather than a
+            // pane's screen: what Claude Code handed the status line of any
+            // pane, and what each Codex login's newest session says. So a login
+            // has numbers before any pane of it has drawn a line.
+            let told = crate::status_line::readings(&state.data_dir, now);
+            for (identity, (usage, at)) in &told {
+                note_reading(&state, identity.clone(), *usage, *at);
+            }
+            if now.saturating_sub(codex_read_at) >= 60 {
+                codex_read_at = now;
+                for (identity, home) in codex_homes(&state) {
+                    if let Some(usage) = crate::rollouts::usage_in(&home, now) {
+                        note_reading(&state, identity, usage, now);
+                    }
+                }
+            }
+
             // What the panes say about themselves, once per tick: an agent that
             // finished its turn gives its slot back, and one that is mid-turn
             // takes it. Without this an idle pane counts against the engine cap
@@ -1267,18 +1289,29 @@ fn spawn_supervisor(state: AppState) {
                 // what the crew has spent in the last minute, from the record
                 // the engine keeps. Neither number is one this app could count
                 // for itself.
-                let usage = crate::budget::read_usage(&tail).or_else(|| {
-                    (agent.engine_id == "codex")
-                        .then(|| codex_home_of(&state, &agent))
-                        .flatten()
-                        .and_then(|home| crate::rollouts::usage_in(&home, now))
-                });
+                // Claude Code's own word, handed to the status line, speaks
+                // over the same numbers read back off the screen while fresh.
+                let identity = identity_of(&agent);
+                let reading = told
+                    .get(&identity)
+                    .copied()
+                    .filter(|(_, at)| now.saturating_sub(*at) < crate::status_line::FRESH)
+                    .or_else(|| {
+                        crate::budget::read_usage(&tail)
+                            .or_else(|| {
+                                (agent.engine_id == "codex")
+                                    .then(|| codex_home_of(&state, &agent))
+                                    .flatten()
+                                    .and_then(|home| crate::rollouts::usage_in(&home, now))
+                            })
+                            .map(|usage| (usage, now))
+                    });
 
-                if let Some(usage) = usage {
+                if let Some((usage, at)) = reading {
                     // Attributed to the allowance this agent spends from, not
                     // to a single global number: two subscriptions are two
                     // weeks and neither says anything about the other.
-                    state.quota.lock().insert(identity_of(&agent), (usage, now));
+                    note_reading(&state, identity, usage, at);
                 }
 
                 let limit = crate::context::read_rate_limit(&tail);
@@ -1296,8 +1329,8 @@ fn spawn_supervisor(state: AppState) {
                 // nowhere else to do it. The move waits for the pane to be at
                 // rest: it trades the pane for a new one, and doing that in the
                 // middle of a turn throws the turn away.
-                let past = usage.and_then(|held| {
-                    crate::budget::past_the_switch(held, now, now, switch_at(&state), session_switch_at(&state))
+                let past = reading.and_then(|(held, at)| {
+                    crate::budget::past_the_switch(held, at, now, switch_at(&state), session_switch_at(&state))
                 });
                 if (past.is_some() || state.limits.is_held(&agent.id))
                     && !working
@@ -1305,6 +1338,37 @@ fn spawn_supervisor(state: AppState) {
                     && hand_over_to_a_stand_in(&state, &agent, past).await
                 {
                     continue;
+                }
+
+                // A model's own limit with no login in the order that still has
+                // the model: carry on with the one the person named for it,
+                // rather than wait days for the reset.
+                if !working && !asking && fall_back_to_a_model(&state, &agent, now).await {
+                    continue;
+                }
+
+                // The engine switched model by itself and carried on. Nothing
+                // is stopped, so nothing is held, but a person should know the
+                // crew is on another model now.
+                if let Some(switch) = crate::limits::read_switch(&tail) {
+                    if switched.get(&agent.id) != Some(&switch.said) {
+                        switched.insert(agent.id.clone(), switch.said.clone());
+                        note(&state, "engine.model_switched", "the supervisor", &agent.id, &switch.said);
+                        state.notices.push(
+                            crate::notices::NewNotice {
+                                kind: crate::notices::Kind::Word,
+                                text: format!(
+                                    "{}'s {} limit ran out, and its engine carried on with {}",
+                                    agent.name, switch.from, switch.to
+                                ),
+                                repository_id: Some(agent.repository_id.clone()),
+                                agent_id: Some(agent.id.clone()),
+                                opens: Some(format!("agent:{}", agent.id)),
+                                ..Default::default()
+                            },
+                            now,
+                        );
+                    }
                 }
 
                 // Said once, when it starts. A throttled pane redraws its
@@ -2507,11 +2571,11 @@ fn watch_the_limit(state: &AppState, agent: &Agent, tail: &str, working: bool, n
     if working {
         if let Some(hold) = state.limits.release(&agent.id, now) {
             let text = match hold.told_at {
-                Some(_) => format!("{} carried on after its {} reset", agent.name, hold.window.in_words()),
+                Some(_) => format!("{} carried on after its {} reset", agent.name, hold.in_words()),
                 None => format!(
                     "{} is working again — somebody got to it before its {} reset",
                     agent.name,
-                    hold.window.in_words()
+                    hold.in_words()
                 ),
             };
 
@@ -2547,17 +2611,17 @@ fn watch_the_limit(state: &AppState, agent: &Agent, tail: &str, working: bool, n
         (true, false) => format!(
             "{} hit its {} — it will be told to carry on at {when}",
             agent.name,
-            hold.window.in_words()
+            hold.in_words()
         ),
         (true, true) => format!(
             "{} was stopped again at its {} — it will be told to carry on at {when}",
             agent.name,
-            hold.window.in_words()
+            hold.in_words()
         ),
         (false, _) => format!(
             "{} hit its {} and the engine did not say until when — it will be asked again at {when}",
             agent.name,
-            hold.window.in_words()
+            hold.in_words()
         ),
     };
 
@@ -2584,6 +2648,8 @@ fn watch_the_limit(state: &AppState, agent: &Agent, tail: &str, working: bool, n
 /// is asking a person something is left to the person, and one that has been
 /// told as many times as is worth telling is handed to the person too.
 async fn carry_on_after_limits(state: &AppState, now: u64) {
+    come_back_to_the_model(state, now).await;
+
     for hold in state.limits.due(now) {
         let Some(agent) = state.crew.list().into_iter().find(|agent| agent.id == hold.agent_id) else {
             state.limits.forget(&hold.agent_id);
@@ -2595,7 +2661,7 @@ async fn carry_on_after_limits(state: &AppState, now: u64) {
             let text = format!(
                 "{} is still stopped at its {} after {} tries — it needs a word from you",
                 agent.name,
-                hold.window.in_words(),
+                hold.in_words(),
                 hold.attempts
             );
             note(state, "engine.limit_gave_up", "the supervisor", &agent.id, &text);
@@ -2663,6 +2729,35 @@ async fn carry_on_after_limits(state: &AppState, now: u64) {
 /// Which allowance this agent spends from.
 fn identity_of(agent: &Agent) -> String {
     crate::budget::identity_of(&agent.engine_id, agent.account.as_deref())
+}
+
+/// Take a reading of a login's five hours and week, and write it down so a
+/// restart does not blank it until some pane happens to say it again. Two
+/// sources speak about one login, so a reading older than the one held is
+/// dropped.
+fn note_reading(state: &AppState, identity: String, usage: crate::budget::Usage, at: u64) {
+    let mut quota = state.quota.lock();
+    let held = quota.get(&identity).copied();
+    if held.is_some_and(|(_, then)| then > at) || !crate::budget::worth_keeping(held, usage, at) {
+        return;
+    }
+
+    quota.insert(identity, (usage, at));
+    crate::db::save_state(&state.data_dir, "quota", &*quota);
+}
+
+/// Every Codex login's folder: this machine's own, and each one named here.
+fn codex_homes(state: &AppState) -> Vec<(String, PathBuf)> {
+    let own = crate::rollouts::home(None).map(|home| ("codex".to_owned(), home));
+    let named = crate::accounts::labels(&state.data_dir, "codex")
+        .into_iter()
+        .filter_map(|label| {
+            let login = crate::accounts::env_for(&state.data_dir, "codex", Some(&label))?;
+            let home = crate::rollouts::home(Some(&login))?;
+            Some((crate::budget::identity_of("codex", Some(&label)), home))
+        });
+
+    own.into_iter().chain(named).collect()
 }
 
 /// The ceilings this allowance is held to, or the defaults nobody has changed.
@@ -5115,7 +5210,7 @@ fn presence_of(state: &AppState, agent: &Agent, now: u64) -> AgentPresence {
                     since: silence,
                     reason: format!(
                         "stopped at its {} — carries on at {}",
-                        hold.window.in_words(),
+                        hold.in_words(),
                         local_clock(hold.resets_at, now)
                     ),
                 };
@@ -7009,6 +7104,172 @@ fn login_has_room(state: &AppState, engine: &str, label: Option<&str>) -> bool {
     hiring_rules(state).login_open(engine, label) && room_for(state, &identity).may_start_work() && short_of_the_switch
 }
 
+/// Which model to carry on with when a model's own limit runs out, per model:
+/// `{"fable": "opus"}`. Nothing named means wait for the reset.
+const MODEL_FALLBACKS: &str = "accounts_model_fallbacks";
+
+fn model_fallbacks(state: &AppState) -> BTreeMap<String, String> {
+    state
+        .settings
+        .lock()
+        .get(MODEL_FALLBACKS)
+        .and_then(|held| serde_json::from_str(held).ok())
+        .unwrap_or_default()
+}
+
+/// Carry an agent stopped by a model's own limit onto the model the person
+/// named for it, and start it again where it left off.
+///
+/// Some models have a week of their own on top of the login's, and it can run
+/// out days before the login's does. Waiting for it is the last resort: the
+/// hand-over has already looked for another login with the model to spare, so
+/// this is the next rung — the same login, another model — and the agent goes
+/// back to its own once that limit comes round.
+async fn fall_back_to_a_model(state: &AppState, agent: &Agent, now: u64) -> bool {
+    let Some(hold) = state.limits.held(&agent.id) else {
+        return false;
+    };
+    let Some(model) = hold.model.clone() else {
+        return false;
+    };
+    let Some(fallback) = model_fallbacks(state).get(&model).cloned() else {
+        return false;
+    };
+    if fallback.eq_ignore_ascii_case(&model) {
+        return false;
+    }
+    let Ok(sits) = where_it_sits(state, agent) else {
+        return false;
+    };
+
+    let moved = state.crew.shape(
+        &agent.id,
+        crate::crew::Shaping {
+            model: Some(fallback.clone()),
+            ..Default::default()
+        },
+    );
+    if let Err(error) = moved {
+        tracing::warn!(agent = %agent.id, %error, "the fallback model would not take the agent");
+        return false;
+    }
+
+    let words = format!(
+        "I hit my usage limit on {model} while you were working, so you have been moved to {fallback}. Please continue from where you left off."
+    );
+
+    let _ = state.crew.stop(&agent.id);
+    match state.crew.start(&agent.id, &sits, true, Some(&words)) {
+        Ok(started) => {
+            if let Some(session_id) = started.session_id.as_deref() {
+                state.supervisor.follow(&agent.id, session_id);
+            }
+            state.limits.release(&agent.id, now);
+            state.limits.fell_back(&agent.id, agent.model.clone(), &fallback, hold.resets_at);
+
+            let text = format!(
+                "{} hit its {} and carried on with {} — back on its own at {}",
+                agent.name,
+                hold.in_words(),
+                fallback,
+                local_clock(hold.resets_at, now)
+            );
+            tracing::info!(agent = %agent.id, %model, %fallback, "carried on with another model");
+            note(state, "engine.model_fell_back", "the supervisor", &agent.id, &text);
+            state.notices.push(
+                crate::notices::NewNotice {
+                    kind: crate::notices::Kind::Word,
+                    text,
+                    repository_id: Some(agent.repository_id.clone()),
+                    agent_id: Some(agent.id.clone()),
+                    opens: Some(format!("agent:{}", agent.id)),
+                    ..Default::default()
+                },
+                now,
+            );
+            true
+        }
+        Err(error) => {
+            tracing::warn!(agent = %agent.id, %error, "the pane on the fallback model would not start");
+            false
+        }
+    }
+}
+
+/// Put an agent carried to another model back on its own once that model's
+/// limit has come round. Only at rest: it trades the pane for a new one, and
+/// doing that in the middle of a turn throws the turn away.
+async fn come_back_to_the_model(state: &AppState, now: u64) {
+    for (agent_id, fell) in state.limits.due_back(now) {
+        let Some(agent) = state.crew.list().into_iter().find(|agent| agent.id == agent_id) else {
+            state.limits.back(&agent_id);
+            continue;
+        };
+
+        let live = agent
+            .session_id
+            .as_ref()
+            .filter(|id| state.manager.live(id).is_some())
+            .cloned();
+
+        if let Some(session_id) = &live {
+            let tail = state
+                .manager
+                .read_log(session_id, 8 * 1024)
+                .map(|raw| strip_ansi(&raw))
+                .unwrap_or_default();
+            if crate::supervisor::turn_running(&tail) || crate::supervisor::asking_the_human(&tail) {
+                continue;
+            }
+        }
+
+        let moved = state.crew.shape(
+            &agent.id,
+            crate::crew::Shaping {
+                model: Some(fell.from.clone().unwrap_or_default()),
+                ..Default::default()
+            },
+        );
+        if let Err(error) = moved {
+            tracing::warn!(agent = %agent.id, %error, "cannot put the agent back on its own model");
+            continue;
+        }
+        state.limits.back(&agent.id);
+
+        if live.is_some() {
+            if let Ok(sits) = where_it_sits(state, &agent) {
+                let _ = state.crew.stop(&agent.id);
+                match state.crew.start(&agent.id, &sits, true, None) {
+                    Ok(started) => {
+                        if let Some(session_id) = started.session_id.as_deref() {
+                            state.supervisor.follow(&agent.id, session_id);
+                        }
+                    }
+                    Err(error) => tracing::warn!(agent = %agent.id, %error, "cannot restart on its own model"),
+                }
+            }
+        }
+
+        let text = format!(
+            "{} is back on {} — its limit came round",
+            agent.name,
+            fell.from.as_deref().unwrap_or("its own model")
+        );
+        note(state, "engine.model_restored", "the supervisor", &agent.id, &text);
+        state.notices.push(
+            crate::notices::NewNotice {
+                kind: crate::notices::Kind::Word,
+                text,
+                repository_id: Some(agent.repository_id.clone()),
+                agent_id: Some(agent.id.clone()),
+                opens: Some(format!("agent:{}", agent.id)),
+                ..Default::default()
+            },
+            now,
+        );
+    }
+}
+
 /// What an agent carried to another login is told when it had work in hand.
 const MOVED_ON: &str = "The login you were working on ran out, so you have been moved to another one. Please continue from where you left off.";
 
@@ -7137,6 +7398,7 @@ async fn list_accounts(State(state): State<AppState>) -> Json<AccountsReport> {
         order: crate::accounts::in_order(identities, &login_order(&state)),
         switch_at: switch_at(&state),
         session_switch_at: session_switch_at(&state),
+        model_fallbacks: model_fallbacks(&state),
         accounts,
         engines,
     })
@@ -7155,6 +7417,8 @@ struct AccountsReport {
     switch_at: f32,
     /// The share of five hours, in percent, at which an agent is moved on.
     session_switch_at: f32,
+    /// Which model to carry on with when a model's own limit runs out.
+    model_fallbacks: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -7165,6 +7429,8 @@ struct Rotation {
     switch_at: Option<f32>,
     #[serde(default)]
     session_switch_at: Option<f32>,
+    #[serde(default)]
+    model_fallbacks: Option<BTreeMap<String, String>>,
 }
 
 /// Put the logins in order, or move the point agents are moved on at.
@@ -7196,6 +7462,16 @@ async fn set_rotation(
         }
         if let Some(percent) = wanted.session_switch_at {
             settings.insert(SESSION_SWITCH_AT.to_owned(), format!("{}", percent.round()));
+        }
+        if let Some(fallbacks) = wanted.model_fallbacks {
+            // Written the way a limit line names a model: one lower-case word,
+            // so "Fable" typed in the panel matches "Fable limit reached".
+            let kept: BTreeMap<String, String> = fallbacks
+                .into_iter()
+                .map(|(from, to)| (from.trim().to_lowercase(), to.trim().to_owned()))
+                .filter(|(from, to)| !from.is_empty() && !to.is_empty() && !from.eq_ignore_ascii_case(to))
+                .collect();
+            settings.insert(MODEL_FALLBACKS.to_owned(), serde_json::to_string(&kept).unwrap_or_default());
         }
         crate::db::save_state(&state.config.data_dir, "settings", &*settings);
     }
@@ -8214,6 +8490,12 @@ struct BudgetReport {
     allowances: Vec<Allowance>,
     /// The tightest of them, for anything that wants one word.
     room: crate::budget::Room,
+    /// Where agents are moved on, as a percentage of a week and of five hours.
+    /// Here as well as on the logins page, because the strip along every
+    /// agent's pane marks them and reading the logins asks every engine who
+    /// it is.
+    switch_at: f32,
+    session_switch_at: f32,
 }
 
 /// What the crew is allowed to spend, per allowance.
@@ -8276,7 +8558,12 @@ async fn read_budget(State(state): State<AppState>) -> Json<BudgetReport> {
         .map(|held| held.room)
         .fold(crate::budget::Room::Plenty, crate::meter::tighter);
 
-    Json(BudgetReport { allowances, room })
+    Json(BudgetReport {
+        allowances,
+        room,
+        switch_at: switch_at(&state),
+        session_switch_at: session_switch_at(&state),
+    })
 }
 
 #[derive(Deserialize)]

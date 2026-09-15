@@ -48,6 +48,9 @@ export interface Settings {
     lines_per_second: number;
     duration_ms: number;
     renderer: Renderer;
+    /// Whether an agent's pane shows its login's five hours and week along its
+    /// foot. Settings saved before there was a strip say nothing, which is on.
+    pane_limits?: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -55,6 +58,7 @@ export const DEFAULT_SETTINGS: Settings = {
     lines_per_second: 10_000,
     duration_ms: 30_000,
     renderer: "auto",
+    pane_limits: true,
 };
 
 /// Fired on the window when settings are saved, so a pane already open can

@@ -4,11 +4,12 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
+import { LimitStrip } from "@/components/LimitStrip";
 import { Press } from "@/components/Press";
 import { ReadablePane } from "@/components/ReadablePane";
 import { upgrade_soon } from "@/lib/gpu_queue";
 import { names_the_agent } from "@/lib/shells";
-import { SETTINGS_EVENT, load_settings, pane_renderer, type Settings } from "@/lib/settings";
+import { SETTINGS_EVENT, load_settings, pane_renderer, save_settings, type Settings } from "@/lib/settings";
 import { detect_surface } from "@/lib/surface";
 import { use_poll } from "@/lib/poll";
 import {
@@ -19,6 +20,7 @@ import {
     session_stats,
     write_input,
     drop_on_pane,
+    type Allowance,
     type SessionInfo,
 } from "@/lib/core";
 import { as_typed } from "@/lib/drops";
@@ -43,6 +45,15 @@ function format_tokens(tokens: number): string {
         return `${(tokens / 1_000).toFixed(1)}k`;
     }
     return String(tokens);
+}
+
+/// The limits of the login a pane's agent spends from, for the strip along
+/// its foot.
+export interface PaneLimits {
+    allowance: Allowance | null;
+    login: string;
+    week_at: number;
+    five_hours_at: number;
 }
 
 export interface PaneMetrics {
@@ -70,6 +81,9 @@ interface Props {
     /// because it is the one to talk to, and marked apart because the chief
     /// answers for every project and a commander for one.
     crown?: Crown | null;
+    /// The limits of the login this pane's agent spends from. None for a pane
+    /// no agent works in, which has no login of its own to speak of.
+    limits?: PaneLimits | null;
     /// Somebody's pane: closing it puts it away and the agent keeps running.
     kept?: boolean;
     on_close?: (id: string) => void;
@@ -113,7 +127,7 @@ function collapse_to_tail(data: Uint8Array): Uint8Array {
     return result;
 }
 
-export function TerminalPane({ session, crown, kept = false, focused, on_focus, on_metrics, label, place, crew_name, crew_role, on_close, on_zoom, zoomed, on_add, on_tear_out, readable = false, on_readable, on_menu, stats_from, now_from, on_pick_up, on_drop_on, wanted = false }: Props) {
+export function TerminalPane({ session, crown, limits = null, kept = false, focused, on_focus, on_metrics, label, place, crew_name, crew_role, on_close, on_zoom, zoomed, on_add, on_tear_out, readable = false, on_readable, on_menu, stats_from, now_from, on_pick_up, on_drop_on, wanted = false }: Props) {
     const host_ref = useRef<HTMLDivElement>(null);
     const screen_ref = useRef<Terminal | null>(null);
     const gpu_ref = useRef<WebglAddon | null>(null);
@@ -155,6 +169,15 @@ export function TerminalPane({ session, crown, kept = false, focused, on_focus, 
     const apply_ref = useRef<(() => void) | null>(null);
     const [stats, set_stats] = useState<SessionInfo | null>(null);
     const [now, set_now] = useState(() => Math.floor(Date.now() / 1000));
+    const [show_limits, set_show_limits] = useState(() => load_settings().pane_limits !== false);
+
+    // Hidden from one pane is hidden from all of them, and brought back from
+    // Settings the same way, so every pane follows the one setting.
+    useEffect(() => {
+        const follow = () => set_show_limits(load_settings().pane_limits !== false);
+        window.addEventListener(SETTINGS_EVENT, follow);
+        return () => window.removeEventListener(SETTINGS_EVENT, follow);
+    }, []);
 
     focused_ref.current = focused;
 
@@ -669,6 +692,17 @@ export function TerminalPane({ session, crown, kept = false, focused, on_focus, 
                     </div>
                 ) : null}
             </div>
+
+            {limits && show_limits ? (
+                <LimitStrip
+                    allowance={limits.allowance}
+                    login={limits.login}
+                    week_at={limits.week_at}
+                    five_hours_at={limits.five_hours_at}
+                    now={shown_now}
+                    on_hide={() => save_settings({ ...load_settings(), pane_limits: false })}
+                />
+            ) : null}
 
             <div className="flex shrink-0 items-center gap-2 border-t border-reef/70 px-2 py-[3px] font-mono text-[10px] text-shade">
                 <span className={state === "working" ? "text-sun" : state === "exited" ? "text-coral" : "text-shell"}>

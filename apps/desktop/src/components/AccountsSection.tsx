@@ -30,6 +30,9 @@ import {
     five_hours_words,
     nearness,
     out_words,
+    fallback_rows,
+    with_fallback,
+    without_fallback,
     type LoginRow,
 } from "@/lib/logins";
 import { exactly, when } from "@/lib/when";
@@ -179,6 +182,8 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
     /// Enter in the name box adds as well as the button does, so the guard
     /// against adding the same login twice has to cover both.
     const adding = useRef(false);
+    const [fallback_from, set_fallback_from] = useState("");
+    const [fallback_to, set_fallback_to] = useState("");
 
     const refresh = useCallback(async () => {
         const [report, budget, agents, entries] = await Promise.all([
@@ -203,6 +208,7 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
     const handed = useMemo(() => hand_overs(journal), [journal]);
     const switch_at = held?.switch_at ?? SWITCH_AT_DEFAULT;
     const session_switch_at = held?.session_switch_at ?? SESSION_SWITCH_AT_DEFAULT;
+    const fallbacks = held?.model_fallbacks ?? {};
     const now = Math.floor(Date.now() / 1000);
 
     const say = (cause: unknown) => set_notice(cause instanceof Error ? cause.message : String(cause));
@@ -445,6 +451,60 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
                     <span className="basis-full text-[10px] text-shade">
                         the marks on the bars; earlier leaves room to finish a turn on the old login
                     </span>
+                </div>
+            </div>
+
+            <div className="flex flex-col gap-1.5 rounded-lg border border-reef bg-lagoon-deep px-2 py-2">
+                <span className="font-mono text-[11px] text-linen">When a model's own limit runs out</span>
+                <span className="font-mono text-[10px] text-shade">
+                    Some models have a week of their own on top of the login's. An agent stopped on one is
+                    carried to the next login in the order that still has it; where none does, it carries on
+                    with the model named here, and goes back to its own once that limit comes round. With
+                    nothing named, it waits for the reset and is told to carry on then.
+                </span>
+                {fallback_rows(fallbacks).map(({ from, to }) => (
+                    <div key={from} className="flex items-center gap-2 font-mono text-[11px] text-shell">
+                        <span className="text-linen">{from}</span>
+                        <span className="text-shade">→</span>
+                        <span className="text-linen">{to}</span>
+                        <Press
+                            className="rounded border border-reef px-1.5 text-[10px] text-shade hover:border-coral hover:text-coral"
+                            title="wait for this model's reset instead"
+                            busy_says=""
+                            on_press={() => rotate({ model_fallbacks: without_fallback(fallbacks, from) })}
+                        >
+                            ×
+                        </Press>
+                    </div>
+                ))}
+                <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px] text-shell">
+                    when
+                    <input
+                        className="w-24 rounded-md border border-reef bg-lagoon px-1.5 py-0.5 font-mono text-[11px]"
+                        placeholder="fable"
+                        value={fallback_from}
+                        onChange={(event) => set_fallback_from(event.target.value)}
+                    />
+                    runs out, carry on with
+                    <input
+                        className="w-24 rounded-md border border-reef bg-lagoon px-1.5 py-0.5 font-mono text-[11px]"
+                        placeholder="opus"
+                        value={fallback_to}
+                        onChange={(event) => set_fallback_to(event.target.value)}
+                    />
+                    <Press
+                        className="rounded-md border border-reef px-2 py-0.5 text-[11px] text-shell hover:border-turquoise hover:text-turquoise disabled:opacity-50"
+                        disabled={!fallback_from.trim() || !fallback_to.trim()}
+                        busy_says="saving…"
+                        on_press={() =>
+                            rotate({ model_fallbacks: with_fallback(fallbacks, fallback_from, fallback_to) }).then(() => {
+                                set_fallback_from("");
+                                set_fallback_to("");
+                            })
+                        }
+                    >
+                        add
+                    </Press>
                 </div>
             </div>
 

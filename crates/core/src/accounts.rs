@@ -324,8 +324,9 @@ pub fn status_of(data_dir: &Path, engine_id: &str, label: &str) -> Account {
     }
 }
 
-/// Every login on one engine, in the order they were named.
-pub fn list(data_dir: &Path, engine_id: &str) -> Vec<Account> {
+/// The names of every login on one engine, read off the folders alone —
+/// without asking the engine about each, which `list` does.
+pub fn labels(data_dir: &Path, engine_id: &str) -> Vec<String> {
     let mut labels: Vec<String> = fs::read_dir(engine_folder(data_dir, engine_id))
         .into_iter()
         .flatten()
@@ -337,6 +338,11 @@ pub fn list(data_dir: &Path, engine_id: &str) -> Vec<Account> {
 
     labels.sort();
     labels
+}
+
+/// Every login on one engine, in the order they were named.
+pub fn list(data_dir: &Path, engine_id: &str) -> Vec<Account> {
+    labels(data_dir, engine_id)
         .iter()
         .map(|label| status_of(data_dir, engine_id, label))
         .collect()

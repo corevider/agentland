@@ -125,6 +125,30 @@ export function five_hours_words(allowance: Allowance | null): string {
     return `${Math.round(spent)}% of its five hours`;
 }
 
+/// The models carried on with when another's own limit runs out, as rows.
+export function fallback_rows(fallbacks: Record<string, string>): { from: string; to: string }[] {
+    return Object.entries(fallbacks)
+        .map(([from, to]) => ({ from, to }))
+        .sort((first, second) => first.from.localeCompare(second.from));
+}
+
+/// The fallbacks with one more, keyed the way a limit line names a model: one
+/// lower-case word. A model is never its own fallback.
+export function with_fallback(fallbacks: Record<string, string>, from: string, to: string): Record<string, string> {
+    const key = from.trim().toLowerCase();
+    const value = to.trim();
+    if (!key || !value || key === value.toLowerCase()) {
+        return { ...fallbacks };
+    }
+    return { ...fallbacks, [key]: value };
+}
+
+export function without_fallback(fallbacks: Record<string, string>, from: string): Record<string, string> {
+    const kept = { ...fallbacks };
+    delete kept[from];
+    return kept;
+}
+
 /// A wait said the way a person says one: "1h 12m", "2d 3h", "under a minute".
 export function wait_words(seconds: number): string {
     if (seconds < 60) {
