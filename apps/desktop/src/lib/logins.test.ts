@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import type { AccountsReport, Agent, Allowance, JournalEntry } from "@/lib/core";
 import {
     FIVE_HOURS,
+    fallback_rows,
     five_hours_words,
+    with_fallback,
+    without_fallback,
     hand_overs,
     login_rows,
     nearness,
@@ -43,6 +46,18 @@ describe("a login's five hours", () => {
         expect(out_words(out("unknown", 30), 10_000)).toBe("out — back in under a minute");
         expect(out_words(out("session", 0), 10_000)).toBeNull();
         expect(out_words(allowance("claude", []), 10_000)).toBeNull();
+    });
+
+    it("keeps a model's fallback the way a limit line names the model, and never a model as its own", () => {
+        expect(with_fallback({}, " Fable ", " opus ")).toEqual({ fable: "opus" });
+        expect(with_fallback({ fable: "opus" }, "fable", "sonnet")).toEqual({ fable: "sonnet" });
+        expect(with_fallback({}, "opus", "Opus")).toEqual({});
+        expect(with_fallback({}, "", "opus")).toEqual({});
+        expect(without_fallback({ fable: "opus", opus: "sonnet" }, "fable")).toEqual({ opus: "sonnet" });
+        expect(fallback_rows({ opus: "sonnet", fable: "opus" })).toEqual([
+            { from: "fable", to: "opus" },
+            { from: "opus", to: "sonnet" },
+        ]);
     });
 
     it("says a wait the way a person would", () => {

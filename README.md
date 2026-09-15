@@ -2641,7 +2641,22 @@ I hit my usage limit while you were working, but it has reset now. Please contin
 ```
 
 A live pane at rest is typed into; a pane that died while it waited is resumed
-with the same words. A pane holding a question is left to the person. Words
+with the same words. A pane holding a question is left to the person.
+
+Some models have a week of their own on top of the login's, and it can run out
+days before the login's does. A limit line that names a model — *You've hit
+your Fable limit · resets Sep 20, 10am* — is held with the model on it, and it
+leaves the login open: another model on the same login still has room. What
+happens next is a ladder. With the logins used in turn, the agent is carried to
+the next login in the order that still has the model. Where none does and a
+person has named a model to carry on with — *when fable runs out, carry on with
+opus* — the pane is resumed on that model and told why, and it goes back to its
+own model, at rest, once the limit comes round. With nothing named, it waits for
+the reset and is told to carry on then. And a line that says the engine changed
+model by itself — *Fable limit reached ∙ now using Opus* — is not a stop at all:
+it used to be read as one, and the agent would have been told hours later to
+carry on with nothing left to carry on from. It is now a notice that the crew
+is on another model. Words
 that do not start a turn are said again after fifteen minutes, six times at
 most, and then a person is asked instead. The holds are written down, so a
 restart in the middle of a wait does not lose it.

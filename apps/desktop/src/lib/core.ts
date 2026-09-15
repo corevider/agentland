@@ -620,12 +620,15 @@ export interface AccountsReport {
     switch_at?: number;
     /// The share of a login's five hours, in percent, at which an agent is moved on.
     session_switch_at?: number;
+    /// Which model to carry on with when a model's own limit runs out: `{ fable: "opus" }`.
+    model_fallbacks?: Record<string, string>;
 }
 
 export interface RotationChange {
     order?: string[];
     switch_at?: number;
     session_switch_at?: number;
+    model_fallbacks?: Record<string, string>;
 }
 
 /// The order logins are used in, and where an agent is moved on from one.

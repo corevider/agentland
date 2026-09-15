@@ -297,6 +297,7 @@ function sample_logins(hired) {
             order: ["claude", "claude/second", "codex", "codex/work"],
             switch_at: 90,
             session_switch_at: 95,
+            model_fallbacks: { fable: "opus" },
         },
         "/budget": {
             room: "plenty",
@@ -635,7 +636,7 @@ try {
     await rest(800);
     await window.click("Logins");
     await window.wait_for("of the week spent");
-    await window.fit(780);
+    await window.fit(900);
     await window.shoot("the-logins-they-hold");
     await window.click("close");
     await window.stop_answering();

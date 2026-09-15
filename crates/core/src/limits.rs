@@ -79,6 +79,10 @@ pub struct Limit {
     pub resets_at: Option<u64>,
     /// The line as the engine printed it, trimmed of the glyphs around it.
     pub said: String,
+    /// The model the limit belongs to when it is a model's own — "fable" —
+    /// rather than the login's. Another model on the same login may still
+    /// have room.
+    pub model: Option<String>,
 }
 
 /// Read a usage limit off the bottom of a pane.
@@ -103,6 +107,13 @@ pub fn read_limit<Tz: TimeZone>(frame: &str, now: &DateTime<Tz>) -> Option<Limit
 
     let at = window.iter().rposition(|line| starts_a_limit(&bare(line).to_lowercase()))?;
 
+    // "Fable limit reached ∙ now using Opus" is not a stop: the engine changed
+    // model and carried on. Held as a limit, the agent would have been told to
+    // carry on hours later with nothing to carry on from.
+    if is_a_switch(&bare(window[at]).to_lowercase()) {
+        return None;
+    }
+
     let answered = window[at + 1..].iter().filter(|line| is_a_prompt(line)).count() >= 2;
     if answered {
         return None;
@@ -121,11 +132,80 @@ pub fn read_limit<Tz: TimeZone>(frame: &str, now: &DateTime<Tz>) -> Option<Limit
         .join(" ")
         .to_lowercase();
 
+    let model = model_of(&said.to_lowercase());
     Some(Limit {
         window: window_of(&joined),
         resets_at: resets_at(&joined, now),
         said,
+        model,
     })
+}
+
+/// The engine switching model by itself and carrying on.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Switch {
+    /// The model whose limit ran out.
+    pub from: String,
+    /// The one the engine carried on with.
+    pub to: String,
+    pub said: String,
+}
+
+/// Read a model switch off the bottom of a pane: "Fable limit reached ∙ now
+/// using Opus". Nothing is stopped, so nothing is held; a person should still
+/// know the crew is on another model now.
+pub fn read_switch(frame: &str) -> Option<Switch> {
+    let plain = crate::context::strip_escapes(frame);
+    let lines: Vec<&str> = plain
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+
+    lines[lines.len().saturating_sub(LOOK_BACK)..]
+        .iter()
+        .rev()
+        .map(|line| bare(line))
+        .find_map(|line| {
+            let lowered = line.to_lowercase();
+            if !starts_a_limit(&lowered) || !is_a_switch(&lowered) {
+                return None;
+            }
+
+            let at = lowered.find("now using")? + "now using".len();
+            let to = line[at..]
+                .trim()
+                .trim_end_matches(|c: char| c == '.' || c == ')')
+                .trim()
+                .to_owned();
+            Some(Switch {
+                from: model_of(&lowered)?,
+                to: if to.is_empty() { "another model".to_owned() } else { to },
+                said: line.to_owned(),
+            })
+        })
+}
+
+fn is_a_switch(lowered: &str) -> bool {
+    lowered.contains("now using")
+}
+
+/// The model a limit line names, if it names one. The words before "limit"
+/// that are not about the login's own allowance — usage, session, week, five
+/// hours — are a model's name: "Fable limit reached", "your Opus 4 limit".
+fn model_of(lowered: &str) -> Option<String> {
+    const THE_LOGINS: [&str; 14] = [
+        "you've", "you’ve", "you", "have", "hit", "reached", "your", "usage", "session", "weekly", "week", "5-hour",
+        "hour", "daily",
+    ];
+
+    let before = &lowered[..lowered.find("limit")?];
+    before
+        .split(|c: char| c.is_whitespace())
+        .filter(|word| !word.is_empty())
+        .filter(|word| !THE_LOGINS.contains(word) && *word != "claude" && *word != "ai")
+        .find(|word| word.chars().all(char::is_alphabetic))
+        .map(str::to_owned)
 }
 
 /// A line without the glyphs an engine draws in front of what it says.
@@ -401,6 +481,10 @@ pub struct Hold {
     /// agent, so nothing else is started on it until the reset either.
     pub identity: String,
     pub window: Window,
+    /// The model the limit belongs to, when it is a model's own and not the
+    /// login's: "fable".
+    #[serde(default)]
+    pub model: Option<String>,
     /// When it is told to carry on: the stated reset, plus the grace.
     pub resets_at: u64,
     /// Whether the engine said when, or the wait is a guess.
@@ -412,6 +496,35 @@ pub struct Hold {
     pub told_at: Option<u64>,
     #[serde(default)]
     pub attempts: u32,
+}
+
+impl Hold {
+    /// The wall, in the words a notice uses: "Fable limit", "session limit".
+    pub fn in_words(&self) -> String {
+        match &self.model {
+            Some(model) => format!("{} limit", capitalised(model)),
+            None => self.window.in_words().to_owned(),
+        }
+    }
+}
+
+fn capitalised(word: &str) -> String {
+    let mut characters = word.chars();
+    match characters.next() {
+        Some(first) => first.to_uppercase().chain(characters).collect(),
+        None => String::new(),
+    }
+}
+
+/// An agent carried to another model while its own was out, and when to put
+/// it back.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct FellBack {
+    /// The model it was on before, as it was set: `None` for the engine's own
+    /// default.
+    pub from: Option<String>,
+    pub to: String,
+    pub back_at: u64,
 }
 
 /// What noticing a limit changed.
@@ -433,6 +546,9 @@ struct State {
     /// a line still on the screen is not taken for a new one.
     #[serde(default)]
     answered: BTreeMap<String, (String, u64)>,
+    /// Agents on another model until their own comes round.
+    #[serde(default)]
+    fallen_back: BTreeMap<String, FellBack>,
 }
 
 pub struct Limits {
@@ -475,7 +591,7 @@ impl Limits {
             .lock()
             .holds
             .values()
-            .any(|hold| hold.identity == identity && hold.resets_at > now)
+            .any(|hold| hold.identity == identity && hold.model.is_none() && hold.resets_at > now)
     }
 
     /// Take in what a pane says about its limit.
@@ -493,6 +609,7 @@ impl Limits {
             agent_id: agent_id.to_owned(),
             identity: identity.to_owned(),
             window: limit.window,
+            model: limit.model.clone(),
             resets_at,
             stated: limit.resets_at.is_some(),
             said: limit.said.clone(),
@@ -561,10 +678,54 @@ impl Limits {
         Some(hold)
     }
 
+    /// Write down that an agent was carried to another model, and when its own
+    /// comes round. Carried on again from there, it keeps the model it first
+    /// left, so it goes back to its own and not to the one in between.
+    pub fn fell_back(&self, agent_id: &str, from: Option<String>, to: &str, back_at: u64) {
+        let mut state = self.state.lock();
+        state
+            .fallen_back
+            .entry(agent_id.to_owned())
+            .and_modify(|held| {
+                held.to = to.to_owned();
+                held.back_at = held.back_at.max(back_at);
+            })
+            .or_insert(FellBack {
+                from,
+                to: to.to_owned(),
+                back_at,
+            });
+        self.persist(&state);
+    }
+
+    pub fn fallen_back(&self, agent_id: &str) -> Option<FellBack> {
+        self.state.lock().fallen_back.get(agent_id).cloned()
+    }
+
+    /// The agents whose own model has come round.
+    pub fn due_back(&self, now: u64) -> Vec<(String, FellBack)> {
+        self.state
+            .lock()
+            .fallen_back
+            .iter()
+            .filter(|(_, held)| held.back_at <= now)
+            .map(|(agent, held)| (agent.clone(), held.clone()))
+            .collect()
+    }
+
+    pub fn back(&self, agent_id: &str) {
+        let mut state = self.state.lock();
+        if state.fallen_back.remove(agent_id).is_some() {
+            self.persist(&state);
+        }
+    }
+
     /// Forget an agent entirely, when it leaves the crew.
     pub fn forget(&self, agent_id: &str) {
         let mut state = self.state.lock();
-        let had = state.holds.remove(agent_id).is_some() | state.answered.remove(agent_id).is_some();
+        let had = state.holds.remove(agent_id).is_some()
+            | state.answered.remove(agent_id).is_some()
+            | state.fallen_back.remove(agent_id).is_some();
         if had {
             self.persist(&state);
         }
@@ -746,7 +907,85 @@ mod tests {
             window: Window::Session,
             resets_at,
             said: said.to_owned(),
+            model: None,
         }
+    }
+
+    #[test]
+    fn a_models_own_limit_is_read_with_the_model_it_belongs_to() {
+        let now = istanbul("2026-09-15T12:10:00+03:00");
+
+        let fable = read_limit(&claude_pane("You've hit your Fable limit · resets Sep 20, 10am"), &now).expect("read");
+        assert_eq!(fable.model.as_deref(), Some("fable"));
+        assert_eq!(fable.resets_at, Some(at("2026-09-20T10:00:00+03:00")));
+
+        let opus = read_limit(&claude_pane("Opus 4 limit reached ∙ resets Fri 9am"), &now).expect("read");
+        assert_eq!(opus.model.as_deref(), Some("opus"));
+
+        for login in [
+            "You've hit your session limit · resets 3pm",
+            "You've hit your weekly limit · resets Sep 18, 10am",
+            "5-hour limit reached ∙ resets 3:30pm",
+            "Claude AI usage limit reached|1789500000",
+        ] {
+            assert_eq!(read_limit(&claude_pane(login), &now).expect("read").model, None, "{login}");
+        }
+    }
+
+    #[test]
+    fn the_engine_switching_model_by_itself_is_not_a_stop() {
+        let now = istanbul("2026-09-15T12:10:00+03:00");
+        let pane = claude_pane("Fable limit reached ∙ now using Opus");
+
+        assert_eq!(read_limit(&pane, &now), None, "nothing to hold: it carried on");
+        assert_eq!(
+            read_switch(&pane),
+            Some(Switch {
+                from: "fable".to_owned(),
+                to: "Opus".to_owned(),
+                said: "Fable limit reached ∙ now using Opus".to_owned(),
+            })
+        );
+        assert_eq!(read_switch(&claude_pane("You've hit your session limit · resets 3pm")), None);
+    }
+
+    #[test]
+    fn a_models_own_limit_leaves_the_login_open_for_other_models() {
+        let limits = scratch("model-open");
+        let fable = Limit {
+            model: Some("fable".to_owned()),
+            ..limit("You've hit your Fable limit", Some(9_000))
+        };
+
+        let Noticed::New(hold) = limits.notice("ada", "claude", &fable, 100) else {
+            panic!("a new limit");
+        };
+        assert_eq!(hold.in_words(), "Fable limit");
+        assert!(!limits.spent("claude", 200), "Opus on the same login still has room");
+
+        limits.notice("kai", "claude", &limit("You've hit your session limit", Some(9_000)), 100);
+        assert!(limits.spent("claude", 200), "the login's own limit is the login's");
+    }
+
+    #[test]
+    fn an_agent_carried_to_another_model_goes_back_to_its_own() {
+        let limits = scratch("fell-back");
+        limits.fell_back("ada", Some("fable".to_owned()), "opus", 5_000);
+
+        assert!(limits.due_back(4_999).is_empty());
+        let due = limits.due_back(5_000);
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].1.from.as_deref(), Some("fable"));
+
+        // Carried on again from the stand-in, it still goes back to its own.
+        limits.fell_back("ada", Some("opus".to_owned()), "sonnet", 6_000);
+        let held = limits.fallen_back("ada").expect("still fallen back");
+        assert_eq!(held.from.as_deref(), Some("fable"));
+        assert_eq!(held.to, "sonnet");
+        assert_eq!(held.back_at, 6_000);
+
+        limits.back("ada");
+        assert!(limits.fallen_back("ada").is_none());
     }
 
     #[test]
