@@ -11,6 +11,8 @@
 /// after a change to the interface and the README is current.
 ///
 ///     node scripts/shots.mjs
+///     node scripts/shots.mjs the-logins-they-hold    # only the pictures named
+///     SHOTS_DIST=/tmp/dist node scripts/shots.mjs    # a build kept elsewhere
 ///
 /// Nothing it touches belongs to anyone: the ports are deliberately not the
 /// ones a running Agentland uses, and the repositories it photographs are made
@@ -40,6 +42,15 @@ const TOKEN = "shots";
 const WIDTH = 1180;
 const HEIGHT = 820;
 const SHARPNESS = 2;
+
+// Which pictures to write; none named means all of them. The views are still
+// walked through in order, because each one leaves the window where the next
+// one expects to find it.
+const ONLY = process.argv.slice(2);
+
+// The built interface to photograph. A build somewhere else leaves the one a
+// running Agentland serves alone.
+const DIST = process.env.SHOTS_DIST ?? join(root, "apps", "desktop", "dist");
 
 const rest = (ms) => new Promise((go) => setTimeout(go, ms));
 const say = (words) => console.log(`  ${words}`);
@@ -225,18 +236,6 @@ async function seed(where) {
         }
     }
 
-    // Two logins on one engine, so the panel has something to be about. They
-    // are folders and nothing else: nobody is signed into them, and the panel
-    // says so because the engine says so. Signing one in would mean putting a
-    // real person's credential in a temporary directory to make a picture look
-    // better, which is the opposite of what this panel is for.
-    const held = await ask("/accounts");
-    for (const engine of held.engines.slice(0, 1)) {
-        for (const label of ["weekday", "spare"]) {
-            await ask("/accounts", "POST", { engine_id: engine.id, label });
-        }
-    }
-
     await ask("/notes", "POST", {
         title: "A note nothing points at",
         body: "Left here on purpose, so the check in the notes panel has something honest to say.",
@@ -246,6 +245,76 @@ async function seed(where) {
     });
 
     say(`seeded ${crew.length} agents, ${cards.length} cards, ${notes.length + 1} notes, ${memories.length} memories`);
+    return { hired };
+}
+
+/// What the logins panel is shown instead of this machine's logins.
+///
+/// The panel is only worth a picture with more than one login signed in and a
+/// week run out, and the honest ways to get there — signing a real account
+/// into a scratch folder, or spending a week — are the two things the panel
+/// exists to avoid. The first picture of it was taken with two empty folders
+/// and caught the panel still asking the engines who they were. So the browser
+/// is handed the answers instead: each engine's own login and a second one,
+/// the crew's real agents spread across them, and the hand-overs that carried
+/// three of them off the first login when its week ran out.
+function sample_logins(hired) {
+    const [ada, kai, wren, tor] = hired.map((agent) => agent.id);
+    const now = Math.floor(Date.now() / 1000);
+    const nothing = { input: 0, cached: 0, output: 0 };
+    const allowance = (identity, agents, weekly_percent, room) => ({
+        identity,
+        agents,
+        weekly_percent,
+        session_percent: 20,
+        read_seconds_ago: 40,
+        last_minute: nothing,
+        ceilings: nothing,
+        closest_to: "",
+        room,
+        says: "",
+    });
+    const handed = (agent, ago) => ({
+        at: now - ago,
+        kind: "accounts.handed_over",
+        actor: "the supervisor",
+        subject: agent,
+        detail: `${agent} ran out of week on the default login and carried on as second`,
+    });
+
+    const answers = {
+        "/accounts": {
+            accounts: [
+                { engine_id: "claude", label: "second", signed_in: true, who: "you+second@example.com", plan: "max", askable: true },
+                { engine_id: "codex", label: "work", signed_in: true, who: "you@work.example.com", plan: "pro", askable: true },
+            ],
+            engines: [
+                { id: "claude", name: "Claude Code" },
+                { id: "codex", name: "Codex" },
+            ],
+            failover: true,
+            order: ["claude", "claude/second", "codex", "codex/work"],
+            switch_at: 90,
+        },
+        "/budget": {
+            room: "plenty",
+            allowances: [
+                allowance("claude", [], 96, "spent"),
+                allowance("claude/second", [ada, kai, wren], 38, "plenty"),
+                allowance("codex", [tor], 64, "plenty"),
+                allowance("codex/work", [], 9, "plenty"),
+            ],
+        },
+    };
+
+    return (url) => {
+        if (url.pathname === "/journal") {
+            return url.searchParams.get("kind") === "accounts.handed_over"
+                ? [handed(wren, 3 * 3600 - 80), handed(kai, 3 * 3600 - 40), handed(ada, 3 * 3600)]
+                : null;
+        }
+        return answers[url.pathname] ?? null;
+    };
 }
 
 /// The interface, driven the way a person drives it.
@@ -254,13 +323,64 @@ class Window {
         this.socket = socket;
         this.id = 0;
         this.waiting = new Map();
+        this.on_event = null;
         socket.onmessage = (event) => {
             const message = JSON.parse(event.data);
             if (message.id && this.waiting.has(message.id)) {
                 this.waiting.get(message.id)(message);
                 this.waiting.delete(message.id);
+            } else if (message.method) {
+                this.on_event?.(message);
             }
         };
+    }
+
+    /// Answer some of the page's calls to the core from here. Anything the
+    /// answers do not cover goes through to the core as it would have.
+    async answer_in_the_browser(answer_for) {
+        this.on_event = (message) => {
+            if (message.method !== "Fetch.requestPaused") {
+                return;
+            }
+
+            const { requestId, request } = message.params;
+            const answer = request.method === "GET" ? answer_for(new URL(request.url)) : null;
+            if (answer === null) {
+                void this.send("Fetch.continueRequest", { requestId });
+                return;
+            }
+
+            void this.send("Fetch.fulfillRequest", {
+                requestId,
+                responseCode: 200,
+                responseHeaders: [
+                    { name: "content-type", value: "application/json" },
+                    { name: "access-control-allow-origin", value: `http://127.0.0.1:${SITE}` },
+                    { name: "access-control-allow-credentials", value: "true" },
+                ],
+                body: Buffer.from(JSON.stringify(answer)).toString("base64"),
+            });
+        };
+        await this.send("Fetch.enable", { patterns: [{ urlPattern: `*:${PORT}/*` }] });
+    }
+
+    async stop_answering() {
+        await this.send("Fetch.disable");
+        this.on_event = null;
+    }
+
+    /// Until the screen says something, rather than for a guessed while. A
+    /// panel that asks the engines who they are answers when they do, and the
+    /// picture taken on a timer caught it still asking.
+    async wait_for(text, tries = 40) {
+        for (let attempt = 0; attempt < tries; attempt += 1) {
+            if (await this.evaluate(`document.body.innerText.includes(${JSON.stringify(text)})`)) {
+                return;
+            }
+            await rest(500);
+        }
+
+        throw new Error(`the screen never said "${text}"`);
     }
 
     static async open() {
@@ -358,6 +478,10 @@ class Window {
     }
 
     async shoot(name) {
+        if (ONLY.length > 0 && !ONLY.includes(name)) {
+            return;
+        }
+
         const shot = await this.send("Page.captureScreenshot", { format: "png" });
         const path = join(shelf, `${name}.png`);
         writeFileSync(path, Buffer.from(shot.result.data, "base64"));
@@ -375,8 +499,13 @@ async function show(view) {
 }
 
 const running = [];
+
+/// Each one in a process group of its own. `npx` and `google-chrome` are
+/// wrappers: stopping the process they started as left vite preview holding
+/// its port, and the next run failed on `--strictPort` against a picture-taker
+/// that had already said "done".
 function start(command, args, options = {}) {
-    const child = spawn(command, args, { stdio: "ignore", ...options });
+    const child = spawn(command, args, { stdio: "ignore", detached: true, ...options });
     running.push(child);
     return child;
 }
@@ -384,7 +513,7 @@ function start(command, args, options = {}) {
 function stop_everything() {
     for (const child of running) {
         try {
-            child.kill();
+            process.kill(-child.pid, "SIGTERM");
         } catch {
             // It is already gone, which is what we wanted.
         }
@@ -405,9 +534,9 @@ try {
         });
     }
 
-    if (!existsSync(join(root, "apps/desktop/dist/index.html"))) {
+    if (!existsSync(join(DIST, "index.html"))) {
         console.log("building the interface…");
-        execFileSync("npx", ["vite", "build"], { cwd: join(root, "apps/desktop"), stdio: "inherit" });
+        execFileSync("npx", ["vite", "build", "--outDir", DIST], { cwd: join(root, "apps/desktop"), stdio: "inherit" });
     }
 
     console.log("a core of its own…");
@@ -437,10 +566,10 @@ try {
     await ask("/dispatch/pause", "POST", { paused: true });
 
     console.log("a crew that exists nowhere else…");
-    await seed(scratch);
+    const { hired } = await seed(scratch);
 
     console.log("the built interface…");
-    start("npx", ["vite", "preview", "--port", String(SITE), "--strictPort"], {
+    start("npx", ["vite", "preview", "--outDir", DIST, "--port", String(SITE), "--strictPort"], {
         cwd: join(root, "apps/desktop"),
     });
     await until(async () => {
@@ -492,14 +621,18 @@ try {
     await window.shoot("what-the-crew-remembers");
 
     // Settings is a page over the window rather than a panel in it, so it is
-    // opened the way a person opens it: the gear, then the section.
+    // opened the way a person opens it: the gear, then the section. The logins
+    // in it are the sample ones, and the picture waits for the panel to have
+    // drawn them rather than for a guessed while.
+    await window.answer_in_the_browser(sample_logins(hired));
     await window.click_labelled("Settings");
     await rest(800);
     await window.click("Logins");
-    await rest(1200);
-    await window.fit(620);
+    await window.wait_for("of the week spent");
+    await window.fit(780);
     await window.shoot("the-logins-they-hold");
     await window.click("close");
+    await window.stop_answering();
     await rest(800);
 
     await show("notes");
