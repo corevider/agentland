@@ -597,6 +597,18 @@ export interface AccountsReport {
     /// The engines on this machine that can hold more than one login.
     engines: Array<{ id: string; name: string }>;
     failover: boolean;
+    /// Every login as `engine` or `engine/label`, first choice first.
+    order?: string[];
+    /// The share of a week, in percent, at which an agent is moved on.
+    switch_at?: number;
+}
+
+/// The order logins are used in, and where an agent is moved on from one.
+export function set_account_rotation(change: { order?: string[]; switch_at?: number }): Promise<AccountsReport> {
+    return request<AccountsReport>("/accounts/rotation", {
+        method: "POST",
+        body: JSON.stringify(change),
+    });
 }
 
 export function list_accounts(): Promise<AccountsReport> {

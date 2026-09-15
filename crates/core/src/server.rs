@@ -403,6 +403,7 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
         .route("/permits", get(read_permits).delete(forget_permit))
         .route("/accounts", get(list_accounts).post(add_account))
         .route("/accounts/failover", post(set_failover))
+        .route("/accounts/rotation", post(set_rotation))
         .route("/accounts/{engine_id}/{label}", delete(forget_account))
         .route("/accounts/{engine_id}/{label}/login", post(sign_in_account))
         .route("/hiring", get(read_hiring).post(set_hiring))
@@ -1278,12 +1279,6 @@ fn spawn_supervisor(state: AppState) {
                     // to a single global number: two subscriptions are two
                     // weeks and neither says anything about the other.
                     state.quota.lock().insert(identity_of(&agent), (usage, now));
-
-                    // A week that is gone is the end of the work only when there
-                    // is nowhere else to do it.
-                    if usage.room() == crate::budget::Room::Spent {
-                        hand_over_to_a_stand_in(&state, &agent).await;
-                    }
                 }
 
                 let limit = crate::context::read_rate_limit(&tail);
@@ -1295,6 +1290,21 @@ fn spawn_supervisor(state: AppState) {
                 }
 
                 watch_the_limit(&state, &agent, &tail, working, now);
+
+                // A login past the point the person chose, or one its engine
+                // says is out, is the end of the work only when there is
+                // nowhere else to do it. The move waits for the pane to be at
+                // rest: it trades the pane for a new one, and doing that in the
+                // middle of a turn throws the turn away.
+                let past_the_switch = usage.is_some_and(|held| held.weekly >= switch_at(&state));
+                if (past_the_switch || state.limits.is_held(&agent.id))
+                    && !working
+                    && !asking
+                    && hand_over_to_a_stand_in(&state, &agent).await
+                {
+                    continue;
+                }
+
                 // Said once, when it starts. A throttled pane redraws its
                 // counter every second and a notice per tick would bury the
                 // one thing worth reading.
@@ -5183,7 +5193,7 @@ async fn list_agents(State(state): State<AppState>) -> Json<Vec<AgentPresence>> 
 /// A commander that has not been given `commanding-a-crew` plans nothing, so the
 /// skill goes on at the moment of hiring rather than being something a person
 /// has to remember. Every path that hires goes through here for that reason.
-fn take_on(state: &AppState, request: HireRequest) -> Result<Agent, ApiError> {
+fn take_on(state: &AppState, mut request: HireRequest) -> Result<Agent, ApiError> {
     // A chief commands a workspace, so it is hired into one — never into a
     // project's worktree. Hired here it would be a chief of nothing, standing in
     // one project's checkout with no workspace to read.
@@ -5203,6 +5213,25 @@ fn take_on(state: &AppState, request: HireRequest) -> Result<Agent, ApiError> {
             request.repository_id,
             request.worktree
         )));
+    }
+
+    // With the logins used in turn, somebody hired without a login named starts
+    // on the first one in the person's order that has room, rather than on the
+    // machine's own login whatever is left of its week.
+    let unnamed = request
+        .account
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .is_empty();
+    if unnamed && failover_is_on(state) && crate::accounts::can_hold_accounts(&request.engine_id) {
+        let engine = request.engine_id.clone();
+        let exhausted = |label: Option<&str>| !login_has_room(state, &engine, label);
+        if let Some(Some(label)) =
+            crate::accounts::first_choice(&state.config.data_dir, &engine, &login_order(state), &exhausted)
+        {
+            request.account = Some(label);
+        }
     }
 
     may_hire_onto(state, &request.engine_id, request.account.as_deref())?;
@@ -6914,74 +6943,129 @@ fn failover_is_on(state: &AppState) -> bool {
     state.settings.lock().get(FAILOVER).map(String::as_str) == Some("on")
 }
 
-/// Move an agent whose week is gone onto a login that still has one, and start
-/// it again where it left off.
+/// The order the person put the logins in, first choice first, each as
+/// `engine` or `engine/label`.
+const ORDER: &str = "accounts_order";
+
+/// The share of a week at which an agent is moved on to the next login.
+const SWITCH_AT: &str = "accounts_switch_at";
+
+fn login_order(state: &AppState) -> Vec<String> {
+    state
+        .settings
+        .lock()
+        .get(ORDER)
+        .and_then(|held| serde_json::from_str(held).ok())
+        .unwrap_or_default()
+}
+
+/// Where agents are moved on, as a percentage of the week. Unset, it is where
+/// a week counts as spent, which is where the hand-over always happened.
+fn switch_at(state: &AppState) -> f32 {
+    state
+        .settings
+        .lock()
+        .get(SWITCH_AT)
+        .and_then(|held| held.parse::<f32>().ok())
+        .filter(|percent| (50.0..=99.0).contains(percent))
+        .unwrap_or(crate::budget::SPENT)
+}
+
+/// Whether a login may take an agent on: open to hiring, with room in its
+/// week and its minute, not stopped by its engine, and short of the point the
+/// person moves agents on at. The same point both ways, or an agent moved to a
+/// login just past it would be moved straight back out again on the next tick.
+fn login_has_room(state: &AppState, engine: &str, label: Option<&str>) -> bool {
+    let identity = crate::budget::identity_of(engine, label);
+    let switch = switch_at(state);
+    let short_of_the_switch = state
+        .quota
+        .lock()
+        .get(&identity)
+        .is_none_or(|(usage, _)| usage.weekly < switch);
+
+    hiring_rules(state).login_open(engine, label) && room_for(state, &identity).may_start_work() && short_of_the_switch
+}
+
+/// What an agent carried to another login is told when it had work in hand.
+const MOVED_ON: &str = "The login you were working on ran out, so you have been moved to another one. Please continue from where you left off.";
+
+/// Move an agent onto the next login in the person's order that still has
+/// room, and start it again where it left off.
 ///
 /// The pane has to be traded rather than talked to: the variable that decides
 /// which login a process spends from is read once, when it starts. Resuming is
 /// what keeps it the same conversation — the logins of one engine share their
 /// transcripts, so `--continue` in the same worktree finds the work rather than
-/// an empty prompt.
-async fn hand_over_to_a_stand_in(state: &AppState, agent: &crate::crew::Agent) {
+/// an empty prompt. It used to come back to that prompt and stop there, with
+/// the work it had been doing unmentioned; an agent that had work in hand is
+/// now told to carry on, and the steps being watched follow it to the new
+/// pane. One resting with nothing to do comes back resting.
+async fn hand_over_to_a_stand_in(state: &AppState, agent: &crate::crew::Agent) -> bool {
     if !failover_is_on(state) {
-        return;
+        return false;
     }
 
     let data_dir = state.config.data_dir.clone();
     let engine = agent.engine_id.clone();
+    let order = login_order(state);
+    let exhausted = |label: Option<&str>| !login_has_room(state, &engine, label);
 
-    let rules = hiring_rules(state);
-    let spent = |label: &str| {
-        !rules.login_open(&engine, Some(label))
-            || !room_for(state, &crate::budget::identity_of(&engine, Some(label))).may_start_work()
+    let Some(stand_in) =
+        crate::accounts::stand_in(&data_dir, &engine, agent.account.as_deref(), &order, &exhausted)
+    else {
+        return false;
     };
 
-    let Some(stand_in) = crate::accounts::stand_in(&data_dir, &engine, agent.account.as_deref(), &spent)
-    else {
-        return;
-    };
-
-    let Some(worktree) = state
-        .repos
-        .worktrees()
-        .into_iter()
-        .find(|held| {
-            held.worktree.repository_id == agent.repository_id && held.worktree.name == agent.worktree
-        })
-        .map(|held| held.worktree)
-    else {
-        return;
+    let Ok(sits) = where_it_sits(state, agent) else {
+        return false;
     };
 
     let moved = state.crew.shape(
         &agent.id,
         crate::crew::Shaping {
-            account: Some(stand_in.label.clone()),
+            account: Some(stand_in.clone().unwrap_or_default()),
             ..Default::default()
         },
     );
 
     if let Err(error) = moved {
         tracing::warn!(agent = %agent.id, %error, "the stand-in login would not take the agent");
-        return;
+        return false;
     }
 
+    let held_by_a_limit = state.limits.is_held(&agent.id);
+    let had_work = held_by_a_limit
+        || state
+            .supervisor
+            .working()
+            .iter()
+            .any(|watch| watch.agent_id == agent.id);
+
     let _ = state.crew.stop(&agent.id);
-    match state.crew.start(&agent.id, &worktree.path, true, None) {
-        Ok(_) => {
+    match state.crew.start(&agent.id, &sits, true, had_work.then_some(MOVED_ON)) {
+        Ok(started) => {
+            if let Some(session_id) = started.session_id.as_deref() {
+                state.supervisor.follow(&agent.id, session_id);
+            }
+            state.limits.release(&agent.id, now_secs());
+
             let said = format!(
-                "{} ran out of week on {} and carried on as {}",
+                "{} {} on {} and carried on as {}",
                 agent.id,
+                if held_by_a_limit { "hit its limit" } else { "ran out of week" },
                 agent.account.as_deref().unwrap_or("the default login"),
-                stand_in.label
+                stand_in.as_deref().unwrap_or("the default login"),
             );
 
-            tracing::info!(agent = %agent.id, account = %stand_in.label, "handed to a stand-in login");
+            tracing::info!(agent = %agent.id, account = ?stand_in, "handed to a stand-in login");
             note(state, "accounts.handed_over", "the supervisor", &agent.id, &said);
             state.leader_words.lock().push(said);
+            true
         }
         Err(error) => {
             tracing::warn!(agent = %agent.id, %error, "the stand-in pane would not start");
+            false
         }
     }
 }
@@ -6994,18 +7078,36 @@ async fn hand_over_to_a_stand_in(state: &AppState, agent: &crate::crew::Agent) {
 /// subscription is worth reading.
 async fn list_accounts(State(state): State<AppState>) -> Json<AccountsReport> {
     let data_dir = state.config.data_dir.clone();
+    let accounts = crate::accounts::all(&data_dir);
+    let engines: Vec<AccountableEngine> = crate::crew::engines()
+        .into_iter()
+        .filter(|engine| engine.installed && crate::accounts::can_hold_accounts(engine.id))
+        .map(|engine| AccountableEngine {
+            id: engine.id.to_owned(),
+            name: engine.name.to_owned(),
+        })
+        .collect();
+
+    // Each engine's own login is placed alongside the ones added here: it is
+    // where the crew spends until told otherwise, and it can be first or last.
+    let mut identities: Vec<String> = Vec::new();
+    for engine in engines
+        .iter()
+        .map(|held| held.id.clone())
+        .chain(accounts.iter().map(|held| held.engine_id.clone()))
+    {
+        if !identities.contains(&engine) {
+            identities.push(engine);
+        }
+    }
+    identities.extend(accounts.iter().map(|held| format!("{}/{}", held.engine_id, held.label)));
 
     Json(AccountsReport {
         failover: failover_is_on(&state),
-        accounts: crate::accounts::all(&data_dir),
-        engines: crate::crew::engines()
-            .into_iter()
-            .filter(|engine| engine.installed && crate::accounts::can_hold_accounts(engine.id))
-            .map(|engine| AccountableEngine {
-                id: engine.id.to_owned(),
-                name: engine.name.to_owned(),
-            })
-            .collect(),
+        order: crate::accounts::in_order(identities, &login_order(&state)),
+        switch_at: switch_at(&state),
+        accounts,
+        engines,
     })
 }
 
@@ -7013,8 +7115,54 @@ async fn list_accounts(State(state): State<AppState>) -> Json<AccountsReport> {
 struct AccountsReport {
     accounts: Vec<crate::accounts::Account>,
     engines: Vec<AccountableEngine>,
-    /// Whether a spent week moves an agent to the other login by itself.
+    /// Whether the logins are used in turn: new agents on the first with room,
+    /// and agents moved on when theirs runs out.
     failover: bool,
+    /// Every login, first choice first, as `engine` or `engine/label`.
+    order: Vec<String>,
+    /// The share of a week, in percent, at which an agent is moved on.
+    switch_at: f32,
+}
+
+#[derive(Deserialize)]
+struct Rotation {
+    #[serde(default)]
+    order: Option<Vec<String>>,
+    #[serde(default)]
+    switch_at: Option<f32>,
+}
+
+/// Put the logins in order, or move the point agents are moved on at.
+async fn set_rotation(
+    State(state): State<AppState>,
+    Json(wanted): Json<Rotation>,
+) -> Result<Json<AccountsReport>, ApiError> {
+    if let Some(percent) = wanted.switch_at {
+        if !(50.0..=99.0).contains(&percent) {
+            return Err(anyhow::anyhow!(
+                "move agents on somewhere between 50% and 99% of a week — {percent}% is not a point a week can be planned around"
+            )
+            .into());
+        }
+    }
+
+    {
+        let mut settings = state.settings.lock();
+        if let Some(order) = wanted.order {
+            let kept: Vec<String> = order
+                .into_iter()
+                .map(|identity| identity.trim().to_owned())
+                .filter(|identity| !identity.is_empty())
+                .collect();
+            settings.insert(ORDER.to_owned(), serde_json::to_string(&kept).unwrap_or_default());
+        }
+        if let Some(percent) = wanted.switch_at {
+            settings.insert(SWITCH_AT.to_owned(), format!("{}", percent.round()));
+        }
+        crate::db::save_state(&state.config.data_dir, "settings", &*settings);
+    }
+
+    Ok(list_accounts(State(state)).await)
 }
 
 #[derive(Deserialize)]

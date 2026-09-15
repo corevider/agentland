@@ -520,6 +520,29 @@ impl Supervisor {
         watch
     }
 
+    /// Point an agent's unfinished steps at the pane it works in now.
+    ///
+    /// A pane traded for another — a login that ran out, a fresh session —
+    /// carries the same conversation and the same work. A watch left on the old
+    /// pane would go on judging a pane that no longer exists, and a pane that is
+    /// gone looks exactly like a pane that is done.
+    pub fn follow(&self, agent_id: &str, session_id: &str) -> usize {
+        let mut state = self.state.lock();
+        let mut moved = 0;
+
+        for watch in state.watches.values_mut() {
+            if watch.agent_id == agent_id && matches!(watch.state, WatchState::Working) {
+                watch.session_id = session_id.to_owned();
+                moved += 1;
+            }
+        }
+
+        if moved > 0 {
+            self.persist(&state);
+        }
+        moved
+    }
+
     pub fn mark_delivered(&self, id: &str) {
         let mut state = self.state.lock();
         if let Some(watch) = state.watches.get_mut(id) {
