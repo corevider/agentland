@@ -2082,15 +2082,32 @@ The table is written whole — `projects={"/repo"={trust_level="trusted"}}` —
 because the dotted spelling is not read as a path: measured, the question still
 came. Nothing is written to `config.toml`.
 
-**What Codex keeps is read where it keeps it.** The status line the budget reads
-is Claude Code's. Codex writes its account into its session record instead, as
+**What Claude Code knows about a login is taken from Claude Code.** Claude Code
+hands every status line command the login's `rate_limits` on its standard input:
+the five hours and the week, each a percentage and the time it comes round. The
+panes Agentland starts are given a status line of its own to catch them — the
+core binary, run as `claude-status-line` — which writes the numbers down under
+the data folder's `rate-limits/`, then hands the same input to the status line
+the person already had and prints what that prints, so the pane looks as it
+did. A person with no status line gets the numbers alone. A reading is filed by
+the login folder its pane was started with, so it lands on the right login
+whether it came from an agent or a pane opened by hand, and no credential is
+read to get it. The numbers a status line prints on the screen are still read,
+but only when Claude Code has said nothing in the last five minutes. The last
+reading of every login is written down as well, so a restart no longer blanks
+the strip under every pane until some pane happens to draw its line again.
+
+**What Codex keeps is read where it keeps it.** Codex hands no status line its
+limits. It writes its account into its session record instead, as
 `rate_limits` on each `token_count`: the five-hour window is read as the session
 and the week as the week, so a Codex login is held to its own allowance, and
 each turn's tokens count towards the per-minute ceiling with the cached part
 taken out of Codex's input, which includes it. Whether a brief already arrived
 is asked of the same record, so a Codex commander is not handed its brief again
-every time it wakes. A second Codex login is read from its own folder, except
-for that last check, which reads only this machine's.
+every time it wakes. Every Codex login's folder, this machine's own and each
+named one, is read once a minute whether an agent is on it or not, so its
+numbers are there before any pane is; only that last check reads this machine's
+folder alone.
 
 **A question Codex asks is a question for a person.** Its approval — "Would you
 like to run the following command? … Press enter to confirm or esc to cancel" —
