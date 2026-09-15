@@ -792,6 +792,19 @@ fn keep_off_the_broken_renderer() {
 fn keep_off_the_broken_renderer() {}
 
 fn main() {
+    // A core served inside this window writes this binary into every Claude
+    // pane's status line, so it is started once per redraw. It answers and
+    // leaves before anything else runs: the rest of main opens a window.
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() == Some(agentland_core::status_line::SUBCOMMAND) {
+        let data_dir = args
+            .next()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(desktop_data_dir);
+        agentland_core::status_line::run(&data_dir);
+        return;
+    }
+
     keep_off_the_broken_renderer();
     tracing_subscriber::fmt().with_target(false).init();
 
