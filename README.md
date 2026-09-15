@@ -2085,8 +2085,10 @@ came. Nothing is written to `config.toml`.
 **What Claude Code knows about a login is taken from Claude Code.** Claude Code
 hands every status line command the login's `rate_limits` on its standard input:
 the five hours and the week, each a percentage and the time it comes round. The
-panes Agentland starts are given a status line of its own to catch them — the
-core binary, run as `claude-status-line` — which writes the numbers down under
+panes Agentland starts are given a status line of its own to catch them —
+whichever Agentland binary is serving the core, the core's own or the app when
+it serves the core itself, run as `claude-status-line`. It answers before
+anything else starts, so a redraw never opens a window. It writes the numbers down under
 the data folder's `rate-limits/`, then hands the same input to the status line
 the person already had and prints what that prints, so the pane looks as it
 did. A person with no status line gets the numbers alone. A reading is filed by
