@@ -24,6 +24,25 @@ export function resolve_renderer(choice: Renderer, surface: string, typed_into =
     return surface.includes("webkit") && typed_into ? "dom" : "webgl";
 }
 
+/// What one pane draws with, given its own footer choice and the settings'.
+///
+/// A chief's or a commander's pane is the one a person types into and glances
+/// at while the crew works, so it opens on the DOM on every surface, whatever
+/// the settings say for the rest. The pane's own footer still decides for it:
+/// somebody who clicked it over to WebGL meant that pane.
+export function pane_renderer(
+    own: Renderer,
+    settings: Renderer,
+    surface: string,
+    crowned: boolean,
+): "webgl" | "dom" {
+    if (own !== "auto") {
+        return own;
+    }
+
+    return crowned ? "dom" : resolve_renderer(settings, surface, false);
+}
+
 export interface Settings {
     panes: number;
     lines_per_second: number;
