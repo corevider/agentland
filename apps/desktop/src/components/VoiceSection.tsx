@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { Waiting } from "@/components/Spinner";
+import { Press } from "@/components/Press";
+import { Spinner, Waiting } from "@/components/Spinner";
 import {
     fetch_whisper,
     set_transcriber,
@@ -48,6 +49,9 @@ export function VoiceSection() {
     // on showing the empty one it was born with.
     const [draft, set_draft] = useState<string | null>(null);
     const [notice, set_notice] = useState<string | null>(null);
+    const [choosing, set_choosing] = useState(false);
+    // Enter in the command box saves as the button does, so both share a guard.
+    const saving = useRef(false);
 
     const refresh = useCallback(async () => {
         set_state(await voice_state());
@@ -85,11 +89,14 @@ export function VoiceSection() {
 
     const pick_language = useCallback(
         async (language: string) => {
+            set_choosing(true);
             try {
                 set_notice(null);
                 set_state(await set_voice_language(language));
             } catch (cause) {
                 set_notice(cause instanceof Error ? cause.message : String(cause));
+            } finally {
+                set_choosing(false);
             }
         },
         [],
@@ -97,6 +104,11 @@ export function VoiceSection() {
 
     const save = useCallback(
         async (line: string) => {
+            if (saving.current) {
+                return;
+            }
+
+            saving.current = true;
             try {
                 await set_transcriber(line);
                 set_notice(null);
@@ -104,6 +116,8 @@ export function VoiceSection() {
                 await refresh();
             } catch (cause) {
                 set_notice(cause instanceof Error ? cause.message : String(cause));
+            } finally {
+                saving.current = false;
             }
         },
         [refresh],
@@ -150,10 +164,11 @@ export function VoiceSection() {
                         </p>
                         <div className="flex flex-wrap gap-2">
                             {state.whisper.models.map((model) => (
-                                <button
+                                <Press
                                     key={model.id}
                                     className="flex flex-col items-start gap-0.5 rounded-lg border border-reef px-2 py-1 text-left font-mono text-[11px] text-shell hover:border-turquoise hover:text-turquoise"
-                                    onClick={() => void get_whisper(model.id)}
+                                    busy_says={`asking for ${model.id}…`}
+                                    on_press={() => get_whisper(model.id)}
                                     title={model.says}
                                 >
                                     <span>
@@ -163,7 +178,7 @@ export function VoiceSection() {
                                     <span className="text-[10px] text-shade">
                                         {model.megabytes} MB — {model.says}
                                     </span>
-                                </button>
+                                </Press>
                             ))}
                         </div>
                     </>
@@ -174,12 +189,16 @@ export function VoiceSection() {
                 <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-shade">
                     The language you dictate in
                 </span>
-                <Picker
-                    className="rounded-lg border border-reef bg-lagoon px-2 py-1 font-mono text-[11px]"
-                    value={state.language ?? "auto"}
-                    choices={LANGUAGES.map(([code, name]) => ({ value: code, label: name }))}
-                    on_pick={(held) => void pick_language(held)}
-                />
+                <span className="flex items-center gap-2">
+                    <Picker
+                        className="rounded-lg border border-reef bg-lagoon px-2 py-1 font-mono text-[11px]"
+                        value={state.language ?? "auto"}
+                        disabled={choosing}
+                        choices={LANGUAGES.map(([code, name]) => ({ value: code, label: name }))}
+                        on_pick={(held) => void pick_language(held)}
+                    />
+                    {choosing ? <Spinner label="saving the language" className="text-[11px] text-turquoise" /> : null}
+                </span>
                 <span className="font-mono text-[10px] text-shade">
                     Naming it is the difference between one pass over the recording and two: on this
                     machine's model, 2.5 seconds against 4.2. Guessing is right for somebody who
@@ -221,12 +240,13 @@ export function VoiceSection() {
             </label>
 
             <div className="flex items-center gap-2">
-                <button
+                <Press
                     className="rounded-lg border border-turquoise px-2 py-1 font-mono text-[11px] text-turquoise"
-                    onClick={() => void save(draft ?? state.transcriber ?? "")}
+                    busy_says="saving…"
+                    on_press={() => save(draft ?? state.transcriber ?? "")}
                 >
                     save
-                </button>
+                </Press>
                 <span className="font-mono text-[10px] text-shade">
                     {state.transcriber ? "set" : "not set — the button will say so"}
                 </span>

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { answer_approval, list_approvals, type Approval } from "@/lib/core";
 import { use_services } from "@/workspace/registry";
+import { Press } from "@/components/Press";
 
 export function ApprovalsPanel({ active }: { active: boolean }) {
     const { crew, open_session } = use_services();
@@ -25,7 +26,7 @@ export function ApprovalsPanel({ active }: { active: boolean }) {
             set_notice(null);
             const note = notes[approval.id]?.trim();
 
-            answer_approval(approval.id, approved, note || undefined)
+            return answer_approval(approval.id, approved, note || undefined)
                 .then(() => {
                     set_notes((held) => {
                         const next = { ...held };
@@ -88,12 +89,13 @@ export function ApprovalsPanel({ active }: { active: boolean }) {
                                         {when(approval.at ?? 0, Math.floor(Date.now() / 1000))}
                                     </span>
                                     {agent?.session_id ? (
-                                        <button
+                                        <Press
                                             className="rounded border border-reef px-1.5 font-mono text-[10px] text-shell hover:border-foam"
-                                            onClick={() => open_session(agent.session_id as string)}
+                                            busy_says="opening…"
+                                            on_press={() => open_session(agent.session_id as string)}
                                         >
                                             see its terminal
-                                        </button>
+                                        </Press>
                                     ) : null}
 
                                     <input
@@ -107,18 +109,20 @@ export function ApprovalsPanel({ active }: { active: boolean }) {
                                             }))
                                         }
                                     />
-                                    <button
+                                    <Press
                                         className="rounded border border-palm px-2 font-mono text-[11px] text-palm"
-                                        onClick={() => answer(approval, true)}
+                                        busy_says="approving…"
+                                        on_press={() => answer(approval, true)}
                                     >
                                         approve
-                                    </button>
-                                    <button
+                                    </Press>
+                                    <Press
                                         className="rounded border border-coral px-2 font-mono text-[11px] text-coral"
-                                        onClick={() => answer(approval, false)}
+                                        busy_says="rejecting…"
+                                        on_press={() => answer(approval, false)}
                                     >
                                         reject
-                                    </button>
+                                    </Press>
                                 </div>
                             </article>
                         );

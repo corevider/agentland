@@ -1,4 +1,7 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
+
+import { Press } from "@/components/Press";
+import { Spinner } from "@/components/Spinner";
 
 import {
     check_vault,
@@ -35,9 +38,12 @@ export function NotesPanel({ active }: { active: boolean }) {
     const [deleting, set_deleting] = useState<string | null>(null);
     const [vault, set_vault] = useState<VaultReport | null>(null);
     const [health, set_health] = useState<VaultHealth | null>(null);
+    const [loading_slug, set_loading_slug] = useState<string | null>(null);
+    const loading = useRef<string | null>(null);
+    const searching = useRef(false);
 
     const refresh = useCallback(() => {
-        list_notes(query)
+        return list_notes(query)
             .then((held) => {
                 set_notes(held);
                 // A vault panel showing nothing until you click is a shelf with
@@ -53,10 +59,35 @@ export function NotesPanel({ active }: { active: boolean }) {
         read_vault().then(set_vault).catch(() => undefined);
     }, 20000, active);
 
+    // Enter in the box searches as the button does, so both share one guard.
+    const search = () => {
+        if (searching.current) {
+            return;
+        }
+        searching.current = true;
+        return refresh().finally(() => {
+            searching.current = false;
+        });
+    };
+
+    // A note being fetched says so on its row, and clicking it again while it
+    // is on its way asks for nothing more.
     const show = (slug: string) => {
-        read_note(slug)
+        if (loading.current === slug) {
+            return Promise.resolve();
+        }
+
+        loading.current = slug;
+        set_loading_slug(slug);
+        return read_note(slug)
             .then(set_open)
-            .catch((cause) => set_notice(String(cause)));
+            .catch((cause) => set_notice(String(cause)))
+            .finally(() => {
+                if (loading.current === slug) {
+                    loading.current = null;
+                    set_loading_slug(null);
+                }
+            });
     };
 
     return (
@@ -67,25 +98,27 @@ export function NotesPanel({ active }: { active: boolean }) {
                     placeholder="what did we write about…"
                     value={query}
                     onChange={(event) => set_query(event.target.value)}
-                    onKeyDown={(event) => event.key === "Enter" && refresh()}
+                    onKeyDown={(event) => event.key === "Enter" && search()}
                 />
-                <button
+                <Press
                     className="rounded-md border border-reef px-2 py-1 font-mono text-[11px] text-shell hover:border-foam"
-                    onClick={refresh}
+                    busy_says="searching…"
+                    on_press={search}
                 >
                     search
-                </button>
-                <button
+                </Press>
+                <Press
                     className="rounded-md border border-reef px-2 py-1 font-mono text-[11px] text-shell hover:border-foam"
                     title="look for links that reach nothing, notes nothing points at, and memories nobody answered"
-                    onClick={() =>
+                    busy_says="checking…"
+                    on_press={() =>
                         check_vault()
                             .then(set_health)
                             .catch((cause) => set_notice(cause instanceof Error ? cause.message : String(cause)))
                     }
                 >
                     check
-                </button>
+                </Press>
                 <span className="font-mono text-[10px] text-shade">
                     {notes.length} note{notes.length === 1 ? "" : "s"}
                 </span>
@@ -121,10 +154,14 @@ export function NotesPanel({ active }: { active: boolean }) {
                         key={note.slug}
                         className={`cursor-pointer rounded-md border bg-lagoon-deep px-2 py-1 ${
                             open?.slug === note.slug ? "border-turquoise" : "border-reef"
-                        }`}
+                        } ${loading_slug === note.slug ? "cursor-wait" : ""}`}
+                        aria-busy={loading_slug === note.slug || undefined}
                         onClick={() => show(note.slug)}
                     >
                         <div className="flex flex-wrap items-baseline gap-2">
+                            {loading_slug === note.slug ? (
+                                <Spinner className="text-[11px] text-turquoise" />
+                            ) : null}
                             <span className="text-[12px] text-linen">{note.title}</span>
                             {note.approved === true ? (
                                 <span
@@ -173,20 +210,24 @@ export function NotesPanel({ active }: { active: boolean }) {
                         {deleting === open.slug ? (
                             <span className="ml-auto flex items-center gap-1 font-mono text-[10px]">
                                 <span className="text-coral">delete {open.slug}.md?</span>
-                                <button
+                                <Press
                                     className="rounded border border-coral bg-coral/10 px-1.5 text-coral"
-                                    onClick={() => {
-                                        set_deleting(null);
+                                    busy_says="deleting…"
+                                    on_press={() =>
                                         forget_note(open.slug)
                                             .then(() => {
+                                                set_deleting(null);
                                                 set_open(null);
-                                                refresh();
+                                                return refresh();
                                             })
-                                            .catch((cause) => set_notice(String(cause)));
-                                    }}
+                                            .catch((cause) => {
+                                                set_deleting(null);
+                                                set_notice(String(cause));
+                                            })
+                                    }
                                 >
                                     delete
-                                </button>
+                                </Press>
                                 <button
                                     className="rounded border border-reef px-1.5 text-shell hover:border-foam"
                                     onClick={() => set_deleting(null)}
@@ -215,13 +256,13 @@ export function NotesPanel({ active }: { active: boolean }) {
                                 <div className="flex flex-wrap items-center gap-1">
                                     <span className="text-shade">points at</span>
                                     {open.links.map((slug) => (
-                                        <button
+                                        <Press
                                             key={slug}
                                             className="rounded border border-reef px-1 text-turquoise hover:border-turquoise"
-                                            onClick={() => show(slug)}
+                                            on_press={() => show(slug)}
                                         >
                                             {slug}
-                                        </button>
+                                        </Press>
                                     ))}
                                 </div>
                             ) : null}
@@ -230,13 +271,13 @@ export function NotesPanel({ active }: { active: boolean }) {
                                 <div className="flex flex-wrap items-center gap-1">
                                     <span className="text-shade">pointed at by</span>
                                     {open.backlinks.map((slug) => (
-                                        <button
+                                        <Press
                                             key={slug}
                                             className="rounded border border-reef px-1 text-shell hover:border-turquoise"
-                                            onClick={() => show(slug)}
+                                            on_press={() => show(slug)}
                                         >
                                             {slug}
-                                        </button>
+                                        </Press>
                                     ))}
                                 </div>
                             ) : null}
@@ -269,10 +310,11 @@ export function NotesPanel({ active }: { active: boolean }) {
                             value={draft.tags}
                             onChange={(event) => set_draft({ ...draft, tags: event.target.value })}
                         />
-                        <button
+                        <Press
                             className="rounded-md border border-turquoise px-2 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40"
                             disabled={!draft.title.trim() || !draft.body.trim()}
-                            onClick={() => {
+                            busy_says="writing…"
+                            on_press={() =>
                                 write_note({
                                     title: draft.title,
                                     body: draft.body,
@@ -285,13 +327,13 @@ export function NotesPanel({ active }: { active: boolean }) {
                                     .then((written) => {
                                         set_draft({ title: "", body: "", tags: "" });
                                         set_open(written);
-                                        refresh();
+                                        return refresh();
                                     })
-                                    .catch((cause) => set_notice(String(cause)));
-                            }}
+                                    .catch((cause) => set_notice(String(cause)))
+                            }
                         >
                             write
-                        </button>
+                        </Press>
                     </div>
                 </div>
             </section>
@@ -319,7 +361,7 @@ function Health({
     on_close,
 }: {
     health: VaultHealth;
-    on_open: (slug: string) => void;
+    on_open: (slug: string) => unknown;
     on_close: () => void;
 }) {
     return (
@@ -342,14 +384,14 @@ function Health({
                 <ul className="mt-1 flex flex-col gap-0.5">
                     {health.trouble.map((one) => (
                         <li key={`${one.kind}-${one.slug}-${one.about ?? ""}`}>
-                            <button
+                            <Press
                                 className="w-full text-left hover:bg-shallow"
-                                onClick={() => on_open(one.slug)}
+                                on_press={() => on_open(one.slug)}
                             >
                                 <span className="font-mono text-[9px] text-coral">{SAYS[one.kind]}</span>
                                 <span className="ml-2 text-[11px] text-linen">{one.slug}</span>
                                 <span className="ml-2 font-mono text-[10px] text-shade">{one.says}</span>
-                            </button>
+                            </Press>
                         </li>
                     ))}
                 </ul>

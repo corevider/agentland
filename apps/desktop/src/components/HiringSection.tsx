@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { Waiting } from "@/components/Spinner";
+import { Spinner, Waiting } from "@/components/Spinner";
 import { read_hiring, set_hiring, type HiringReport, type HiringRules } from "@/lib/core";
 import { login_key, login_words } from "@/lib/hiring_rules";
 
@@ -17,6 +17,9 @@ export function HiringSection() {
     const [held, set_held] = useState<HiringReport | null>(null);
     const [notes, set_notes] = useState<Record<string, string>>({});
     const [notice, set_notice] = useState<string | null>(null);
+    // Which control's change is on its way. Every change sends the whole rule
+    // set, so the others wait for it rather than sending one built on the old.
+    const [changing, set_changing] = useState<string | null>(null);
 
     const take = useCallback((report: HiringReport) => {
         set_held(report);
@@ -30,13 +33,15 @@ export function HiringSection() {
     }, [take]);
 
     const change = useCallback(
-        (rules: HiringRules) => {
-            set_hiring(rules)
+        (rules: HiringRules, which: string) => {
+            set_changing(which);
+            return set_hiring(rules)
                 .then((report) => {
                     take(report);
                     set_notice(null);
                 })
-                .catch((cause) => set_notice(cause instanceof Error ? cause.message : String(cause)));
+                .catch((cause) => set_notice(cause instanceof Error ? cause.message : String(cause)))
+                .finally(() => set_changing(null));
         },
         [take],
     );
@@ -65,16 +70,23 @@ export function HiringSection() {
                         <input
                             type="checkbox"
                             checked={engine.open}
+                            disabled={changing !== null}
                             onChange={(event) =>
-                                change({
-                                    ...rules,
-                                    closed_engines: without(rules.closed_engines, engine.id, event.target.checked),
-                                })
+                                change(
+                                    {
+                                        ...rules,
+                                        closed_engines: without(rules.closed_engines, engine.id, event.target.checked),
+                                    },
+                                    engine.id,
+                                )
                             }
                         />
                         <span className={`font-mono text-[11px] ${engine.open ? "text-linen" : "text-shade"}`}>
                             {engine.name}
                         </span>
+                        {changing === engine.id || changing === `notes:${engine.id}` ? (
+                            <Spinner label="saving" className="text-[11px] text-turquoise" />
+                        ) : null}
                         {engine.takes_the_tools ? null : (
                             <span className="font-mono text-[10px] text-sun">
                                 works in its pane, but cannot use the crew's tools
@@ -91,7 +103,7 @@ export function HiringSection() {
                         onBlur={() => {
                             const written = notes[engine.id] ?? "";
                             if (written !== (rules.notes[engine.id] ?? "")) {
-                                change({ ...rules, notes: { ...rules.notes, [engine.id]: written } });
+                                void change({ ...rules, notes: { ...rules.notes, [engine.id]: written } }, `notes:${engine.id}`);
                             }
                         }}
                     />
@@ -104,18 +116,24 @@ export function HiringSection() {
                                     <input
                                         type="checkbox"
                                         checked={login.open}
-                                        disabled={!engine.open}
+                                        disabled={!engine.open || changing !== null}
                                         onChange={(event) =>
-                                            change({
-                                                ...rules,
-                                                closed_logins: without(rules.closed_logins, key, event.target.checked),
-                                            })
+                                            change(
+                                                {
+                                                    ...rules,
+                                                    closed_logins: without(rules.closed_logins, key, event.target.checked),
+                                                },
+                                                key,
+                                            )
                                         }
                                     />
                                     <span className="font-mono text-[11px] text-linen">
                                         {login.account ?? "this machine's login"}
                                     </span>
                                     <span className="font-mono text-[10px] text-shade">{login_words(login)}</span>
+                                    {changing === key ? (
+                                        <Spinner label="saving" className="text-[11px] text-turquoise" />
+                                    ) : null}
                                 </label>
                             );
                         })}

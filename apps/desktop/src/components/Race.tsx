@@ -14,6 +14,7 @@ import {
     type Task,
 } from "@/lib/core";
 import { use_poll } from "@/lib/poll";
+import { Press } from "@/components/Press";
 import {
     FEWEST,
     MODELS_FOR,
@@ -81,7 +82,7 @@ export function RaceStarter({ task, on_started }: { task: Task; on_started: (rac
     const start = () => {
         set_busy(true);
         set_error(null);
-        start_race(
+        return start_race(
             task.id,
             lanes.map((lane) => ({ engine_id: lane.engine_id, model: lane.model.trim() || null })),
         )
@@ -158,13 +159,14 @@ export function RaceStarter({ task, on_started }: { task: Task; on_started: (rac
                 >
                     + entrant
                 </button>
-                <button
+                <Press
                     className={`${BUTTON} border-sun text-sun`}
                     disabled={busy || lanes.length < FEWEST}
-                    onClick={start}
+                    busy_says="starting the entrants…"
+                    on_press={start}
                 >
-                    {busy ? "starting the entrants…" : "start the race"}
-                </button>
+                    start the race
+                </Press>
                 <button className={`${BUTTON} border-reef text-shell`} disabled={busy} onClick={() => set_open(false)}>
                     cancel
                 </button>
@@ -195,6 +197,8 @@ export function RaceBoard({
 }) {
     const [reviews, set_reviews] = useState<Record<string, Review | string>>({});
     const [keeping, set_keeping] = useState<string | null>(null);
+    /// Calling the race off and keeping an entrant each decide what happens
+    /// to every entrant, so while one is on its way the other waits.
     const [busy, set_busy] = useState(false);
     const [error, set_error] = useState<string | null>(null);
     const open = race.ended_at === null;
@@ -213,7 +217,7 @@ export function RaceBoard({
     const act = (work: () => Promise<unknown>, said: string) => {
         set_busy(true);
         set_error(null);
-        work()
+        return work()
             .then(() => on_finished(said))
             .catch((cause) => set_error(message_of(cause)))
             .finally(() => set_busy(false));
@@ -231,16 +235,17 @@ export function RaceBoard({
                 </div>
                 <div className="flex shrink-0 gap-2">
                     {open ? (
-                        <button
+                        <Press
                             className={`${BUTTON} border-coral text-coral`}
                             disabled={busy}
                             title="let every entrant go and leave the card with nobody"
-                            onClick={() =>
+                            busy_says="calling it off…"
+                            on_press={() =>
                                 act(() => call_off_race(race.id), `${race.id} called off — every entrant was let go`)
                             }
                         >
                             call it off
-                        </button>
+                        </Press>
                     ) : null}
                     <button className={`${BUTTON} border-reef text-shell`} onClick={on_close}>
                         close
@@ -285,10 +290,11 @@ export function RaceBoard({
                                 {open ? (
                                     keeping === entrant.agent_id ? (
                                         <div className="mt-1 flex flex-wrap gap-1">
-                                            <button
+                                            <Press
                                                 className={`${BUTTON} border-palm text-palm`}
                                                 disabled={busy}
-                                                onClick={() =>
+                                                busy_says={`keeping ${entrant.name}…`}
+                                                on_press={() =>
                                                     act(
                                                         () => keep_entrant(race.id, entrant.agent_id),
                                                         `kept ${entrant.name}'s work — ${race.task_id} is its now, and the others were let go`,
@@ -296,9 +302,10 @@ export function RaceBoard({
                                                 }
                                             >
                                                 keep {entrant.name}, let the rest go
-                                            </button>
+                                            </Press>
                                             <button
                                                 className={`${BUTTON} border-reef text-shell`}
+                                                disabled={busy}
                                                 onClick={() => set_keeping(null)}
                                             >
                                                 not yet

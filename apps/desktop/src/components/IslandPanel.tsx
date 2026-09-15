@@ -21,6 +21,7 @@ import {
     type Task,
     type Watch,
 } from "@/lib/core";
+import { Press } from "@/components/Press";
 import { probe_gpu } from "@/lib/gpu";
 import { spread_labels, type Label } from "@/lib/labels";
 import { CROWN, crown_of } from "@/lib/commander";
@@ -412,16 +413,16 @@ export function IslandPanel({ active, on_open_session }: Props) {
                                 X {dispatch.paused ? "paused" : "on duty"}
                                 {dispatch.queue.length > 0 ? ` · ${dispatch.queue.length} queued` : ""}
                             </span>
-                            <button
+                            <Press
                                 className="border border-reef px-2 py-1 rounded-lg"
-                                onClick={() =>
+                                on_press={() =>
                                     pause_dispatch(!dispatch.paused)
                                         .then(set_dispatch)
                                         .catch((cause) => set_message(String(cause)))
                                 }
                             >
                                 {dispatch.paused ? "resume" : "pause"}
-                            </button>
+                            </Press>
                         </div>
                     ) : null}
                 </footer>

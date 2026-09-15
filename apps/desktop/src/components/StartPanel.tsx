@@ -19,6 +19,7 @@ import { hireable_engines } from "@/lib/hiring_rules";
 import { as_url, clone_target, is_clonable, pick_folder } from "@/lib/pick";
 import { use_services } from "@/workspace/registry";
 import { Picker } from "@/components/Picker";
+import { Press } from "@/components/Press";
 
 type Where = "new" | "folder" | "clone";
 
@@ -58,19 +59,28 @@ export function StartPanel({ active }: { active: boolean }) {
             .catch(() => undefined);
     }, []);
 
+    /// The install command being typed into a fresh pane, while it is.
+    const [installing, set_installing] = useState<string | null>(null);
+
     // The install command is typed into a fresh pane and left for the person
     // to send: they read what is about to run, press Enter, and watch it.
     const prepare_install = useCallback(
         (command: string) => {
+            if (installing) {
+                return;
+            }
+
+            set_installing(command);
             spawn_default_shell()
                 .then(async (created) => {
                     await new Promise((done) => window.setTimeout(done, 700));
                     await write_input(created.id, command);
                     open_session(created.id);
                 })
-                .catch(() => undefined);
+                .catch((cause) => set_error(cause instanceof Error ? cause.message : String(cause)))
+                .finally(() => set_installing(null));
         },
-        [open_session],
+        [installing, open_session],
     );
     const [where, set_where] = useState<Where>("new");
     const [path, set_path] = useState("");
@@ -229,15 +239,16 @@ export function StartPanel({ active }: { active: boolean }) {
                         workspace {begun.workspace.name}
                     </p>
                     <div className="flex flex-wrap gap-2">
-                        <button
+                        <Press
                             className="rounded-lg border border-turquoise px-3 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40"
                             disabled={!begun.commander.session_id}
-                            onClick={() =>
+                            busy_says="opening…"
+                            on_press={() =>
                                 begun.commander.session_id && open_session(begun.commander.session_id)
                             }
                         >
                             open {begun.commander.name}'s pane
-                        </button>
+                        </Press>
                         <button
                             className="rounded-lg border border-reef px-3 py-1 font-mono text-[11px] text-shell hover:border-foam"
                             onClick={() => {
@@ -295,9 +306,9 @@ export function StartPanel({ active }: { active: boolean }) {
                                 value={path}
                                 onChange={(event) => set_path(event.target.value)}
                             />
-                            <button
+                            <Press
                                 className="rounded-lg border border-reef px-3 py-1 font-mono text-[11px] text-shell hover:border-foam"
-                                onClick={async () => {
+                                on_press={async () => {
                                     const picked = await pick_folder("Put the project under…", path || undefined);
                                     if (picked) {
                                         set_path(picked);
@@ -305,7 +316,7 @@ export function StartPanel({ active }: { active: boolean }) {
                                 }}
                             >
                                 browse…
-                            </button>
+                            </Press>
                         </div>
                         {trouble ? <p className="font-mono text-[10px] text-coral">{trouble}</p> : null}
                         {name && !trouble && path.trim() ? (
@@ -325,9 +336,9 @@ export function StartPanel({ active }: { active: boolean }) {
                                 set_needs_git(false);
                             }}
                         />
-                        <button
+                        <Press
                             className="rounded-lg border border-reef px-3 py-1 font-mono text-[11px] text-shell hover:border-foam"
-                            onClick={async () => {
+                            on_press={async () => {
                                 const picked = await pick_folder("Start a project here", path || undefined);
                                 if (picked) {
                                     set_path(picked);
@@ -336,7 +347,7 @@ export function StartPanel({ active }: { active: boolean }) {
                             }}
                         >
                             browse…
-                        </button>
+                        </Press>
                     </div>
                 ) : (
                     <div className="flex flex-col gap-2">
@@ -347,9 +358,9 @@ export function StartPanel({ active }: { active: boolean }) {
                                 value={url}
                                 onChange={(event) => set_url(event.target.value)}
                             />
-                            <button
+                            <Press
                                 className="rounded-lg border border-reef px-3 py-1 font-mono text-[11px] text-shell hover:border-foam"
-                                onClick={async () => {
+                                on_press={async () => {
                                     const picked = await pick_folder("Clone into…", into || undefined);
                                     if (picked) {
                                         set_into(picked);
@@ -357,7 +368,7 @@ export function StartPanel({ active }: { active: boolean }) {
                                 }}
                             >
                                 clone into…
-                            </button>
+                            </Press>
                         </div>
                         {url.trim() && into.trim() ? (
                             <p className="font-mono text-[10px] text-shade">
@@ -543,7 +554,10 @@ export function StartPanel({ active }: { active: boolean }) {
                                                                 <span
                                                                     role="button"
                                                                     tabIndex={0}
-                                                                    className="rounded border border-sun/70 px-1.5 py-[1px] text-sun hover:bg-sun/10"
+                                                                    aria-busy={installing === recipe.command || undefined}
+                                                                    className={`rounded border border-sun/70 px-1.5 py-[1px] text-sun hover:bg-sun/10 ${
+                                                                        installing ? "cursor-wait" : ""
+                                                                    }`}
                                                                     title={`opens a terminal with "${recipe.command}" typed in — press Enter there to run it`}
                                                                     onClick={(event) => {
                                                                         event.stopPropagation();
@@ -556,6 +570,7 @@ export function StartPanel({ active }: { active: boolean }) {
                                                                         }
                                                                     }}
                                                                 >
+                                                                    {installing === recipe.command ? <Spinner className="mr-1" /> : null}
                                                                     install {tool}
                                                                 </span>
                                                             ) : null}
@@ -639,13 +654,14 @@ export function StartPanel({ active }: { active: boolean }) {
                         {path.trim()} is not a git repository yet. Each agent works in its own
                         worktree, which needs one.
                     </span>
-                    <button
+                    <Press
                         className="rounded-lg border border-sun px-2 py-[3px] font-mono text-[11px] text-sun hover:bg-sun/10"
                         disabled={busy}
-                        onClick={() => start(true)}
+                        busy_says="starting…"
+                        on_press={() => start(true)}
                     >
                         start one here and go
-                    </button>
+                    </Press>
                 </div>
             ) : null}
 

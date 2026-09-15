@@ -10,6 +10,9 @@ import {
 } from "@/lib/core";
 import { with_marked } from "@/lib/notices";
 import { use_poll } from "@/lib/poll";
+import { Press } from "@/components/Press";
+
+const message_of = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 
 const TINT: Record<Notice["kind"], string> = {
     waiting: "text-coral",
@@ -41,7 +44,9 @@ function how_long_ago(at: number, now: number): string {
 export function NoticeBell({ on_open }: { on_open: (opens: string) => void }) {
     const [report, set_report] = useState<NoticeReport | null>(null);
     const [open, set_open] = useState(false);
-    const [switching, set_switching] = useState(false);
+    // A mark or a switch the core refused. The list is put back the way the
+    // core has it, and this says why, instead of the click quietly undoing.
+    const [trouble, set_trouble] = useState<string | null>(null);
     const [now, set_now] = useState(() => Math.floor(Date.now() / 1000));
     const holder = useRef<HTMLDivElement>(null);
 
@@ -73,8 +78,14 @@ export function NoticeBell({ on_open }: { on_open: (opens: string) => void }) {
     const mark = (ids: number[], read: boolean) => {
         set_report((held) => (held ? with_marked(held, ids, read) : held));
         return (read ? mark_notices_seen(ids) : mark_notices_unseen(ids))
-            .then(refresh)
-            .catch(() => void refresh());
+            .then(() => {
+                set_trouble(null);
+                return refresh();
+            })
+            .catch((cause) => {
+                set_trouble(`could not mark ${read ? "read" : "unread"}: ${message_of(cause)}`);
+                return refresh();
+            });
     };
 
     const unseen = report?.unseen ?? 0;
@@ -83,12 +94,16 @@ export function NoticeBell({ on_open }: { on_open: (opens: string) => void }) {
 
     const switch_desktop = () => {
         const wanted = !desktop;
-        set_switching(true);
         set_report((held) => (held ? { ...held, desktop: wanted } : held));
-        set_desktop_notices(wanted)
-            .then(set_report)
-            .catch(() => void refresh())
-            .finally(() => set_switching(false));
+        return set_desktop_notices(wanted)
+            .then((report) => {
+                set_trouble(null);
+                set_report(report);
+            })
+            .catch((cause) => {
+                set_trouble(`could not turn desktop notices ${wanted ? "on" : "off"}: ${message_of(cause)}`);
+                return refresh();
+            });
     };
 
     return (
@@ -126,25 +141,29 @@ export function NoticeBell({ on_open }: { on_open: (opens: string) => void }) {
                     <div className="flex items-center justify-between gap-2 border-b border-reef px-3 pb-1.5 pt-0.5 font-mono text-[10px]">
                         <span className="text-shade">{unseen === 0 ? "nothing unread" : `${unseen} unread`}</span>
                         <span className="flex gap-1.5">
-                            <button
+                            <Press
                                 className="rounded border border-reef px-1.5 text-shell hover:border-turquoise hover:text-turquoise disabled:opacity-40"
                                 disabled={unseen === 0}
-                                onClick={() => void mark([], true)}
+                                busy_says="marking…"
+                                on_press={() => mark([], true)}
                             >
                                 mark all read
-                            </button>
-                            <button
+                            </Press>
+                            <Press
                                 className={`rounded border px-1.5 hover:border-turquoise hover:text-turquoise disabled:opacity-60 ${
                                     desktop ? "border-palm text-palm" : "border-reef text-shade"
                                 }`}
                                 title="show waiting, trouble and finished notices on the desktop while this window is not in front"
-                                disabled={switching}
-                                onClick={switch_desktop}
+                                on_press={switch_desktop}
                             >
                                 desktop {desktop ? "on" : "off"}
-                            </button>
+                            </Press>
                         </span>
                     </div>
+
+                    {trouble ? (
+                        <p className="border-b border-reef px-3 py-1 font-mono text-[10px] text-coral">{trouble}</p>
+                    ) : null}
 
                     {(report?.notices.length ?? 0) === 0 ? (
                         <p className="px-3 py-2 font-mono text-[10px] text-shade">
@@ -184,14 +203,15 @@ export function NoticeBell({ on_open }: { on_open: (opens: string) => void }) {
                                 </div>
                             </button>
 
-                            <button
-                                className="mt-1 flex h-3 w-3 shrink-0 items-center justify-center rounded-full border border-reef hover:border-turquoise"
+                            <Press
+                                className="mt-1 flex h-3 w-3 shrink-0 items-center justify-center rounded-full border border-reef text-[8px] leading-none hover:border-turquoise"
                                 title={notice.seen ? "mark as unread" : "mark as read"}
                                 aria-label={notice.seen ? "mark as unread" : "mark as read"}
-                                onClick={() => void mark([notice.id], !notice.seen)}
+                                busy_says=""
+                                on_press={() => mark([notice.id], !notice.seen)}
                             >
                                 {notice.seen ? null : <span className="h-1.5 w-1.5 rounded-full bg-turquoise" />}
-                            </button>
+                            </Press>
                         </div>
                     ))}
                 </div>

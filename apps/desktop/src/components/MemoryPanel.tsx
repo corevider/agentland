@@ -1,5 +1,5 @@
 import { use_poll } from "@/lib/poll";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
     answer_memory,
@@ -17,6 +17,7 @@ import {
 import { use_services } from "@/workspace/registry";
 import { exactly, when } from "@/lib/when";
 import { Picker } from "@/components/Picker";
+import { Press } from "@/components/Press";
 
 /// Where a memory can be filed, in the vault's own words. A scope is also told
 /// everything above it, so the crew's own shelf reaches every project.
@@ -50,16 +51,27 @@ export function MemoryPanel({ active }: { active: boolean }) {
         set_embedder_report(report);
     }, []);
 
+    // Enter in a box does what its button does, so each guard covers both.
+    const recalling = useRef(false);
+    const proposing = useRef(false);
+
     const search = useCallback(() => {
         const text = query.trim();
         if (!text) {
             set_found(null);
             return;
         }
+        if (recalling.current) {
+            return;
+        }
 
-        search_memories(text)
+        recalling.current = true;
+        return search_memories(text)
             .then(set_found)
-            .catch((cause) => set_notice(cause instanceof Error ? cause.message : String(cause)));
+            .catch((cause) => set_notice(cause instanceof Error ? cause.message : String(cause)))
+            .finally(() => {
+                recalling.current = false;
+            });
     }, [query]);
 
     use_poll(() => {
@@ -70,12 +82,12 @@ export function MemoryPanel({ active }: { active: boolean }) {
         (action: () => Promise<unknown>, say?: string) => {
             set_notice(null);
             set_said(null);
-            action()
-                .then(() => {
-                    refresh();
+            return action()
+                .then(async () => {
                     if (say) {
                         set_said(say);
                     }
+                    await refresh();
                 })
                 .catch((cause) => set_notice(cause instanceof Error ? cause.message : String(cause)));
         },
@@ -84,7 +96,7 @@ export function MemoryPanel({ active }: { active: boolean }) {
 
     const propose = useCallback(() => {
         const text = draft.text.trim();
-        if (!text) {
+        if (!text || proposing.current) {
             return;
         }
 
@@ -97,9 +109,12 @@ export function MemoryPanel({ active }: { active: boolean }) {
                   ? "workspace"
                   : draft.scope;
 
-        run(async () => {
+        proposing.current = true;
+        return run(async () => {
             await propose_memory(text, scope, "you");
             set_draft({ ...draft, text: "" });
+        }).finally(() => {
+            proposing.current = false;
         });
     }, [draft, run]);
 
@@ -125,12 +140,13 @@ export function MemoryPanel({ active }: { active: boolean }) {
                     onChange={(event) => set_query(event.target.value)}
                     onKeyDown={(event) => event.key === "Enter" && search()}
                 />
-                <button
+                <Press
                     className="rounded-md border border-foam px-2 py-0.5 font-mono text-[11px]"
-                    onClick={search}
+                    busy_says="recalling…"
+                    on_press={search}
                 >
                     recall
-                </button>
+                </Press>
                 {found ? (
                     <button
                         className="rounded-md border border-reef px-2 py-0.5 font-mono text-[11px] text-shade"
@@ -259,12 +275,13 @@ export function MemoryPanel({ active }: { active: boolean }) {
                         onChange={(event) => set_draft({ ...draft, project: event.target.value })}
                     />
                 ) : null}
-                <button
+                <Press
                     className="rounded-md border border-turquoise px-2 py-0.5 font-mono text-[11px] text-turquoise"
-                    onClick={propose}
+                    busy_says="proposing…"
+                    on_press={propose}
                 >
                     propose
-                </button>
+                </Press>
             </section>
 
             {notice ? (
@@ -379,10 +396,10 @@ function Entry({
 }: {
     memory: Memory;
     replaces?: Memory | null;
-    on_approve?: () => void;
-    on_revoke?: () => void;
-    on_restore?: () => void;
-    on_forget: () => void;
+    on_approve?: () => unknown;
+    on_revoke?: () => unknown;
+    on_restore?: () => unknown;
+    on_forget: () => unknown;
 }) {
     const [asking, set_asking] = useState(false);
 
@@ -430,30 +447,33 @@ function Entry({
                 ) : null}
                 <span className="ml-auto flex gap-1">
                     {on_approve ? (
-                        <button
+                        <Press
                             className="rounded border border-palm px-1.5 text-palm"
-                            onClick={on_approve}
+                            busy_says="approving…"
+                            on_press={on_approve}
                         >
                             approve
-                        </button>
+                        </Press>
                     ) : null}
                     {on_restore ? (
-                        <button
+                        <Press
                             className="rounded border border-palm px-1.5 text-palm"
                             title="tell the crew this again"
-                            onClick={on_restore}
+                            busy_says="putting back…"
+                            on_press={on_restore}
                         >
                             put back
-                        </button>
+                        </Press>
                     ) : null}
                     {on_revoke ? (
-                        <button
+                        <Press
                             className="rounded border border-reef px-1.5 hover:border-sun hover:text-sun"
                             title="take it back out of the crew's brief without deleting it"
-                            onClick={on_revoke}
+                            busy_says="revoking…"
+                            on_press={on_revoke}
                         >
                             revoke
-                        </button>
+                        </Press>
                     ) : null}
                     {/* Deleting sits apart from the other two on purpose: revoke
                         takes a memory out of the crew's brief and keeps the file,
@@ -463,15 +483,16 @@ function Entry({
                         {asking ? (
                             <span className="flex items-center gap-1">
                                 <span className="text-coral">delete the file?</span>
-                                <button
+                                <Press
                                     className="rounded border border-coral bg-coral/10 px-1.5 text-coral"
-                                    onClick={() => {
+                                    busy_says="deleting…"
+                                    on_press={async () => {
+                                        await on_forget();
                                         set_asking(false);
-                                        on_forget();
                                     }}
                                 >
                                     delete
-                                </button>
+                                </Press>
                                 <button
                                     className="rounded border border-reef px-1.5 hover:border-foam"
                                     onClick={() => set_asking(false)}

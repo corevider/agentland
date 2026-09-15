@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
+import { Press } from "@/components/Press";
 import { Waiting } from "@/components/Spinner";
 import { TerminalPane, type PaneMetrics } from "@/components/TerminalPane";
 import { crown_of } from "@/lib/commander";
@@ -13,7 +14,11 @@ export function SoloPane({ session_id }: { session_id: string }) {
     const [crew, set_crew] = useState<Agent[]>([]);
     const [gone, set_gone] = useState(false);
     const [readable, set_readable] = useState(false);
+    // What the core or the window refused, said in the header rather than lost.
+    const [trouble, set_trouble] = useState<string | null>(null);
     const metrics = useRef(new Map<string, PaneMetrics>());
+
+    const say = (cause: unknown) => set_trouble(cause instanceof Error ? cause.message : String(cause));
 
     const refresh = useCallback(async () => {
         const [sessions, roster] = await Promise.all([list_sessions(), list_agents()]);
@@ -46,16 +51,19 @@ export function SoloPane({ session_id }: { session_id: string }) {
             <header className="flex shrink-0 items-center gap-2 border-b border-reef/70 px-3 py-1.5">
                 <span className="text-[13px] text-linen">{label ?? session_id}</span>
                 <span className="font-mono text-[10px] text-shade">in its own window</span>
-                <button
+                {trouble ? <span className="font-mono text-[10px] text-coral">{trouble}</span> : null}
+                <Press
                     className="ml-auto rounded border border-reef px-2 py-0.5 font-mono text-[11px] text-shell hover:border-foam"
-                    onClick={() => {
-                        void set_window(session_id, { holder: "grid" })
+                    busy_says="putting it back…"
+                    on_press={() =>
+                        set_window(session_id, { holder: "grid" })
                             .then(() => invoke("close_pane_window", { sessionId: session_id }))
-                            .catch(() => undefined);
-                    }}
+                            .then(() => set_trouble(null))
+                            .catch(say)
+                    }
                 >
                     put it back
-                </button>
+                </Press>
             </header>
 
             {/* A grid of one rather than a flex row: a flex child with no
@@ -72,7 +80,7 @@ export function SoloPane({ session_id }: { session_id: string }) {
                         readable={readable}
                         on_readable={(wanted) => {
                             set_readable(wanted);
-                            void set_window(session_id, { readable: wanted }).catch(() => undefined);
+                            void set_window(session_id, { readable: wanted }).catch(say);
                         }}
                         on_focus={() => undefined}
                         on_metrics={(id, value) => metrics.current.set(id, value)}

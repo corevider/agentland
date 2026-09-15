@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 
+import { Press } from "@/components/Press";
 import { Waiting } from "@/components/Spinner";
 import {
     forget_permit,
@@ -37,7 +38,7 @@ function Spend({
     draft: { requests: string; input: string; output: string };
     on_draft: (next: { requests: string; input: string; output: string }) => void;
     on_edit: () => void;
-    on_save: () => void;
+    on_save: () => unknown;
     on_cancel: () => void;
 }) {
     const meters = meters_of(allowance.last_minute, allowance.ceilings);
@@ -88,12 +89,13 @@ function Spend({
                             onChange={(event) => on_draft({ ...draft, [key]: event.target.value })}
                         />
                     ))}
-                    <button
+                    <Press
                         className="rounded-lg border border-turquoise px-2 py-0.5 font-mono text-[11px] text-turquoise"
-                        onClick={on_save}
+                        busy_says="setting…"
+                        on_press={on_save}
                     >
                         set
-                    </button>
+                    </Press>
                     <button
                         className="rounded-lg border border-reef px-2 py-0.5 font-mono text-[11px] text-shell"
                         onClick={on_cancel}
@@ -120,7 +122,7 @@ function Granted({
     on_forget,
 }: {
     permits: ProjectPermits;
-    on_forget: (rule: string) => void;
+    on_forget: (rule: string) => unknown;
 }) {
     return (
         <section className="flex flex-col gap-1 rounded-lg border border-reef bg-lagoon-deep p-2">
@@ -139,12 +141,13 @@ function Granted({
                         <span className="min-w-0 flex-1 font-mono text-[10px] text-shell">
                             {rule_reads(rule)}
                         </span>
-                        <button
+                        <Press
                             className="shrink-0 rounded border border-reef px-1.5 py-[1px] font-mono text-[10px] text-shade hover:border-coral hover:text-coral"
-                            onClick={() => on_forget(rule)}
+                            busy_says="taking it back…"
+                            on_press={() => on_forget(rule)}
                         >
                             take it back
-                        </button>
+                        </Press>
                     </li>
                 ))}
             </ul>
@@ -267,7 +270,7 @@ export function ActivityPanel({ active }: { active: boolean }) {
                         });
                         set_editing(allowance.identity);
                     }}
-                    on_save={() => void save(allowance.identity)}
+                    on_save={() => save(allowance.identity)}
                     on_cancel={() => set_editing(null)}
                 />
             ))}
@@ -281,7 +284,7 @@ export function ActivityPanel({ active }: { active: boolean }) {
                         <Granted
                             key={held.repository_id}
                             permits={held}
-                            on_forget={(rule) => void forget(held.repository_id, rule)}
+                            on_forget={(rule) => forget(held.repository_id, rule)}
                         />
                     ))}
                 </section>

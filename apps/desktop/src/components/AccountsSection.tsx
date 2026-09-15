@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { Press } from "@/components/Press";
 import { Waiting } from "@/components/Spinner";
 import {
     add_account,
@@ -84,7 +85,12 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
     const [label, set_label] = useState("");
     const [switch_draft, set_switch_draft] = useState<string>("");
     const [notice, set_notice] = useState<string | null>(null);
-    const [busy, set_busy] = useState(false);
+    /// The switch is a change on its way until the core answers; a second
+    /// click while it is would flip it back before the first was heard.
+    const [switching, set_switching] = useState(false);
+    /// Enter in the name box adds as well as the button does, so the guard
+    /// against adding the same login twice has to cover both.
+    const adding = useRef(false);
 
     const refresh = useCallback(async () => {
         const [report, budget, agents, entries] = await Promise.all([
@@ -113,7 +119,7 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
     const say = (cause: unknown) => set_notice(cause instanceof Error ? cause.message : String(cause));
 
     const rotate = useCallback((change: { order?: string[]; switch_at?: number }) => {
-        set_account_rotation(change)
+        return set_account_rotation(change)
             .then((report) => {
                 set_held(report);
                 set_notice(null);
@@ -131,11 +137,11 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
     }, [rotate, switch_at, switch_draft]);
 
     const add = useCallback(async () => {
-        if (!engine || !label.trim()) {
+        if (!engine || !label.trim() || adding.current) {
             return;
         }
 
-        set_busy(true);
+        adding.current = true;
         try {
             const made = await add_account(engine, label);
             set_label("");
@@ -147,7 +153,7 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
         } catch (cause) {
             say(cause);
         } finally {
-            set_busy(false);
+            adding.current = false;
         }
     }, [engine, label, on_open_pane, refresh]);
 
@@ -214,28 +220,30 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
                             <div className="flex min-w-0 items-center gap-2">
                                 {of > 1 ? (
                                     <div className="flex flex-col items-center">
-                                        <button
+                                        <Press
                                             className="font-mono text-[10px] leading-none text-shade hover:text-turquoise disabled:opacity-30"
                                             disabled={rank === 1}
                                             title="use this login before the one above it"
-                                            onClick={() => rotate({ order: reorder(rows, row.identity, -1) })}
+                                            busy_says=""
+                                            on_press={() => rotate({ order: reorder(rows, row.identity, -1) })}
                                         >
                                             ▲
-                                        </button>
+                                        </Press>
                                         <span
                                             className="my-0.5 font-mono text-[10px] text-driftwood"
                                             title="the order agents are started on, and moved on to"
                                         >
                                             {ordinal(rank)}
                                         </span>
-                                        <button
+                                        <Press
                                             className="font-mono text-[10px] leading-none text-shade hover:text-turquoise disabled:opacity-30"
                                             disabled={rank === of}
                                             title="use this login after the one below it"
-                                            onClick={() => rotate({ order: reorder(rows, row.identity, 1) })}
+                                            busy_says=""
+                                            on_press={() => rotate({ order: reorder(rows, row.identity, 1) })}
                                         >
                                             ▼
-                                        </button>
+                                        </Press>
                                     </div>
                                 ) : null}
 
@@ -258,19 +266,21 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
 
                             {row.account ? (
                                 <div className="flex items-center gap-2">
-                                    <button
+                                    <Press
                                         className="rounded-lg border border-reef px-2 py-1 font-mono text-[11px] text-shell hover:border-turquoise hover:text-turquoise"
-                                        onClick={() => void sign_in(row.engine_id, row.label ?? "")}
+                                        busy_says="opening…"
+                                        on_press={() => sign_in(row.engine_id, row.label ?? "")}
                                     >
                                         {row.account.askable && row.account.signed_in ? "sign in again" : "sign in"}
-                                    </button>
-                                    <button
+                                    </Press>
+                                    <Press
                                         className="rounded-lg border border-reef px-2 py-1 font-mono text-[11px] text-shell hover:border-coral hover:text-coral"
-                                        onClick={() => void forget(row.engine_id, row.label ?? "")}
+                                        busy_says="forgetting…"
+                                        on_press={() => forget(row.engine_id, row.label ?? "")}
                                         title="The folder goes, and the credential in it goes with it."
                                     >
                                         forget
-                                    </button>
+                                    </Press>
                                 </div>
                             ) : null}
                         </div>
@@ -303,13 +313,14 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
                         }}
                     />
 
-                    <button
+                    <Press
                         className="rounded-lg border border-reef px-2 py-1 font-mono text-[11px] text-shell hover:border-turquoise hover:text-turquoise disabled:opacity-50"
-                        disabled={busy || !label.trim()}
-                        onClick={() => void add()}
+                        disabled={!label.trim()}
+                        busy_says="adding…"
+                        on_press={add}
                     >
                         add and sign in
-                    </button>
+                    </Press>
                 </div>
             ) : null}
 
@@ -319,8 +330,13 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
                         type="checkbox"
                         className="mt-0.5"
                         checked={held.failover}
+                        disabled={switching}
                         onChange={(event) => {
-                            set_account_failover(event.target.checked).then(set_held).catch(say);
+                            set_switching(true);
+                            set_account_failover(event.target.checked)
+                                .then(set_held)
+                                .catch(say)
+                                .finally(() => set_switching(false));
                         }}
                     />
                     <span className="flex flex-col gap-0.5">

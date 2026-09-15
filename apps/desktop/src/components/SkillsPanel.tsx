@@ -11,6 +11,7 @@ import {
     type Agent,
     type Skill,
 } from "@/lib/core";
+import { Press } from "@/components/Press";
 
 const BLANK_MANIFEST = `---
 name: Ship checklist
@@ -73,7 +74,7 @@ export function SkillsPanel({ active }: Props) {
     const toggle = useCallback(
         (agent: Agent, skill: Skill) => {
             const held = installs[agent.id]?.includes(skill.id) ?? false;
-            void run(() =>
+            return run(() =>
                 held ? uninstall_skill(agent.id, skill.id) : install_skill(agent.id, skill.id),
             );
         },
@@ -87,7 +88,7 @@ export function SkillsPanel({ active }: Props) {
             return;
         }
 
-        void run(async () => {
+        return run(async () => {
             const written = await write_skill(name, draft);
             set_selected(written.id);
             set_drafting(false);
@@ -161,12 +162,13 @@ export function SkillsPanel({ active }: Props) {
                             onChange={(event) => set_draft(event.target.value)}
                         />
                         <div className="mt-2 flex gap-2">
-                            <button
+                            <Press
                                 className="rounded-lg border border-turquoise px-3 py-1 text-[11px] text-turquoise"
-                                onClick={save_draft}
+                                busy_says="saving…"
+                                on_press={save_draft}
                             >
                                 save it
-                            </button>
+                            </Press>
                             <button
                                 className="rounded-lg border border-foam px-3 py-1 text-[11px]"
                                 onClick={() => set_drafting(false)}
@@ -186,12 +188,13 @@ export function SkillsPanel({ active }: Props) {
                                 </div>
                             </div>
                             {current.builtin ? null : (
-                                <button
+                                <Press
                                     className="shrink-0 rounded-lg border border-coral px-2 py-1 font-mono text-[10px] text-coral"
-                                    onClick={() => run(() => remove_skill(current.id))}
+                                    busy_says="deleting…"
+                                    on_press={() => run(() => remove_skill(current.id))}
                                 >
                                     delete
-                                </button>
+                                </Press>
                             )}
                         </div>
 
@@ -206,9 +209,9 @@ export function SkillsPanel({ active }: Props) {
                                     {agents.map((agent) => {
                                         const held = installs[agent.id]?.includes(current.id) ?? false;
                                         return (
-                                            <button
+                                            <Press
                                                 key={agent.id}
-                                                onClick={() => toggle(agent, current)}
+                                                on_press={() => toggle(agent, current)}
                                                 className={`rounded-lg border px-2 py-1 font-mono text-[11px] ${
                                                     held
                                                         ? "border-palm text-palm"
@@ -217,7 +220,7 @@ export function SkillsPanel({ active }: Props) {
                                             >
                                                 {held ? "✓ " : ""}
                                                 {agent.name}
-                                            </button>
+                                            </Press>
                                         );
                                     })}
                                 </div>

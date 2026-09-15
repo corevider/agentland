@@ -27,6 +27,8 @@ import {
 import { what_is_held } from "@/lib/leaving";
 import { hiring_targets, target_value, worktree_for, type Target } from "@/lib/hiring";
 import { Picker } from "@/components/Picker";
+import { Press } from "@/components/Press";
+import { Spinner } from "@/components/Spinner";
 import { read_hiring, type HiringReport } from "@/lib/core";
 import { open_to_the_crew } from "@/lib/hiring_rules";
 
@@ -68,7 +70,10 @@ export function CrewPanel({ active, on_open_session }: Props) {
     const [targets, set_targets] = useState<Target[]>([]);
     const [draft, set_draft] = useState({ name: "", role: ROLES[0], engine_id: "", target: "" });
     const [error, set_error] = useState<string | null>(null);
-    const [busy, set_busy] = useState(false);
+    /// The agents with a change on its way, by id. Each row waits on its own:
+    /// a stop and a start on one agent would race to the same pane, and nothing
+    /// about one agent is a reason to hold up another.
+    const [acting, set_acting] = useState<ReadonlySet<string>>(new Set());
     const [activity, set_activity] = useState<Record<string, SessionInfo>>({});
     const [now, set_now] = useState(() => Math.floor(Date.now() / 1000));
     const [leaving, set_leaving] = useState<{ agent: Agent; holdings: Holdings } | null>(null);
@@ -123,18 +128,31 @@ export function CrewPanel({ active, on_open_session }: Props) {
 
     const run = useCallback(
         async (action: () => Promise<unknown>) => {
-            set_busy(true);
             set_error(null);
             try {
                 await action();
                 await refresh();
             } catch (cause) {
                 set_error(cause instanceof Error ? cause.message : String(cause));
-            } finally {
-                set_busy(false);
             }
         },
         [refresh],
+    );
+
+    const run_for = useCallback(
+        async (agent_id: string, action: () => Promise<unknown>) => {
+            set_acting((held) => new Set(held).add(agent_id));
+            try {
+                await run(action);
+            } finally {
+                set_acting((held) => {
+                    const next = new Set(held);
+                    next.delete(agent_id);
+                    return next;
+                });
+            }
+        },
+        [run],
     );
 
     useEffect(() => {
@@ -235,10 +253,11 @@ export function CrewPanel({ active, on_open_session }: Props) {
                             }))}
                             on_pick={(held) => set_draft({ ...draft, target: held })}
                         />
-                        <button
+                        <Press
                             className="border border-turquoise px-2 py-0.5 font-mono text-[11px] text-turquoise disabled:opacity-40 rounded-lg"
-                            disabled={busy || !draft.name.trim() || !draft.target}
-                            onClick={() =>
+                            disabled={!draft.name.trim() || !draft.target}
+                            busy_says="hiring…"
+                            on_press={() =>
                                 run(async () => {
                                     const name = draft.name.trim();
                                     const [repository_id, chosen] = draft.target.split("/");
@@ -275,7 +294,7 @@ export function CrewPanel({ active, on_open_session }: Props) {
                             }
                         >
                             hire
-                        </button>
+                        </Press>
                     </div>
                 )}
             </section>
@@ -309,19 +328,19 @@ export function CrewPanel({ active, on_open_session }: Props) {
                             {agent.name}
                         </span>
                         <span className="text-shell">{agent.role}</span>
+                        {acting.has(agent.id) ? <Spinner label="changing this agent" className="text-turquoise" /> : null}
                         <Picker
                             className="rounded border border-reef bg-lagoon-deep px-1 py-[1px] font-mono text-[10px] text-turquoise"
                             title="the engine this agent runs on — a stopped agent moves at once and starts fresh there; stop a running one first"
                             value={agent.engine_id}
                             placeholder={agent.engine_id}
+                            disabled={acting.has(agent.id)}
                             choices={hireable.map((engine) => ({ value: engine.id, label: engine.name }))}
                             on_pick={(held) => {
                                 if (held === agent.engine_id) {
                                     return;
                                 }
-                                shape_agent(agent.id, { engine_id: held })
-                                    .then(() => refresh())
-                                    .catch((cause) => set_error(String(cause)));
+                                void run_for(agent.id, () => shape_agent(agent.id, { engine_id: held }));
                             }}
                         />
                         {agent.model ? <span className="text-turquoise">{agent.model}</span> : null}
@@ -332,10 +351,9 @@ export function CrewPanel({ active, on_open_session }: Props) {
                             title="how much this agent does without asking — yours to set"
                             value={agent.permissions ?? ""}
                             choices={PERMISSIONS}
+                            disabled={acting.has(agent.id)}
                             on_pick={(held) => {
-                                shape_agent(agent.id, { permissions: held })
-                                    .then(() => refresh())
-                                    .catch((cause) => set_error(String(cause)));
+                                void run_for(agent.id, () => shape_agent(agent.id, { permissions: held }));
                             }}
                         />
                         {logins.filter((login) => login.engine_id === agent.engine_id).length > 0 ? (
@@ -353,10 +371,9 @@ export function CrewPanel({ active, on_open_session }: Props) {
                                             hint: login.signed_in ? undefined : "signed out",
                                         })),
                                 ]}
+                                disabled={acting.has(agent.id)}
                                 on_pick={(held) => {
-                                    shape_agent(agent.id, { account: held })
-                                        .then(() => refresh())
-                                        .catch((cause) => set_error(String(cause)));
+                                    void run_for(agent.id, () => shape_agent(agent.id, { account: held }));
                                 }}
                             />
                         ) : null}
@@ -379,50 +396,55 @@ export function CrewPanel({ active, on_open_session }: Props) {
                         <div className="ml-auto flex items-center gap-2">
                             {agent.session_id ? (
                                 <>
-                                    <button
+                                    <Press
                                         className="border border-foam rounded-md px-1.5 py-0.5 text-[11px]"
-                                        onClick={() => on_open_session(agent.session_id as string)}
+                                        busy_says="opening…"
+                                        on_press={() => on_open_session(agent.session_id as string)}
                                     >
                                         open pane
-                                    </button>
-                                    <button
+                                    </Press>
+                                    <Press
                                         className="border border-foam px-2 py-1 text-[11px] disabled:opacity-40 rounded-lg"
-                                        disabled={busy}
-                                        onClick={() => run(() => stop_agent(agent.id))}
+                                        disabled={acting.has(agent.id)}
+                                        busy_says="stopping…"
+                                        on_press={() => run_for(agent.id, () => stop_agent(agent.id))}
                                     >
                                         stop
-                                    </button>
+                                    </Press>
                                 </>
                             ) : (
                                 <>
-                                    <button
+                                    <Press
                                         className="border border-foam px-2 py-1 text-[11px] disabled:opacity-40 rounded-lg"
-                                        disabled={busy}
-                                        onClick={() => run(() => start_agent(agent.id, false))}
+                                        disabled={acting.has(agent.id)}
+                                        busy_says="starting…"
+                                        on_press={() => run_for(agent.id, () => start_agent(agent.id, false))}
                                     >
                                         start
-                                    </button>
-                                    <button
+                                    </Press>
+                                    <Press
                                         className="border border-foam px-2 py-1 text-[11px] disabled:opacity-40 rounded-lg"
-                                        disabled={busy}
-                                        onClick={() => run(() => start_agent(agent.id, true))}
+                                        disabled={acting.has(agent.id)}
+                                        busy_says="resuming…"
+                                        on_press={() => run_for(agent.id, () => start_agent(agent.id, true))}
                                     >
                                         resume
-                                    </button>
+                                    </Press>
                                 </>
                             )}
-                            <button
+                            <Press
                                 className="border border-coral rounded-md px-1.5 py-0.5 text-[11px] text-coral disabled:opacity-40"
-                                disabled={busy}
-                                onClick={() =>
-                                    run(async () => {
+                                disabled={acting.has(agent.id)}
+                                busy_says="reading what it holds…"
+                                on_press={() =>
+                                    run_for(agent.id, async () => {
                                         const holdings = await read_holdings(agent.id);
                                         set_leaving({ agent, holdings });
                                     })
                                 }
                             >
                                 dismiss
-                            </button>
+                            </Press>
                         </div>
                     </div>
                 ))}
@@ -464,22 +486,24 @@ export function CrewPanel({ active, on_open_session }: Props) {
 
                         <div className="flex justify-end gap-2">
                             <button
-                                className="rounded-lg border border-reef px-2 py-1 font-mono text-[11px] text-shell"
+                                className="rounded-lg border border-reef px-2 py-1 font-mono text-[11px] text-shell disabled:opacity-40"
+                                disabled={acting.has(leaving.agent.id)}
                                 onClick={() => set_leaving(null)}
                             >
                                 keep them
                             </button>
-                            <button
+                            <Press
                                 className="rounded-lg border border-coral px-2 py-1 font-mono text-[11px] text-coral disabled:opacity-40"
-                                disabled={busy}
-                                onClick={() => {
+                                busy_says={`letting ${leaving.agent.name} go…`}
+                                on_press={() => {
                                     const held = leaving;
-                                    set_leaving(null);
-                                    void run(() => dismiss_agent(held.agent.id, true));
+                                    return run_for(held.agent.id, () => dismiss_agent(held.agent.id, true)).then(() =>
+                                        set_leaving(null),
+                                    );
                                 }}
                             >
                                 dismiss {leaving.agent.name}
-                            </button>
+                            </Press>
                         </div>
                     </div>
                 </div>

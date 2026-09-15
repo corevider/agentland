@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { card_from_issue, list_issues, type GitHubIssue, type Repository, type Task } from "@/lib/core";
 import { issue_line, on_github, with_card } from "@/lib/issues";
+import { Press } from "@/components/Press";
 
 const message_of = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 
@@ -52,7 +53,7 @@ export function IssuePicker({ repos, on_made }: { repos: Repository[]; on_made: 
     const make = (repository_id: string, issue: GitHubIssue) => {
         set_making(`${repository_id}#${issue.number}`);
         set_said(null);
-        card_from_issue(repository_id, issue.number)
+        return card_from_issue(repository_id, issue.number)
             .then((task) => {
                 set_read((held) => {
                     const issues = held[repository_id];
@@ -112,13 +113,14 @@ export function IssuePicker({ repos, on_made }: { repos: Repository[]; on_made: 
                                                     {issue.card}
                                                 </span>
                                             ) : (
-                                                <button
+                                                <Press
                                                     className="shrink-0 rounded-lg border border-turquoise px-1.5 font-mono text-[10px] text-turquoise disabled:opacity-40"
-                                                    disabled={making !== null}
-                                                    onClick={() => make(repository.id, issue)}
+                                                    disabled={making !== null && making !== `${repository.id}#${issue.number}`}
+                                                    busy_says="making…"
+                                                    on_press={() => make(repository.id, issue)}
                                                 >
-                                                    {making === `${repository.id}#${issue.number}` ? "making…" : "make a card"}
-                                                </button>
+                                                    make a card
+                                                </Press>
                                             )}
                                         </div>
                                     ))

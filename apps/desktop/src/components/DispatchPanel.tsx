@@ -14,6 +14,7 @@ import {
     type Task,
 } from "@/lib/core";
 import { use_services } from "@/workspace/registry";
+import { Press } from "@/components/Press";
 
 export function DispatchPanel({ active }: { active: boolean }) {
     const { crew, repositories } = use_services();
@@ -35,7 +36,7 @@ export function DispatchPanel({ active }: { active: boolean }) {
     const run = useCallback(
         (action: () => Promise<unknown>) => {
             set_notice(null);
-            action()
+            return action()
                 .then(() => refresh())
                 .catch((cause) => set_notice(cause instanceof Error ? cause.message : String(cause)));
         },
@@ -52,7 +53,7 @@ export function DispatchPanel({ active }: { active: boolean }) {
     const hand_over = useCallback(
         (task: Task) => {
             set_notice(null);
-            dispatch_task(task.id)
+            return dispatch_task(task.id)
                 .then((report) => {
                     set_last({ task: task.id, decision: report.decision });
                     set_state(report.state);
@@ -75,13 +76,13 @@ export function DispatchPanel({ active }: { active: boolean }) {
                 >
                     {state?.paused ? "X is holding everything" : "X is on duty"}
                 </span>
-                <button
+                <Press
                     className="rounded-md border border-foam px-2 py-0.5 font-mono text-[11px]"
                     disabled={!state}
-                    onClick={() => state && run(() => pause_dispatch(!state.paused))}
+                    on_press={() => state && run(() => pause_dispatch(!state.paused))}
                 >
                     {state?.paused ? "let X hand out work" : "hold everything"}
-                </button>
+                </Press>
 
                 <label className="flex items-center gap-1 font-mono text-[11px] text-shell">
                     per repository
@@ -168,12 +169,13 @@ export function DispatchPanel({ active }: { active: boolean }) {
                             <span className="font-mono text-[10px] text-shade">
                                 {task.id} · {task.repository_id}
                             </span>
-                            <button
+                            <Press
                                 className="ml-auto shrink-0 rounded border border-turquoise px-1.5 font-mono text-[10px] text-turquoise"
-                                onClick={() => hand_over(task)}
+                                busy_says="asking…"
+                                on_press={() => hand_over(task)}
                             >
                                 ask X
-                            </button>
+                            </Press>
                         </article>
                     ))}
                 </div>

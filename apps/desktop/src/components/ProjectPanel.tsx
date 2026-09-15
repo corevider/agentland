@@ -26,6 +26,7 @@ import {
     sort_entries,
 } from "@/lib/tree";
 import { Picker } from "@/components/Picker";
+import { Spinner } from "@/components/Spinner";
 
 const DIFF_TINT: Record<string, string> = {
     added: "text-palm",
@@ -57,6 +58,10 @@ export function ProjectPanel({ active, repositories, going }: Props) {
     const [review, set_review] = useState<Review | null>(null);
     const [showing, set_showing] = useState<"files" | "git">("files");
     const [error, set_error] = useState<string | null>(null);
+    // The file being read says so on its entry, and clicking it again while it
+    // is on its way asks for nothing more.
+    const [reading, set_reading] = useState<string | null>(null);
+    const reading_ref = useRef<string | null>(null);
 
     const repository_ref = useRef(repository_id);
     repository_ref.current = repository_id;
@@ -184,9 +189,22 @@ export function ProjectPanel({ active, repositories, going }: Props) {
                 return;
             }
 
-            read_file(repository_id, join_path(path, name), worktree)
+            const wanted = join_path(path, name);
+            if (reading_ref.current === wanted) {
+                return;
+            }
+
+            reading_ref.current = wanted;
+            set_reading(wanted);
+            read_file(repository_id, wanted, worktree)
                 .then(set_opened)
-                .catch((cause) => set_error(cause instanceof Error ? cause.message : String(cause)));
+                .catch((cause) => set_error(cause instanceof Error ? cause.message : String(cause)))
+                .finally(() => {
+                    if (reading_ref.current === wanted) {
+                        reading_ref.current = null;
+                        set_reading(null);
+                    }
+                });
         },
         [repository_id, path, worktree],
     );
@@ -287,8 +305,10 @@ export function ProjectPanel({ active, repositories, going }: Props) {
                                 className={`flex items-baseline gap-1.5 text-left font-mono text-[11px] hover:text-turquoise ${
                                     opened?.path === join_path(path, entry.name) ? "text-turquoise" : "text-driftwood"
                                 }`}
+                                aria-busy={reading === join_path(path, entry.name) || undefined}
                                 onClick={() => open(entry.name, entry.kind)}
                             >
+                                {reading === join_path(path, entry.name) ? <Spinner className="text-turquoise" /> : null}
                                 <span className="truncate">
                                     {entry.kind === "dir" ? `${entry.name}/` : entry.name}
                                 </span>
