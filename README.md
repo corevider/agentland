@@ -2239,9 +2239,18 @@ and what changes is which folder the next pane starts in.
 The logins are put in an order, the machine's own login among them — first,
 last or anywhere between. With the switch on, a new agent starts on the first
 login in that order with room, and an agent whose login passes a point the
-person picks (92% of a week unless told otherwise), or whose engine says the
-login is out, is moved to the next one. The same point decides both ways, so a
-login just past it is never picked only to be left again on the next tick. The
+person picks, or whose engine says the login is out, is moved to the next one.
+There are two points, because a subscription has two walls: the week (92%
+unless told otherwise) and the five hours that run out first on a busy day
+(95%), so a login with most of its week left is still passed over while its
+five hours are nearly gone. The same points decide both ways, so a login just
+past one is never picked only to be left again on the next tick.
+
+A login is read only while a pane runs on it, so one everybody has left keeps
+its last number. A five-hour reading older than five hours is ignored — the
+window it was read from has come round — or a login read at 99% would never
+have room again. The week's reading is kept: a week does not come round on its
+own inside an afternoon. The
 machine's own login can be moved back to when its week comes round; it used to
 be the one place an agent was never carried back to.
 

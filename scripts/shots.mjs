@@ -262,11 +262,11 @@ function sample_logins(hired) {
     const [ada, kai, wren, tor] = hired.map((agent) => agent.id);
     const now = Math.floor(Date.now() / 1000);
     const nothing = { input: 0, cached: 0, output: 0 };
-    const allowance = (identity, agents, weekly_percent, room) => ({
+    const allowance = (identity, agents, weekly_percent, room, session_percent) => ({
         identity,
         agents,
         weekly_percent,
-        session_percent: 20,
+        session_percent,
         read_seconds_ago: 40,
         last_minute: nothing,
         ceilings: nothing,
@@ -295,14 +295,15 @@ function sample_logins(hired) {
             failover: true,
             order: ["claude", "claude/second", "codex", "codex/work"],
             switch_at: 90,
+            session_switch_at: 95,
         },
         "/budget": {
             room: "plenty",
             allowances: [
-                allowance("claude", [], 96, "spent"),
-                allowance("claude/second", [ada, kai, wren], 38, "plenty"),
-                allowance("codex", [tor], 64, "plenty"),
-                allowance("codex/work", [], 9, "plenty"),
+                allowance("claude", [], 96, "spent", 100),
+                allowance("claude/second", [ada, kai, wren], 38, "plenty", 71),
+                allowance("codex", [tor], 64, "plenty", 88),
+                allowance("codex/work", [], 9, "plenty", 4),
             ],
         },
     };
