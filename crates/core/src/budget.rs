@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// What an engine says about the account's quota.
 ///
@@ -6,7 +6,7 @@ use serde::Serialize;
 /// count for itself: the quota belongs to the account, and every engine on the
 /// machine spends from it — including the ones nobody here started. So it is
 /// read rather than tallied, from the one place that knows.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Usage {
     /// Percent of this session's allowance spent.
     pub session: f32,
@@ -196,6 +196,19 @@ pub fn read_usage(output: &str) -> Option<Usage> {
 
 const STATUS_LINES: usize = 12;
 
+/// How long a reading that has not moved goes before it is written down again,
+/// so the time it was last seen is still near enough to true after a restart.
+pub const WRITE_AGAIN_AFTER: u64 = 60;
+
+/// Whether a new reading replaces the one held: it says something new, or the
+/// one held has gone long enough unwritten that its time is drifting.
+pub fn worth_keeping(held: Option<(Usage, u64)>, usage: Usage, now: u64) -> bool {
+    match held {
+        None => true,
+        Some((before, at)) => before != usage || now.saturating_sub(at) >= WRITE_AGAIN_AFTER,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,5 +294,16 @@ mod tests {
         assert!(Usage { session: 0.0, weekly: 80.0 }.room() == Room::Tight);
         assert!(Usage { session: 0.0, weekly: 91.9 }.room() == Room::Tight);
         assert!(Usage { session: 0.0, weekly: 92.0 }.room() == Room::Spent);
+    }
+
+    #[test]
+    fn a_reading_is_written_when_it_moves_or_once_a_minute() {
+        let read = Usage { session: 32.0, weekly: 90.0 };
+        let moved = Usage { session: 33.0, weekly: 90.0 };
+
+        assert!(worth_keeping(None, read, 1_000), "the first reading after a start is kept");
+        assert!(worth_keeping(Some((read, 1_000)), moved, 1_001));
+        assert!(!worth_keeping(Some((read, 1_000)), read, 1_000 + WRITE_AGAIN_AFTER - 1));
+        assert!(worth_keeping(Some((read, 1_000)), read, 1_000 + WRITE_AGAIN_AFTER));
     }
 }

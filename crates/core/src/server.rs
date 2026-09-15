@@ -250,7 +250,7 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
             &data_dir, "settings",
         ))),
         permits: Arc::new(crate::permits::Permits::new(data_dir.clone())),
-        quota: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
+        quota: Arc::new(parking_lot::Mutex::new(crate::db::load_state(&data_dir, "quota"))),
         spending: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
         ceilings: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
         ui_commands: Arc::new(parking_lot::Mutex::new(Vec::new())),
@@ -1280,8 +1280,15 @@ fn spawn_supervisor(state: AppState) {
                 if let Some(usage) = usage {
                     // Attributed to the allowance this agent spends from, not
                     // to a single global number: two subscriptions are two
-                    // weeks and neither says anything about the other.
-                    state.quota.lock().insert(identity_of(&agent), (usage, now));
+                    // weeks and neither says anything about the other. Written
+                    // down as well, so a restart does not blank every reading
+                    // until each pane happens to draw its status line again.
+                    let identity = identity_of(&agent);
+                    let mut quota = state.quota.lock();
+                    if crate::budget::worth_keeping(quota.get(&identity).copied(), usage, now) {
+                        quota.insert(identity, (usage, now));
+                        crate::db::save_state(&state.data_dir, "quota", &*quota);
+                    }
                 }
 
                 let limit = crate::context::read_rate_limit(&tail);
