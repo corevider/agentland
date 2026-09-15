@@ -101,6 +101,8 @@ struct AppState {
     memories: Arc<MemoryStore>,
     mail: Arc<Mailbox>,
     routines: Arc<Routines>,
+    /// Agents stopped at a usage limit, and when each is told to carry on.
+    limits: Arc<crate::limits::Limits>,
     gateway: Arc<Gateway>,
     approvals: Arc<Approvals>,
     tokens: Arc<TokenStore>,
@@ -223,6 +225,7 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
         memories: Arc::new(MemoryStore::new(vault.clone(), data_dir.clone())),
         mail: Arc::new(Mailbox::new(data_dir.clone())),
         routines: Arc::new(Routines::new(data_dir.clone())),
+        limits: Arc::new(crate::limits::Limits::new(data_dir.clone())),
         gateway: Arc::new(Gateway::new(data_dir.clone())),
         approvals: Arc::new(Approvals::new(data_dir.clone())),
         tokens: Arc::new(TokenStore::new(token_for_store, data_dir.clone())),
@@ -1005,10 +1008,20 @@ fn spawn_supervisor(state: AppState) {
             interval.tick().await;
             let now = now_secs();
             tracing::debug!(watches = state.supervisor.working().len(), "supervisor tick");
+            carry_on_after_limits(&state, now).await;
 
             for watch in state.supervisor.working() {
                 let previous = last_frames.get(&watch.session_id).cloned().unwrap_or_default();
                 let seen = look_at(&state, &watch, &previous, now);
+
+                // A pane stopped at its usage limit is at rest, and at rest is
+                // what finished looks like: the step would be settled and its
+                // card sent on with the work half done. It is neither judged
+                // nor sent the brief again until it is working once more.
+                if state.limits.is_held(&watch.agent_id) {
+                    last_frames.insert(watch.session_id.clone(), seen.tail);
+                    continue;
+                }
 
                 let landed = match seen.transcript_says {
                     Some(told) => told,
@@ -1168,7 +1181,9 @@ fn spawn_supervisor(state: AppState) {
                     .iter()
                     .any(|other| other.session_id == watch.session_id);
 
-                if !should_reap(&watch, &seen, &state.supervisor.rules, busy_with_new_work, now) {
+                if state.limits.is_held(&watch.agent_id)
+                    || !should_reap(&watch, &seen, &state.supervisor.rules, busy_with_new_work, now)
+                {
                     continue;
                 }
 
@@ -1277,6 +1292,7 @@ fn spawn_supervisor(state: AppState) {
                     tracing::debug!(agent = %agent.id, "the pane changed what the agent is doing");
                 }
 
+                watch_the_limit(&state, &agent, &tail, working, now);
                 // Said once, when it starts. A throttled pane redraws its
                 // counter every second and a notice per tick would bury the
                 // one thing worth reading.
@@ -2294,6 +2310,185 @@ fn note(state: &AppState, kind: &str, actor: &str, subject: &str, detail: &str) 
     state.journal.write(kind, actor, subject, detail, now_secs());
 }
 
+/// A moment said the way a person reads a clock: the time alone when it is
+/// today, and the day with it when it is not.
+fn local_clock(at: u64, now: u64) -> String {
+    use chrono::TimeZone;
+
+    let (Some(moment), Some(today)) = (
+        chrono::Local.timestamp_opt(at as i64, 0).single(),
+        chrono::Local.timestamp_opt(now as i64, 0).single(),
+    ) else {
+        return "later".to_owned();
+    };
+
+    if moment.date_naive() == today.date_naive() {
+        moment.format("%H:%M").to_string()
+    } else {
+        moment.format("%a %d %b %H:%M").to_string()
+    }
+}
+
+/// Hold an agent whose pane says it ran into a usage limit, and let it go the
+/// moment it is working again — whether it was told to carry on or somebody
+/// got to it first.
+fn watch_the_limit(state: &AppState, agent: &Agent, tail: &str, working: bool, now: u64) {
+    if working {
+        if let Some(hold) = state.limits.release(&agent.id, now) {
+            let text = match hold.told_at {
+                Some(_) => format!("{} carried on after its {} reset", agent.name, hold.window.in_words()),
+                None => format!(
+                    "{} is working again — somebody got to it before its {} reset",
+                    agent.name,
+                    hold.window.in_words()
+                ),
+            };
+
+            tracing::info!(agent = %agent.id, "off its usage limit");
+            note(state, "engine.limit_lifted", "the supervisor", &agent.id, &text);
+            state.notices.push(
+                crate::notices::NewNotice {
+                    kind: crate::notices::Kind::Word,
+                    text,
+                    repository_id: Some(agent.repository_id.clone()),
+                    agent_id: Some(agent.id.clone()),
+                    opens: Some(format!("agent:{}", agent.id)),
+                    ..Default::default()
+                },
+                now,
+            );
+        }
+        return;
+    }
+
+    let Some(limit) = crate::limits::read_limit(tail, &chrono::Local::now()) else {
+        return;
+    };
+
+    let (hold, again) = match state.limits.notice(&agent.id, &identity_of(agent), &limit, now) {
+        crate::limits::Noticed::New(hold) => (hold, false),
+        crate::limits::Noticed::Again(hold) => (hold, true),
+        crate::limits::Noticed::Same => return,
+    };
+
+    let when = local_clock(hold.resets_at, now);
+    let text = match (hold.stated, again) {
+        (true, false) => format!(
+            "{} hit its {} — it will be told to carry on at {when}",
+            agent.name,
+            hold.window.in_words()
+        ),
+        (true, true) => format!(
+            "{} was stopped again at its {} — it will be told to carry on at {when}",
+            agent.name,
+            hold.window.in_words()
+        ),
+        (false, _) => format!(
+            "{} hit its {} and the engine did not say until when — it will be asked again at {when}",
+            agent.name,
+            hold.window.in_words()
+        ),
+    };
+
+    tracing::warn!(agent = %agent.id, resets_at = hold.resets_at, "an agent is stopped at its usage limit");
+    note(state, "engine.limit_hit", "the supervisor", &agent.id, &limit.said);
+    state.notices.push(
+        crate::notices::NewNotice {
+            kind: crate::notices::Kind::Trouble,
+            text,
+            repository_id: Some(agent.repository_id.clone()),
+            agent_id: Some(agent.id.clone()),
+            opens: Some(format!("agent:{}", agent.id)),
+            ..Default::default()
+        },
+        now,
+    );
+}
+
+/// Tell every agent whose usage limit has reset to carry on.
+///
+/// A live pane at rest is typed into, the way a person would have done it. A
+/// pane that died while it waited is resumed with the same words, so the
+/// conversation comes back and is told what to do in one step. A pane that
+/// is asking a person something is left to the person, and one that has been
+/// told as many times as is worth telling is handed to the person too.
+async fn carry_on_after_limits(state: &AppState, now: u64) {
+    for hold in state.limits.due(now) {
+        let Some(agent) = state.crew.list().into_iter().find(|agent| agent.id == hold.agent_id) else {
+            state.limits.forget(&hold.agent_id);
+            continue;
+        };
+
+        if hold.attempts >= crate::limits::MOST_ATTEMPTS {
+            state.limits.release(&agent.id, now);
+            let text = format!(
+                "{} is still stopped at its {} after {} tries — it needs a word from you",
+                agent.name,
+                hold.window.in_words(),
+                hold.attempts
+            );
+            note(state, "engine.limit_gave_up", "the supervisor", &agent.id, &text);
+            state.notices.push(
+                crate::notices::NewNotice {
+                    kind: crate::notices::Kind::Trouble,
+                    text,
+                    repository_id: Some(agent.repository_id.clone()),
+                    agent_id: Some(agent.id.clone()),
+                    opens: Some(format!("agent:{}", agent.id)),
+                    ..Default::default()
+                },
+                now,
+            );
+            continue;
+        }
+
+        let live = agent
+            .session_id
+            .as_ref()
+            .filter(|id| state.manager.live(id).is_some())
+            .cloned();
+
+        match live {
+            Some(session_id) => {
+                let tail = state
+                    .manager
+                    .read_log(&session_id, 8 * 1024)
+                    .map(|raw| strip_ansi(&raw))
+                    .unwrap_or_default();
+
+                if crate::supervisor::turn_running(&tail) || crate::supervisor::asking_the_human(&tail) {
+                    continue;
+                }
+
+                state.limits.told(&agent.id, now);
+                note(state, "engine.limit_carry_on", "the supervisor", &agent.id, crate::limits::CARRY_ON);
+                tracing::info!(agent = %agent.id, "told to carry on after its usage limit");
+
+                let state = state.clone();
+                tokio::spawn(async move {
+                    if !say_it(&state, &session_id, crate::limits::CARRY_ON).await {
+                        tracing::warn!(session = %session_id, "the words to carry on did not land; they are said again later");
+                    }
+                });
+            }
+            None => {
+                let Ok(sits) = where_it_sits(state, &agent) else {
+                    continue;
+                };
+
+                state.limits.told(&agent.id, now);
+                match state.crew.start(&agent.id, &sits, true, Some(crate::limits::CARRY_ON)) {
+                    Ok(_) => {
+                        tracing::info!(agent = %agent.id, "resumed after its usage limit");
+                        note(state, "engine.limit_carry_on", "the supervisor", &agent.id, "resumed with the words to carry on");
+                    }
+                    Err(error) => tracing::warn!(agent = %agent.id, %error, "cannot resume after the usage limit"),
+                }
+            }
+        }
+    }
+}
+
 /// Which allowance this agent spends from.
 fn identity_of(agent: &Agent) -> String {
     crate::budget::identity_of(&agent.engine_id, agent.account.as_deref())
@@ -2315,6 +2510,13 @@ fn ceilings_for(state: &AppState, identity: &str) -> crate::meter::Ceilings {
 /// that account has spoken yet is an app that never starts, and the first pane
 /// to open answers the question within a tick.
 fn room_for(state: &AppState, identity: &str) -> crate::budget::Room {
+    // An engine that has said the login is out is the plainest reading there
+    // is. Starting anything else on it until the reset only earns the same
+    // line in another pane.
+    if state.limits.spent(identity, now_secs()) {
+        return crate::budget::Room::Spent;
+    }
+
     let week = state
         .quota
         .lock()
@@ -4596,6 +4798,21 @@ fn presence_of(state: &AppState, agent: &Agent, now: u64) -> AgentPresence {
                 .map(|raw| strip_ansi(&raw))
                 .unwrap_or_default();
 
+            // Stopped at a usage limit reads as an agent at rest, which is
+            // what finished looks like. It is waiting on a clock, not a person.
+            if let Some(hold) = state.limits.held(&agent.id) {
+                return AgentPresence {
+                    agent: agent.clone(),
+                    presence: "waiting",
+                    since: silence,
+                    reason: format!(
+                        "stopped at its {} — carries on at {}",
+                        hold.window.in_words(),
+                        local_clock(hold.resets_at, now)
+                    ),
+                };
+            }
+
             // Being throttled comes before everything the pane looks like it is
             // doing: a retry counter redraws exactly like a turn, so this is
             // the one state that would otherwise be reported as work.
@@ -5501,6 +5718,7 @@ async fn dismiss_agent(
         .unwrap_or_default();
 
     state.crew.dismiss(&id)?;
+    state.limits.forget(&id);
     state.skills.forget_agent(&id);
 
     // Everything else the app decides is on the record; three agents left and
