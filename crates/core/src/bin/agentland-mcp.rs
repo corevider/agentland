@@ -42,6 +42,7 @@ impl Core {
         let url = format!("{}{path}", self.base);
         let mut request = match method {
             "POST" => self.client.post(&url),
+            "PATCH" => self.client.patch(&url),
             "DELETE" => self.client.delete(&url),
             _ => self.client.get(&url),
         }
@@ -64,6 +65,18 @@ impl Core {
         }
 
         serde_json::from_str(&text).map_err(|error| error.to_string())
+    }
+}
+
+/// A routine's schedule as the core takes it. An engine sometimes hands an
+/// object argument over as the JSON text of one; that is read rather than
+/// refused, because the agent meant the same thing either way.
+fn schedule_in(given: Option<&Value>) -> Result<Value, String> {
+    match given {
+        None | Some(Value::Null) => Ok(Value::Null),
+        Some(Value::String(written)) => serde_json::from_str(written)
+            .map_err(|error| format!("schedule is not a schedule object: {error}")),
+        Some(value) => Ok(value.clone()),
     }
 }
 
@@ -401,6 +414,71 @@ fn tools() -> Value {
             }
         },
         {
+            "name": "routine_list",
+            "description": "Every routine: its schedule, where its brief goes, whether it is on, when it runs next (next_run, unix seconds) and its last twenty runs. Read this before proposing one, so the crew does not end up with two sweeps doing the same thing.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "routine_templates",
+            "description": "The routines a crew most often wants — morning triage, a pull request sweep, a nightly dependency check, a weekly recap, a vault tidy, a flaky test hunt — each with a schedule, a delivery and a brief ready to adapt, plus the {variables} a brief may carry. Start from one of these rather than from nothing.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "routine_propose",
+            "description": "Propose a routine: the same brief handed to one agent on a schedule. It is created PAUSED and a person is asked to turn it on — a routine spends the crew's allowance on a timer, and only a person decides that. Pick the schedule by what the work is: set times (daily, with weekdays) for anything a person expects at a moment, like a morning triage at 09:00 on weekdays; an interval with a window for a check that should keep happening during working hours. Pick the delivery by who does it: card for work that produces a change and should be reviewed; pane for a commander or chief whose job is to look around and decide. The brief may carry {date} {time} {weekday} {routine} {agent} {last_run} {last_result}.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "agent_id": { "type": "string", "description": "who runs it, from crew_list" },
+                    "brief": { "type": "string", "description": "what to do each time, written to be read cold" },
+                    "schedule": {
+                        "type": "object",
+                        "description": "either {\"kind\":\"daily\",\"times\":[\"09:00\"],\"days\":[\"mon\",\"tue\",\"wed\",\"thu\",\"fri\"]} or {\"kind\":\"every\",\"minutes\":240,\"from\":\"09:00\",\"to\":\"19:00\",\"days\":[]}. Times are 24-hour HH:MM on this machine's clock; no days means every day; from and to are both given or neither."
+                    },
+                    "delivery": { "type": "string", "description": "card (default) or pane" },
+                    "draft_only": { "type": "boolean", "description": "prepare the work and stop before anything leaves the machine" },
+                    "skip_when_tight": { "type": "boolean", "description": "leave a run out when the agent's week is tight; true by default" },
+                    "one_at_a_time": { "type": "boolean", "description": "leave a run out while the last run's card is still open; true by default" },
+                    "pause_after_failures": { "type": "integer", "description": "failures in a row before it pauses itself; 2 by default" }
+                },
+                "required": ["name", "agent_id", "brief", "schedule"]
+            }
+        },
+        {
+            "name": "routine_update",
+            "description": "Change a routine: only the fields given are touched. A routine that was on goes back to paused when you change more than its switch, and a person is asked again — a new brief or a tighter schedule is a new decision about what the crew spends. You may pause one (enabled false); only a person turns one on.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" },
+                    "name": { "type": "string" },
+                    "agent_id": { "type": "string" },
+                    "brief": { "type": "string" },
+                    "schedule": { "type": "object", "description": "the same shape routine_propose takes" },
+                    "delivery": { "type": "string" },
+                    "draft_only": { "type": "boolean" },
+                    "skip_when_tight": { "type": "boolean" },
+                    "one_at_a_time": { "type": "boolean" },
+                    "pause_after_failures": { "type": "integer" },
+                    "enabled": { "type": "boolean", "description": "false to pause it" }
+                },
+                "required": ["id"]
+            }
+        },
+        {
+            "name": "routine_run",
+            "description": "Run a routine that is on right now, whatever its schedule says. Refused for a paused one. It still leaves the run out when the week is tight or the last card is open, unless force is true.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" },
+                    "force": { "type": "boolean" }
+                },
+                "required": ["id"]
+            }
+        },
+        {
             "name": "integration_list",
             "description": "List connected services. Their credentials stay on the app's side and never reach you.",
             "inputSchema": { "type": "object", "properties": {} }
@@ -667,6 +745,59 @@ fn call_tool(core: &Core, name: &str, arguments: &Value) -> Result<Value, String
             core.call(
                 "GET",
                 &format!("/notes?q={}&limit={limit}", urlencode(&query)),
+                None,
+            )
+        }
+        "routine_list" => core.call("GET", "/routines", None),
+        "routine_templates" => core.call("GET", "/routines/templates", None),
+        "routine_propose" => core.call(
+            "POST",
+            "/routines",
+            Some(json!({
+                "name": text("name")?,
+                "agent_id": text("agent_id")?,
+                "brief": text("brief")?,
+                "schedule": schedule_in(arguments.get("schedule"))?,
+                "delivery": arguments.get("delivery").and_then(Value::as_str).unwrap_or("card"),
+                "draft_only": arguments.get("draft_only").and_then(Value::as_bool).unwrap_or(false),
+                "skip_when_tight": arguments.get("skip_when_tight").and_then(Value::as_bool),
+                "one_at_a_time": arguments.get("one_at_a_time").and_then(Value::as_bool),
+                "pause_after_failures": arguments.get("pause_after_failures").and_then(Value::as_u64),
+                "created_by": std::env::var("AGENTLAND_AGENT").ok(),
+            })),
+        ),
+        "routine_update" => {
+            let id = text("id")?;
+            let mut change = serde_json::Map::new();
+            for key in [
+                "name",
+                "agent_id",
+                "brief",
+                "delivery",
+                "draft_only",
+                "skip_when_tight",
+                "one_at_a_time",
+                "pause_after_failures",
+                "enabled",
+            ] {
+                if let Some(value) = arguments.get(key).filter(|value| !value.is_null()) {
+                    change.insert(key.to_owned(), value.clone());
+                }
+            }
+            if arguments.get("schedule").is_some_and(|value| !value.is_null()) {
+                change.insert("schedule".to_owned(), schedule_in(arguments.get("schedule"))?);
+            }
+            if let Ok(by) = std::env::var("AGENTLAND_AGENT") {
+                change.insert("by".to_owned(), Value::String(by));
+            }
+
+            core.call("PATCH", &format!("/routines/{}", urlencode(&id)), Some(Value::Object(change)))
+        }
+        "routine_run" => {
+            let force = arguments.get("force").and_then(Value::as_bool).unwrap_or(false);
+            core.call(
+                "POST",
+                &format!("/routines/{}/run?force={force}", urlencode(&text("id")?)),
                 None,
             )
         }

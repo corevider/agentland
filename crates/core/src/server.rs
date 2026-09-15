@@ -9,7 +9,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post};
 use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
@@ -28,7 +28,7 @@ use crate::gateway::{CallRequest, ConnectRequest, Gateway, Integration};
 use crate::mail::{MailPolicy, Mailbox, Message as MailMessage, SendMessage};
 use crate::memory::{Memory, MemoryStore, ProposeMemory, Recalled};
 use crate::plans::{DraftPlan, Plan, Plans, StepState};
-use crate::routines::{CreateRoutine, Routine, Routines};
+use crate::routines::{CreateRoutine, Delivery, Outcome, Routine, Routines, UpdateRoutine};
 use crate::metrics::{MetricsStore, Sample};
 use crate::repo::{Commit, PullRequest, RepoRegistry, Repository, Review, Worktree, WorktreeStatus};
 use crate::services::{Service, ServiceRegistry};
@@ -371,8 +371,10 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
         .route("/mail", get(list_mail).post(send_mail))
         .route("/mail/policy", get(mail_policy).post(set_mail_policy))
         .route("/routines", get(list_routines).post(create_routine))
-        .route("/routines/{id}", delete(delete_routine))
+        .route("/routines/templates", get(routine_templates))
+        .route("/routines/{id}", delete(delete_routine).patch(update_routine))
         .route("/routines/{id}/enabled", post(set_routine_enabled))
+        .route("/routines/{id}/run", post(run_routine_now))
         .route("/integrations", get(list_integrations).post(connect_integration))
         .route("/integrations/{id}", delete(disconnect_integration))
         .route("/integrations/call", post(call_integration))
@@ -2034,55 +2036,212 @@ fn spawn_routine_ticker(state: AppState) {
             let now = now_secs();
 
             for routine in state.routines.due(now) {
-                let agent = state
-                    .crew
-                    .list()
-                    .into_iter()
-                    .find(|entry| entry.id == routine.agent_id);
-
-                let outcome = match agent {
-                    None => Err(format!("no agent called {}", routine.agent_id)),
-                    Some(agent) => {
-                        let card = state.board.create(CreateTask {
-                            title: routine.name.clone(),
-                            body: routine.brief.clone(),
-                            repository_id: agent.repository_id.clone(),
-                            // A routine runs where its agent lives.
-                            worktree: Some(agent.worktree.clone()),
-                            issue: None,
-                        });
-
-                        match card {
-                            Err(error) => Err(error.to_string()),
-                            Ok(task) => {
-                                let mut base = routine.brief.clone();
-                                if routine.draft_only {
-                                    base.push_str(
-                                        "\n\nPrepare the work and stop before anything leaves this machine.",
-                                    );
-                                }
-
-                                match start_agent_with_brief(&state, &agent, &base).await {
-                                    Ok(()) => {
-                                        let _ = state.board.record_assignment(
-                                            &task.id,
-                                            &agent.id,
-                                            &agent.worktree,
-                                            &agent.worktree,
-                                        );
-                                        Ok(format!("card {} handed to {}", task.id, agent.name))
-                                    }
-                                    Err(error) => Err(error.0.to_string()),
-                                }
-                            }
-                        }
-                    }
-                };
-
-                state.routines.record(&routine.id, now, outcome);
+                let attempt = run_routine(&state, &routine, now, false).await;
+                settle_a_run(&state, &routine, now, attempt);
             }
         }
     });
+}
+
+/// Whether an agent's engine is holding it at a usage limit until it resets.
+///
+/// A brief typed into an engine that is waiting out its limit is a brief it
+/// will refuse, so the run waits instead, the same as for a busy pane. The
+/// limits are read by the supervisor; this is the one place the routine
+/// ticker asks.
+fn held_by_a_limit(state: &AppState, agent: &Agent) -> bool {
+    state.limits.is_held(&agent.id)
+}
+
+/// Whether the agent's live pane is in the middle of something.
+///
+/// Asked before the brief is composed rather than left to the hand-over:
+/// composing a brief empties the agent's inbox into it, and a brief that is
+/// then not delivered would take that mail with it.
+fn agent_is_mid_turn(state: &AppState, agent: &Agent) -> bool {
+    let Some(session_id) = agent
+        .session_id
+        .as_ref()
+        .filter(|id| state.manager.live(id).is_some())
+    else {
+        return false;
+    };
+
+    let tail = state
+        .manager
+        .read_log(session_id, 8 * 1024)
+        .map(|raw| strip_ansi(&raw))
+        .unwrap_or_default();
+
+    crate::supervisor::turn_running(&tail) || crate::supervisor::asking_the_human(&tail)
+}
+
+/// What trying to run a routine came to.
+enum Attempt {
+    Done(Outcome),
+    /// Not now, and not a failure: tried again on the next tick.
+    Wait(String),
+}
+
+const DRAFT_ONLY: &str = "\n\nPrepare the work and stop before anything leaves this machine.";
+
+/// Run one routine: decide whether it should run at all, then hand the brief
+/// over the way every other piece of work is handed over.
+///
+/// It used to start the agent's pane unconditionally, and a pane that was
+/// already running refused with "already running" — so a routine aimed at a
+/// commander failed every time the commander happened to be up, and two of
+/// those paused it. A pane at rest is now told where it stands, a pane mid-turn
+/// is waited for, and only an agent with no pane gets a new one.
+async fn run_routine(state: &AppState, routine: &Routine, now: u64, force: bool) -> Attempt {
+    let Some(agent) = state
+        .crew
+        .list()
+        .into_iter()
+        .find(|entry| entry.id == routine.agent_id)
+    else {
+        return Attempt::Done(Outcome::Failed(format!(
+            "no agent called {} — that agent is gone",
+            routine.agent_id
+        )));
+    };
+
+    if held_by_a_limit(state, &agent) {
+        return Attempt::Wait(format!("{} is waiting out a usage limit", agent.name));
+    }
+
+    if !force {
+        let identity = identity_of(&agent);
+        let room = room_for(state, &identity);
+        if routine.skip_when_tight && !room.may_start_work() {
+            return Attempt::Done(Outcome::Skipped(format!(
+                "skipped — on {identity}, {}",
+                room.in_a_line()
+            )));
+        }
+
+        if routine.one_at_a_time {
+            if let Some(card) = routine.last_card.as_deref() {
+                if state.board.get(card).is_some_and(|task| task.column != Column::Done) {
+                    return Attempt::Done(Outcome::Skipped(format!(
+                        "skipped — card {card} from the last run is still open"
+                    )));
+                }
+            }
+        }
+    }
+
+    if agent_is_mid_turn(state, &agent) {
+        return Attempt::Wait(format!("{} is mid-turn", agent.name));
+    }
+
+    let path = match where_it_sits(state, &agent) {
+        Ok(path) => path,
+        Err(error) => return Attempt::Done(Outcome::Failed(error.0.to_string())),
+    };
+
+    let mut text = crate::routines::expand(
+        &routine.brief,
+        &crate::routines::values_in(routine, &agent.name, now, &chrono::Local),
+    );
+    if routine.draft_only {
+        text.push_str(DRAFT_ONLY);
+    }
+
+    match routine.delivery {
+        Delivery::Pane => {
+            let brief = compose_brief(state, &agent, &text).await;
+            match hand_the_work_over(state, &agent, &path, &brief).await {
+                Ok(HandOver::Typed) => Attempt::Done(Outcome::Ran {
+                    detail: format!("said to {} in its pane", agent.name),
+                    card: None,
+                }),
+                Ok(HandOver::Started) => Attempt::Done(Outcome::Ran {
+                    detail: format!("started {}'s pane with it", agent.name),
+                    card: None,
+                }),
+                Ok(HandOver::Busy) => Attempt::Wait(format!("{} is mid-turn", agent.name)),
+                Err(error) => Attempt::Done(Outcome::Failed(error.0.to_string())),
+            }
+        }
+        Delivery::Card => {
+            let task = match state.board.create(CreateTask {
+                title: routine.name.clone(),
+                body: text,
+                repository_id: agent.repository_id.clone(),
+                // A routine runs where its agent lives.
+                worktree: Some(agent.worktree.clone()),
+                issue: None,
+            }) {
+                Ok(task) => task,
+                Err(error) => return Attempt::Done(Outcome::Failed(error.to_string())),
+            };
+
+            let brief = compose_brief(state, &agent, &task.brief()).await;
+            match hand_the_work_over(state, &agent, &path, &brief).await {
+                Ok(HandOver::Busy) => Attempt::Done(Outcome::Ran {
+                    detail: format!(
+                        "card {} left in the backlog — {} turned busy",
+                        task.id, agent.name
+                    ),
+                    card: Some(task.id),
+                }),
+                Ok(_) => {
+                    let _ = state.board.record_assignment(
+                        &task.id,
+                        &agent.id,
+                        &agent.worktree,
+                        &agent.worktree,
+                    );
+                    Attempt::Done(Outcome::Ran {
+                        detail: format!("card {} handed to {}", task.id, agent.name),
+                        card: Some(task.id),
+                    })
+                }
+                Err(error) => Attempt::Done(Outcome::Failed(format!(
+                    "card {} was made but not handed over: {}",
+                    task.id, error.0
+                ))),
+            }
+        }
+    }
+}
+
+/// Write down what a run came to, and say so where a person looks when it
+/// changes something they would want to know: a routine that paused itself.
+fn settle_a_run(state: &AppState, routine: &Routine, now: u64, attempt: Attempt) -> Option<Routine> {
+    let outcome = match attempt {
+        Attempt::Wait(why) => return state.routines.defer(&routine.id, now, &why),
+        Attempt::Done(outcome) => outcome,
+    };
+
+    let (kind, detail) = match &outcome {
+        Outcome::Ran { detail, .. } => ("routine.ran", detail.clone()),
+        Outcome::Failed(detail) => ("routine.failed", detail.clone()),
+        Outcome::Skipped(detail) => ("routine.skipped", detail.clone()),
+    };
+    note(state, kind, "routines", &routine.id, &detail);
+
+    let updated = state.routines.record(&routine.id, now, outcome)?;
+
+    if routine.enabled && !updated.enabled {
+        state.notices.push(
+            crate::notices::NewNotice {
+                kind: crate::notices::Kind::Trouble,
+                text: format!(
+                    "the routine \"{}\" paused itself: {}",
+                    updated.name,
+                    updated.last_result.clone().unwrap_or_default()
+                ),
+                agent_id: Some(updated.agent_id.clone()),
+                opens: Some("routines".to_owned()),
+                ..Default::default()
+            },
+            now,
+        );
+    }
+
+    Some(updated)
 }
 
 fn is_public_asset(path: &str) -> bool {
@@ -4657,14 +4816,95 @@ async fn set_mail_policy(
 }
 
 async fn list_routines(State(state): State<AppState>) -> Json<Vec<Routine>> {
-    Json(state.routines.list())
+    Json(state.routines.list(now_secs()))
+}
+
+/// The routines worth starting from, and the words a brief may carry.
+async fn routine_templates() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "templates": crate::routines::templates(),
+        "variables": crate::routines::VARIABLES
+            .iter()
+            .map(|(name, says)| serde_json::json!({ "name": name, "says": says }))
+            .collect::<Vec<_>>(),
+    }))
+}
+
+fn asked_by_an_agent(scope: &Option<Extension<TokenScope>>) -> bool {
+    matches!(scope, Some(Extension(TokenScope::Agent)))
+}
+
+/// Refused to an agent, whatever it says about itself: a routine spends tokens
+/// on a timer, and only a person decides that the crew spends them.
+const ONLY_A_PERSON_TURNS_IT_ON: &str =
+    "a routine an agent proposes stays paused until a person turns it on in Routines";
+
+/// Put a routine an agent touched in front of the person who has to say yes.
+fn ask_about_a_routine(state: &AppState, routine: &Routine, by: Option<&str>, did: &str) {
+    let who = by
+        .and_then(|id| state.crew.list().into_iter().find(|agent| agent.id == id))
+        .map(|agent| agent.name)
+        .or_else(|| by.map(str::to_owned))
+        .unwrap_or_else(|| "an agent".to_owned());
+
+    state.notices.push(
+        crate::notices::NewNotice {
+            kind: crate::notices::Kind::Waiting,
+            text: format!("{who} {did}: {} — turn it on in Routines", routine.name),
+            agent_id: by.map(str::to_owned),
+            opens: Some("routines".to_owned()),
+            ..Default::default()
+        },
+        now_secs(),
+    );
 }
 
 async fn create_routine(
     State(state): State<AppState>,
+    scope: Option<Extension<TokenScope>>,
     Json(request): Json<CreateRoutine>,
 ) -> Result<Json<Routine>, ApiError> {
-    Ok(Json(state.routines.create(request)?))
+    let from_an_agent = asked_by_an_agent(&scope);
+    if from_an_agent && request.enabled == Some(true) {
+        return Err(anyhow::anyhow!(ONLY_A_PERSON_TURNS_IT_ON).into());
+    }
+
+    let routine = state.routines.create(request, now_secs(), from_an_agent)?;
+    if from_an_agent {
+        ask_about_a_routine(&state, &routine, routine.created_by.as_deref(), "proposed a routine");
+    }
+
+    Ok(Json(routine))
+}
+
+/// Change a routine. An agent may reshape one, but a routine it changed goes
+/// back to waiting on a person: a new brief or a tighter schedule is a new
+/// decision about what the crew spends, and it was a person who made the old one.
+async fn update_routine(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    scope: Option<Extension<TokenScope>>,
+    Json(mut change): Json<UpdateRoutine>,
+) -> Result<Json<Routine>, ApiError> {
+    let from_an_agent = asked_by_an_agent(&scope);
+    if from_an_agent && change.enabled == Some(true) {
+        return Err(anyhow::anyhow!(ONLY_A_PERSON_TURNS_IT_ON).into());
+    }
+
+    let pausing = from_an_agent
+        && change.changes_more_than_the_switch()
+        && state.routines.get(&id).is_some_and(|held| held.enabled);
+    if pausing {
+        change.enabled = Some(false);
+    }
+
+    let by = change.by.clone();
+    let routine = state.routines.update(&id, change, now_secs())?;
+    if pausing {
+        ask_about_a_routine(&state, &routine, by.as_deref(), "changed a routine, so it is paused");
+    }
+
+    Ok(Json(routine))
 }
 
 #[derive(Deserialize)]
@@ -4675,15 +4915,66 @@ struct EnabledBody {
 async fn set_routine_enabled(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    scope: Option<Extension<TokenScope>>,
     Json(body): Json<EnabledBody>,
 ) -> Result<Json<Routine>, ApiError> {
+    if asked_by_an_agent(&scope) && body.enabled {
+        return Err(anyhow::anyhow!(ONLY_A_PERSON_TURNS_IT_ON).into());
+    }
+
     Ok(Json(state.routines.set_enabled(&id, body.enabled)?))
 }
 
+#[derive(Deserialize)]
+struct RunQuery {
+    /// Run even when the week is tight or the last run's card is still open.
+    #[serde(default)]
+    force: bool,
+}
+
+/// Run a routine now, whatever its schedule says. A pane mid-turn is not
+/// waited for here: somebody pressed a button and is owed an answer.
+async fn run_routine_now(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    scope: Option<Extension<TokenScope>>,
+    Query(query): Query<RunQuery>,
+) -> Result<Json<Routine>, ApiError> {
+    let routine = state
+        .routines
+        .get(&id)
+        .ok_or_else(|| anyhow::anyhow!("unknown routine: {id}"))?;
+
+    if asked_by_an_agent(&scope) && !routine.enabled {
+        return Err(anyhow::anyhow!(
+            "{} is paused — a person turns it on before it runs",
+            routine.name
+        )
+        .into());
+    }
+
+    let now = now_secs();
+    match run_routine(&state, &routine, now, query.force).await {
+        Attempt::Wait(why) => Err(anyhow::anyhow!("{why} — nothing was sent; run it again when it is at rest").into()),
+        attempt => settle_a_run(&state, &routine, now, attempt)
+            .map(|updated| Json(state.routines.list(now).into_iter().find(|held| held.id == updated.id).unwrap_or(updated)))
+            .ok_or_else(|| anyhow::anyhow!("unknown routine: {id}").into()),
+    }
+}
+
+/// A routine a person made is theirs to delete. An agent may clear away what
+/// the crew itself proposed.
 async fn delete_routine(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    scope: Option<Extension<TokenScope>>,
 ) -> Result<StatusCode, ApiError> {
+    if asked_by_an_agent(&scope)
+        && state.routines.get(&id).is_some_and(|held| held.created_by.is_none())
+    {
+        return Err(anyhow::anyhow!("a routine a person made is theirs to delete — pause it and say why instead").into());
+    }
+
     state.routines.delete(&id)?;
     Ok(StatusCode::NO_CONTENT)
 }
