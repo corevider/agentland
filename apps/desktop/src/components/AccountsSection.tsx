@@ -16,6 +16,7 @@ import {
     type Agent,
     type Allowance,
     type JournalEntry,
+    type RotationChange,
 } from "@/lib/core";
 import {
     hand_overs,
@@ -25,6 +26,10 @@ import {
     reorder,
     week_words,
     who_spends,
+    FIVE_HOURS,
+    five_hours_words,
+    nearness,
+    out_words,
     type LoginRow,
 } from "@/lib/logins";
 import { exactly, when } from "@/lib/when";
@@ -37,30 +42,114 @@ const ROOM_COLOUR: Record<Allowance["room"], string> = {
 };
 
 const SWITCH_AT_DEFAULT = 92;
+const SESSION_SWITCH_AT_DEFAULT = 95;
 
-/// How much of a login's week is gone, as a bar with the words beside it.
-function Week({ row, switch_at }: { row: LoginRow; switch_at: number }) {
-    const spent = row.allowance?.weekly_percent;
-    const known = spent !== undefined && spent !== null;
+/// One allowance as a bar, with the point agents are moved on at marked on it.
+function Meter({
+    percent,
+    point,
+    colour,
+    says,
+    of,
+}: {
+    percent: number | null | undefined;
+    point: number;
+    colour: Allowance["room"];
+    says: string;
+    of: string;
+}) {
+    const known = percent !== undefined && percent !== null;
 
     return (
-        <div className="flex flex-wrap items-center gap-2">
-            <span className="relative h-1.5 w-28 overflow-hidden rounded-full bg-reef/60">
+        <span className="flex items-center gap-2">
+            <span className="relative h-1.5 w-28 shrink-0 overflow-hidden rounded-full bg-reef/60">
                 {known ? (
                     <span
-                        className={`block h-full ${ROOM_COLOUR[row.allowance?.room ?? "plenty"]}`}
-                        style={{ width: `${Math.min(100, Math.max(0, spent))}%` }}
+                        className={`block h-full ${ROOM_COLOUR[colour]}`}
+                        style={{ width: `${Math.min(100, Math.max(0, percent))}%` }}
                     />
                 ) : null}
                 <span
                     className="absolute top-0 h-full w-px bg-linen/70"
-                    style={{ left: `${switch_at}%` }}
-                    title={`agents are moved on at ${switch_at}%`}
+                    style={{ left: `${point}%` }}
+                    title={`agents are moved on at ${point}% of ${of}`}
                 />
             </span>
-            <span className="font-mono text-[10px] text-shell">{week_words(row.allowance)}</span>
-            <span className="font-mono text-[10px] text-shade">· {who_spends(row.agents)}</span>
+            <span className="font-mono text-[10px] text-shell">{says}</span>
+        </span>
+    );
+}
+
+/// A login's two walls — its week, and the five hours that run out first on a
+/// busy day — and who is spending from it.
+function Allowances({
+    row,
+    week_at,
+    five_hours_at,
+    now,
+}: {
+    row: LoginRow;
+    week_at: number;
+    five_hours_at: number;
+    now: number;
+}) {
+    const five_hours_stale = (row.allowance?.read_seconds_ago ?? 0) >= FIVE_HOURS;
+    const five_hours = five_hours_stale ? null : row.allowance?.session_percent;
+    const out = out_words(row.allowance, now);
+    const out_on_five_hours = out !== null && row.allowance?.limit_window === "session";
+
+    return (
+        <div className="flex flex-col gap-0.5">
+            <div className="flex flex-wrap items-center gap-2">
+                <Meter
+                    percent={row.allowance?.weekly_percent}
+                    point={week_at}
+                    colour={row.allowance?.room === "spent" ? "spent" : nearness(row.allowance?.weekly_percent, week_at)}
+                    says={week_words(row.allowance)}
+                    of="a week"
+                />
+                <span className="font-mono text-[10px] text-shade">· {who_spends(row.agents)}</span>
+            </div>
+            <Meter
+                percent={out_on_five_hours ? 100 : five_hours}
+                point={five_hours_at}
+                colour={out_on_five_hours ? "spent" : nearness(five_hours, five_hours_at)}
+                says={five_hours_words(row.allowance)}
+                of="five hours"
+            />
+            {out ? <span className="font-mono text-[10px] text-coral">{out}</span> : null}
         </div>
+    );
+}
+
+/// A percentage a person types and the panel keeps: saved when they leave
+/// the box or press Enter, and put back as it was when it is not a number.
+function Point({ value, on_commit }: { value: number; on_commit: (percent: number) => unknown }) {
+    const [draft, set_draft] = useState("");
+
+    const commit = () => {
+        const wanted = Math.round(Number(draft));
+        set_draft("");
+        if (draft.trim() && Number.isFinite(wanted) && wanted !== value) {
+            void on_commit(wanted);
+        }
+    };
+
+    return (
+        <input
+            type="number"
+            min={50}
+            max={99}
+            className="w-14 rounded-md border border-reef bg-lagoon px-1.5 py-0.5 font-mono text-[11px]"
+            value={draft === "" ? value : draft}
+            onChange={(event) => set_draft(event.target.value)}
+            onBlur={commit}
+            onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                    commit();
+                }
+            }}
+        />
     );
 }
 
@@ -83,7 +172,6 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
     const [journal, set_journal] = useState<JournalEntry[]>([]);
     const [engine, set_engine] = useState<string>("");
     const [label, set_label] = useState("");
-    const [switch_draft, set_switch_draft] = useState<string>("");
     const [notice, set_notice] = useState<string | null>(null);
     /// The switch is a change on its way until the core answers; a second
     /// click while it is would flip it back before the first was heard.
@@ -114,11 +202,12 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
     const rows = useMemo(() => (held ? login_rows(held, allowances, crew) : []), [allowances, crew, held]);
     const handed = useMemo(() => hand_overs(journal), [journal]);
     const switch_at = held?.switch_at ?? SWITCH_AT_DEFAULT;
+    const session_switch_at = held?.session_switch_at ?? SESSION_SWITCH_AT_DEFAULT;
     const now = Math.floor(Date.now() / 1000);
 
     const say = (cause: unknown) => set_notice(cause instanceof Error ? cause.message : String(cause));
 
-    const rotate = useCallback((change: { order?: string[]; switch_at?: number }) => {
+    const rotate = useCallback((change: RotationChange) => {
         return set_account_rotation(change)
             .then((report) => {
                 set_held(report);
@@ -126,15 +215,6 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
             })
             .catch(say);
     }, []);
-
-    const commit_switch = useCallback(() => {
-        const wanted = Number(switch_draft);
-        set_switch_draft("");
-        if (!switch_draft.trim() || !Number.isFinite(wanted) || wanted === switch_at) {
-            return;
-        }
-        rotate({ switch_at: Math.round(wanted) });
-    }, [rotate, switch_at, switch_draft]);
 
     const add = useCallback(async () => {
         if (!engine || !label.trim() || adding.current) {
@@ -260,7 +340,12 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
                                                 ? `${row.account.who ?? "signed in"}${row.account.plan ? ` · ${row.account.plan}` : ""}`
                                                 : "the engine says nobody is signed in here — it is skipped until somebody is"}
                                     </span>
-                                    <Week row={row} switch_at={switch_at} />
+                                    <Allowances
+                                        row={row}
+                                        week_at={switch_at}
+                                        five_hours_at={session_switch_at}
+                                        now={now}
+                                    />
                                 </div>
                             </div>
 
@@ -343,7 +428,7 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
                         <span className="font-mono text-[11px] text-linen">Use the logins in turn</span>
                         <span className="font-mono text-[10px] text-shade">
                             A new agent starts on the first login in this order that has room. An agent
-                            whose login passes the point below, or whose engine says it is out, is moved
+                            whose login passes either point below, or whose engine says it is out, is moved
                             to the next one once its pane is at rest, resumes the same conversation, and
                             is told to carry on. Off unless you say otherwise — it spends subscriptions
                             you may not have meant to spend this week.
@@ -351,27 +436,16 @@ export function AccountsSection({ on_open_pane }: { on_open_pane?: (session_id: 
                     </span>
                 </label>
 
-                <label className="ml-5 flex flex-wrap items-center gap-1.5 font-mono text-[11px] text-shell">
+                <div className="ml-5 flex flex-wrap items-center gap-1.5 font-mono text-[11px] text-shell">
                     move an agent on at
-                    <input
-                        type="number"
-                        min={50}
-                        max={99}
-                        className="w-14 rounded-md border border-reef bg-lagoon px-1.5 py-0.5 font-mono text-[11px]"
-                        value={switch_draft === "" ? switch_at : switch_draft}
-                        onChange={(event) => set_switch_draft(event.target.value)}
-                        onBlur={commit_switch}
-                        onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                                commit_switch();
-                            }
-                        }}
-                    />
-                    % of a week
-                    <span className="text-[10px] text-shade">
-                        — the mark on each bar; earlier leaves room to finish a turn on the old login
+                    <Point value={switch_at} on_commit={(percent) => rotate({ switch_at: percent })} />
+                    % of a week, or at
+                    <Point value={session_switch_at} on_commit={(percent) => rotate({ session_switch_at: percent })} />
+                    % of its five hours
+                    <span className="basis-full text-[10px] text-shade">
+                        the marks on the bars; earlier leaves room to finish a turn on the old login
                     </span>
-                </label>
+                </div>
             </div>
 
             {handed.length > 0 ? (

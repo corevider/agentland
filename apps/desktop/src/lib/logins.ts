@@ -105,6 +105,75 @@ export function ordinal(rank: number): string {
     return `${rank}${{ 1: "st", 2: "nd", 3: "rd" }[rank % 10] ?? "th"}`;
 }
 
+/// How long a five-hour window lasts, in seconds.
+export const FIVE_HOURS = 5 * 60 * 60;
+
+/// How much of a login's five hours is gone, or why that is not known now.
+///
+/// A login is read only while a pane runs on it. One everybody has left keeps
+/// its last number, and a number older than the window it was read from says
+/// nothing — the core ignores it too, so the panel says so rather than showing
+/// a login as full that has long since come round.
+export function five_hours_words(allowance: Allowance | null): string {
+    const spent = allowance?.session_percent;
+    if (spent === undefined || spent === null) {
+        return "five hours not read yet";
+    }
+    if ((allowance?.read_seconds_ago ?? 0) >= FIVE_HOURS) {
+        return "five hours come round since it was last read";
+    }
+    return `${Math.round(spent)}% of its five hours`;
+}
+
+/// A wait said the way a person says one: "1h 12m", "2d 3h", "under a minute".
+export function wait_words(seconds: number): string {
+    if (seconds < 60) {
+        return "under a minute";
+    }
+
+    const minutes = Math.round(seconds / 60);
+    const days = Math.floor(minutes / 1440);
+    const hours = Math.floor((minutes % 1440) / 60);
+    const rest = minutes % 60;
+
+    if (days > 0) {
+        return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+    }
+    if (hours > 0) {
+        return rest > 0 ? `${hours}h ${rest}m` : `${hours}h`;
+    }
+    return `${rest}m`;
+}
+
+/// When a login its engine has said is out comes back, or null when it is
+/// not out. The time is the engine's own — "resets 3pm" — so it is a promise,
+/// where a percentage is only a reading.
+export function out_words(allowance: Allowance | null, now: number): string | null {
+    const back = allowance?.limit_back_at;
+    if (!back || back <= now) {
+        return null;
+    }
+
+    const wall =
+        allowance?.limit_window === "session"
+            ? " on its five hours"
+            : allowance?.limit_window === "weekly"
+              ? " on its week"
+              : "";
+    return `out${wall} — back in ${wait_words(back - now)}`;
+}
+
+/// A bar's colour: past the point it is moved on at, close to it, or clear.
+export function nearness(percent: number | null | undefined, point: number): "plenty" | "tight" | "spent" {
+    if (percent === undefined || percent === null) {
+        return "plenty";
+    }
+    if (percent >= point) {
+        return "spent";
+    }
+    return percent >= point - 15 ? "tight" : "plenty";
+}
+
 /// How much of the week is gone, or why that is not known yet.
 export function week_words(allowance: Allowance | null): string {
     const spent = allowance?.weekly_percent;

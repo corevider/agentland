@@ -442,6 +442,10 @@ export interface Allowance {
     weekly_percent?: number;
     session_percent?: number;
     read_seconds_ago?: number;
+    /// When a limit the engine reported on this login comes round, and which
+    /// wall it was. Absent when the login is not out.
+    limit_back_at?: number | null;
+    limit_window?: "session" | "weekly" | "unknown" | null;
     last_minute: Rate;
     ceilings: Ceilings;
     closest_to: string;
@@ -614,10 +618,18 @@ export interface AccountsReport {
     order?: string[];
     /// The share of a week, in percent, at which an agent is moved on.
     switch_at?: number;
+    /// The share of a login's five hours, in percent, at which an agent is moved on.
+    session_switch_at?: number;
+}
+
+export interface RotationChange {
+    order?: string[];
+    switch_at?: number;
+    session_switch_at?: number;
 }
 
 /// The order logins are used in, and where an agent is moved on from one.
-export function set_account_rotation(change: { order?: string[]; switch_at?: number }): Promise<AccountsReport> {
+export function set_account_rotation(change: RotationChange): Promise<AccountsReport> {
     return request<AccountsReport>("/accounts/rotation", {
         method: "POST",
         body: JSON.stringify(change),

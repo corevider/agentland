@@ -52,7 +52,7 @@ Each login says how much of its week is gone and who is spending from it, and
 with the hand-over on, an agent whose week runs out is carried to a login that
 still has one — the hand-overs are listed under the switch.
 
-![The logins panel: the machine's own Claude login with 96% of its week spent and nobody left on it, a second Claude login that Ada, Kai and Mira were handed to, two Codex logins, the hand-over switch on and the three hand-overs it made](docs/the-logins-they-hold.png)
+![The logins panel: each login's week and five hours against the points agents are moved on at; the machine's own Claude login out on its five hours and back in 1h 12m, a second Claude login that Ada, Kai and Wren were handed to, Tor moved to a second Codex login when the first's five hours ran low, and the hand-overs with their reasons](docs/the-logins-they-hold.png)
 
 These six are made by `node scripts/shots.mjs`, which stands up a core of its
 own on its own port, seeds a crew that exists nowhere else, photographs the built
@@ -2239,9 +2239,18 @@ and what changes is which folder the next pane starts in.
 The logins are put in an order, the machine's own login among them — first,
 last or anywhere between. With the switch on, a new agent starts on the first
 login in that order with room, and an agent whose login passes a point the
-person picks (92% of a week unless told otherwise), or whose engine says the
-login is out, is moved to the next one. The same point decides both ways, so a
-login just past it is never picked only to be left again on the next tick. The
+person picks, or whose engine says the login is out, is moved to the next one.
+There are two points, because a subscription has two walls: the week (92%
+unless told otherwise) and the five hours that run out first on a busy day
+(95%), so a login with most of its week left is still passed over while its
+five hours are nearly gone. The same points decide both ways, so a login just
+past one is never picked only to be left again on the next tick.
+
+A login is read only while a pane runs on it, so one everybody has left keeps
+its last number. A five-hour reading older than five hours is ignored — the
+window it was read from has come round — or a login read at 99% would never
+have room again. The week's reading is kept: a week does not come round on its
+own inside an afternoon. The
 machine's own login can be moved back to when its week comes round; it used to
 be the one place an agent was never carried back to.
 

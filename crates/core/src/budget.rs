@@ -93,6 +93,71 @@ impl Room {
     }
 }
 
+/// How long a five-hour window lasts. A reading of one taken longer ago than
+/// this says nothing about now: the window it was read from has rolled over.
+pub const FIVE_HOURS: u64 = 5 * 60 * 60;
+
+/// Which of a login's two allowances an agent is being moved on for.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Past {
+    Week,
+    FiveHours,
+}
+
+/// Whether a login is past either point a person moves agents on at, and
+/// which.
+///
+/// A subscription has two walls, and the five-hour one is the one met first on
+/// a busy day: a login with most of its week left can still be out for the
+/// next three hours. A reading of the five hours is only as good as its age,
+/// though — a login is read only while a pane runs on it, so one everybody has
+/// left keeps its last number, and a login read at 99% would never have room
+/// again. Past five hours that number is ignored; the week is not, because a
+/// week does not come round on its own inside an afternoon.
+pub fn past_the_switch(usage: Usage, read_at: u64, now: u64, week_at: f32, five_hours_at: f32) -> Option<Past> {
+    if usage.weekly >= week_at {
+        return Some(Past::Week);
+    }
+
+    let fresh = now.saturating_sub(read_at) < FIVE_HOURS;
+    (fresh && usage.session >= five_hours_at).then_some(Past::FiveHours)
+}
+
+#[cfg(test)]
+mod switch_tests {
+    use super::*;
+
+    #[test]
+    fn the_week_is_asked_first_and_is_the_answer_when_both_are_past() {
+        let both = Usage { session: 99.0, weekly: 95.0 };
+        assert_eq!(past_the_switch(both, 100, 100, 90.0, 95.0), Some(Past::Week));
+    }
+
+    #[test]
+    fn five_hours_nearly_gone_moves_an_agent_on_with_most_of_the_week_left() {
+        let busy_afternoon = Usage { session: 96.0, weekly: 40.0 };
+        assert_eq!(past_the_switch(busy_afternoon, 100, 100, 90.0, 95.0), Some(Past::FiveHours));
+        assert_eq!(past_the_switch(busy_afternoon, 100, 100, 90.0, 97.0), None, "short of the point chosen");
+    }
+
+    #[test]
+    fn a_five_hour_reading_older_than_five_hours_says_nothing() {
+        let left_behind = Usage { session: 99.0, weekly: 40.0 };
+        let read_at = 1_000;
+
+        assert_eq!(past_the_switch(left_behind, read_at, read_at + FIVE_HOURS - 1, 90.0, 95.0), Some(Past::FiveHours));
+        assert_eq!(past_the_switch(left_behind, read_at, read_at + FIVE_HOURS, 90.0, 95.0), None, "that window has rolled over");
+
+        let week_gone = Usage { session: 10.0, weekly: 93.0 };
+        assert_eq!(
+            past_the_switch(week_gone, read_at, read_at + FIVE_HOURS * 3, 90.0, 95.0),
+            Some(Past::Week),
+            "a week does not come round in an afternoon"
+        );
+    }
+}
+
 fn percent_after(plain: &str, label: &str) -> Option<f32> {
     let at = plain.find(label)? + label.len();
     let rest = plain[at..].trim_start();

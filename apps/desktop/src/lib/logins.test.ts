@@ -1,7 +1,64 @@
 import { describe, expect, it } from "vitest";
 
 import type { AccountsReport, Agent, Allowance, JournalEntry } from "@/lib/core";
-import { hand_overs, login_rows, ordinal, rank_among, reorder, week_words, who_spends } from "@/lib/logins";
+import {
+    FIVE_HOURS,
+    five_hours_words,
+    hand_overs,
+    login_rows,
+    nearness,
+    ordinal,
+    out_words,
+    rank_among,
+    reorder,
+    wait_words,
+    week_words,
+    who_spends,
+} from "@/lib/logins";
+
+describe("a login's five hours", () => {
+    const read = (session_percent: number | undefined, read_seconds_ago: number) =>
+        ({ ...allowance("claude", []), session_percent, read_seconds_ago }) as Allowance;
+
+    it("says how much of the five hours is gone", () => {
+        expect(five_hours_words(read(71.4, 60))).toBe("71% of its five hours");
+    });
+
+    it("says nothing is known before a pane has read it", () => {
+        expect(five_hours_words(read(undefined, 0))).toBe("five hours not read yet");
+        expect(five_hours_words(null)).toBe("five hours not read yet");
+    });
+
+    it("does not show a login as full on a reading older than the window", () => {
+        expect(five_hours_words(read(99, FIVE_HOURS))).toContain("come round");
+        expect(five_hours_words(read(99, FIVE_HOURS - 1))).toBe("99% of its five hours");
+    });
+
+    it("says when a login its engine said is out comes back, and on which wall", () => {
+        const out = (limit_window: Allowance["limit_window"], back_in: number) =>
+            ({ ...allowance("claude", []), limit_back_at: 10_000 + back_in, limit_window }) as Allowance;
+
+        expect(out_words(out("session", 72 * 60), 10_000)).toBe("out on its five hours — back in 1h 12m");
+        expect(out_words(out("weekly", 2 * 86_400 + 3 * 3600), 10_000)).toBe("out on its week — back in 2d 3h");
+        expect(out_words(out("unknown", 30), 10_000)).toBe("out — back in under a minute");
+        expect(out_words(out("session", 0), 10_000)).toBeNull();
+        expect(out_words(allowance("claude", []), 10_000)).toBeNull();
+    });
+
+    it("says a wait the way a person would", () => {
+        expect(wait_words(59)).toBe("under a minute");
+        expect(wait_words(45 * 60)).toBe("45m");
+        expect(wait_words(3 * 3600)).toBe("3h");
+        expect(wait_words(86_400)).toBe("1d");
+    });
+
+    it("colours a bar by how near it is to the point agents are moved on at", () => {
+        expect(nearness(96, 95)).toBe("spent");
+        expect(nearness(85, 95)).toBe("tight");
+        expect(nearness(40, 95)).toBe("plenty");
+        expect(nearness(undefined, 95)).toBe("plenty");
+    });
+});
 
 function allowance(identity: string, agents: string[], weekly_percent?: number): Allowance {
     return {
