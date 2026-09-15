@@ -231,6 +231,16 @@ export function SettingsPage({
                                     }
                                 />
                             </Row>
+                            <Row
+                                label="Limits under agent panes"
+                                hint="the login's five hours on the left, its week on the right, and which login it is between them"
+                            >
+                                <input
+                                    type="checkbox"
+                                    checked={settings.pane_limits !== false}
+                                    onChange={(event) => on_change({ ...settings, pane_limits: event.target.checked })}
+                                />
+                            </Row>
                             <Row label="Focused pane" hint="writes once per animation frame">
                                 <span className="font-mono text-xs text-shell">live</span>
                             </Row>

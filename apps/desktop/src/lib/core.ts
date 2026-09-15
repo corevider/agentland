@@ -458,6 +458,10 @@ export interface Allowance {
 export interface Budget {
     allowances: Allowance[];
     room: Room;
+    /// Where agents are moved on, as a percentage of a week and of five hours,
+    /// so a bar anywhere can mark them without asking the logins page.
+    switch_at?: number;
+    session_switch_at?: number;
 }
 
 export function read_budget(): Promise<Budget> {

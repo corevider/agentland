@@ -4,8 +4,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { AnimatePresence, motion } from "motion/react";
 
 import type { MenuItem } from "@/components/ContextMenu";
-import { TerminalPane } from "@/components/TerminalPane";
+import { TerminalPane, type PaneLimits } from "@/components/TerminalPane";
 import { Press } from "@/components/Press";
+import { read_budget, type Budget } from "@/lib/core";
+import { identity_of } from "@/lib/logins";
+import { login_label } from "@/lib/strip";
 import {
     create_worktree,
     is_tauri,
@@ -137,6 +140,13 @@ export function TerminalsPanel({ active }: { active: boolean }) {
             .catch(() => undefined);
     }, 1000, active);
 
+    // What each login has left, for the strip along an agent's pane. Read
+    // slowly: an engine only reports it as its turns go by.
+    const [budget, set_budget] = useState<Budget | null>(null);
+    use_poll(() => {
+        read_budget().then(set_budget).catch(() => undefined);
+    }, 15000, active);
+
     const tear_out = useCallback(
         (id: string, title: string) =>
             set_window(id, { holder: "window" })
@@ -149,6 +159,24 @@ export function TerminalsPanel({ active }: { active: boolean }) {
     const agent_of = useCallback(
         (id: string) => services.crew.find((agent) => agent.session_id === id),
         [services.crew],
+    );
+
+    const limits_of = useCallback(
+        (id: string): PaneLimits | null => {
+            const agent = agent_of(id);
+            if (!agent || !budget) {
+                return null;
+            }
+
+            const identity = identity_of(agent.engine_id, agent.account ?? null);
+            return {
+                allowance: budget.allowances.find((held) => held.identity === identity) ?? null,
+                login: login_label(agent.engine_id, agent.account),
+                week_at: budget.switch_at ?? 92,
+                five_hours_at: budget.session_switch_at ?? 95,
+            };
+        },
+        [agent_of, budget],
     );
 
     /// Put a pane the grid is not showing back into it: one that was hidden and
@@ -1002,6 +1030,7 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                             ? services.focused_id === session.id
                             : session.id === services.sessions[0]?.id)
                     }
+                    limits={limits_of(session.id)}
                     stats_from={live[session.id] ?? session}
                     now_from={now}
                     on_pick_up={(id) => set_carried(id || null)}

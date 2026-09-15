@@ -8431,6 +8431,12 @@ struct BudgetReport {
     allowances: Vec<Allowance>,
     /// The tightest of them, for anything that wants one word.
     room: crate::budget::Room,
+    /// Where agents are moved on, as a percentage of a week and of five hours.
+    /// Here as well as on the logins page, because the strip along every
+    /// agent's pane marks them and reading the logins asks every engine who
+    /// it is.
+    switch_at: f32,
+    session_switch_at: f32,
 }
 
 /// What the crew is allowed to spend, per allowance.
@@ -8493,7 +8499,12 @@ async fn read_budget(State(state): State<AppState>) -> Json<BudgetReport> {
         .map(|held| held.room)
         .fold(crate::budget::Room::Plenty, crate::meter::tighter);
 
-    Json(BudgetReport { allowances, room })
+    Json(BudgetReport {
+        allowances,
+        room,
+        switch_at: switch_at(&state),
+        session_switch_at: session_switch_at(&state),
+    })
 }
 
 #[derive(Deserialize)]

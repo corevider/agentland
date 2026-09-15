@@ -52,7 +52,7 @@ import { speak_into } from "@/lib/dictation";
 import { can_listen } from "@/lib/listen";
 import { begin_speaking, end_speaking } from "@/lib/speaking";
 import { probe_gpu, type GpuReport } from "@/lib/gpu";
-import { load_settings, save_settings, type Settings } from "@/lib/settings";
+import { SETTINGS_EVENT, load_settings, save_settings, type Settings } from "@/lib/settings";
 import { detect_surface } from "@/lib/surface";
 
 const IslandPanel = lazy(() =>
@@ -770,6 +770,14 @@ export default function App() {
     const update_settings = useCallback((next: Settings) => {
         set_settings(next);
         save_settings(next);
+    }, []);
+
+    // A pane changes a setting too — the × on its limits strip hides the strip
+    // under every pane — and the Settings page should say so when it opens.
+    useEffect(() => {
+        const follow = (event: Event) => set_settings((event as CustomEvent<Settings>).detail);
+        window.addEventListener(SETTINGS_EVENT, follow);
+        return () => window.removeEventListener(SETTINGS_EVENT, follow);
     }, []);
 
     const open_window_menu = useCallback(
