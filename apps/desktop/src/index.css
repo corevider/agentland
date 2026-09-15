@@ -34,6 +34,38 @@
     color-scheme: dark;
 }
 
+/* A press that failed says so on the button for a moment. Unlayered, so it
+   wins over whatever border and text colour the button was given. */
+button[data-failed="true"] {
+    border-color: var(--color-coral);
+    color: var(--color-coral);
+}
+
+button[aria-busy="true"] {
+    cursor: wait;
+}
+
+@keyframes working-sweep {
+    from {
+        transform: translateX(-100%);
+    }
+    to {
+        transform: translateX(300%);
+    }
+}
+
+.working-sweep {
+    animation: working-sweep 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .working-sweep {
+        animation: none;
+        width: 100%;
+        opacity: 0.6;
+    }
+}
+
 html,
 body,
 #root {

@@ -29,6 +29,7 @@ import {
 } from "@/lib/core";
 import { chief_of, clear_is_recommended, commander_of } from "@/lib/commander";
 import { Waiting } from "@/components/Spinner";
+import { Press } from "@/components/Press";
 import { use_services } from "@/workspace/registry";
 
 const STEP_COLOR: Record<string, string> = {
@@ -228,12 +229,13 @@ export function CommanderPanel({ active }: { active: boolean }) {
                         )}
 
                         {chief_at_work && chief?.session_id ? (
-                            <button
+                            <Press
                                 className="rounded-md border border-reef px-2 py-0.5 font-mono text-[11px] text-shell hover:border-foam"
-                                onClick={() => chief.session_id && open_session(chief.session_id)}
+                                busy_says="opening…"
+                                on_press={() => chief.session_id && open_session(chief.session_id)}
                             >
                                 open its pane
-                            </button>
+                            </Press>
                         ) : null}
                     </div>
 
@@ -254,12 +256,13 @@ export function CommanderPanel({ active }: { active: boolean }) {
                                     }
                                 }}
                             />
-                            <button
+                            <Press
                                 className="rounded-md border border-turquoise px-2 py-0.5 font-mono text-[11px] text-turquoise"
-                                onClick={() => void save_goal(workspace.id, true)}
+                                busy_says="setting…"
+                                on_press={() => save_goal(workspace.id, true)}
                             >
                                 set
-                            </button>
+                            </Press>
                         </div>
                     ) : (
                         <div className="flex flex-wrap items-baseline gap-2 pl-1">
@@ -278,13 +281,13 @@ export function CommanderPanel({ active }: { active: boolean }) {
                                 {workspace_goal ? "change it" : "set a goal"}
                             </button>
                             {workspace_goal ? (
-                                <button
+                                <Press
                                     className="shrink-0 font-mono text-[10px] text-shade hover:text-coral"
-                                    onClick={() => void drop_goal(workspace.id, true)}
+                                    on_press={() => drop_goal(workspace.id, true)}
                                     title="it is done, or it was never the thing"
                                 >
                                     it is done
-                                </button>
+                                </Press>
                             ) : null}
                         </div>
                     )}
@@ -336,12 +339,13 @@ export function CommanderPanel({ active }: { active: boolean }) {
                             )}
 
                             {at_work && held?.session_id ? (
-                                <button
+                                <Press
                                     className="rounded-md border border-reef px-2 py-0.5 font-mono text-[11px] text-shell hover:border-foam"
-                                    onClick={() => held.session_id && open_session(held.session_id)}
+                                    busy_says="opening…"
+                                    on_press={() => held.session_id && open_session(held.session_id)}
                                 >
                                     open its pane
-                                </button>
+                                </Press>
                             ) : null}
 
                             {at_work && held?.session_id
@@ -404,12 +408,13 @@ export function CommanderPanel({ active }: { active: boolean }) {
                                         }
                                     }}
                                 />
-                                <button
+                                <Press
                                     className="rounded-md border border-turquoise px-2 py-0.5 font-mono text-[11px] text-turquoise"
-                                    onClick={() => void save_goal(repo.id)}
+                                    busy_says="setting…"
+                                    on_press={() => save_goal(repo.id)}
                                 >
                                     set
-                                </button>
+                                </Press>
                             </div>
                         ) : (
                             <div className="flex flex-wrap items-baseline gap-2 pl-1">
@@ -426,13 +431,13 @@ export function CommanderPanel({ active }: { active: boolean }) {
                                     {goal ? "change it" : "set a goal"}
                                 </button>
                                 {goal ? (
-                                    <button
+                                    <Press
                                         className="shrink-0 font-mono text-[10px] text-shade hover:text-coral"
-                                        onClick={() => void drop_goal(repo.id)}
+                                        on_press={() => drop_goal(repo.id)}
                                         title="it is done, or it was never the thing"
                                     >
                                         it is done
-                                    </button>
+                                    </Press>
                                 ) : null}
                             </div>
                         )}
@@ -523,10 +528,11 @@ export function CommanderPanel({ active }: { active: boolean }) {
                                                 </span>
                                             ) : null}
                                             {step.state === "assigned" ? (
-                                                <button
+                                                <Press
                                                     className="ml-auto shrink-0 rounded border border-palm px-1.5 font-mono text-[10px] text-palm"
                                                     title="mark it done after reading the evidence"
-                                                    onClick={() =>
+                                                    busy_says=""
+                                                    on_press={() =>
                                                         mark_step(plan.id, step.id, "done")
                                                             .then(() => refresh())
                                                             .catch((cause) =>
@@ -535,7 +541,7 @@ export function CommanderPanel({ active }: { active: boolean }) {
                                                     }
                                                 >
                                                     done
-                                                </button>
+                                                </Press>
                                             ) : null}
                                         </div>
                                     ))}

@@ -1,3 +1,5 @@
+import { change_key, is_a_change, send_change } from "@/lib/pending";
+
 export interface CoreEndpoint {
     host: string;
     port: number;
@@ -83,7 +85,18 @@ function base_url(target: CoreEndpoint): string {
     return `http://${target.host}:${target.port}`;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/// Every call to the core. A read goes straight through. A change is counted
+/// while it runs, for the line along the top of the window, and the same change
+/// asked for again while the first is on its way is answered by the first
+/// rather than done twice.
+function request<T>(path: string, init?: RequestInit): Promise<T> {
+    if (!is_a_change(path, init)) {
+        return send<T>(path, init);
+    }
+    return send_change(change_key(path, init), () => send<T>(path, init));
+}
+
+async function send<T>(path: string, init?: RequestInit): Promise<T> {
     const target = await resolve_endpoint();
     const response = await fetch(`${base_url(target)}${path}`, {
         ...init,

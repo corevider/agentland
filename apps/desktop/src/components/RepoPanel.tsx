@@ -16,6 +16,7 @@ import {
     type WorktreeStatus,
 } from "@/lib/core";
 import { as_url, clone_target, is_clonable, pick_folder } from "@/lib/pick";
+import { Press } from "@/components/Press";
 
 const STATE_COLOR: Record<Service["state"], string> = {
     starting: "text-sun",
@@ -35,7 +36,11 @@ export function RepoPanel({ active }: { active: boolean }) {
     const [needs_git, set_needs_git] = useState<string | null>(null);
     const [names, set_names] = useState<Record<string, string>>({});
     const [error, set_error] = useState<string | null>(null);
-    const [busy, set_busy] = useState(false);
+    /// What has a change on its way, by what it is about: the open box, the
+    /// clone box, a project, or one worktree. A worktree's remove and its
+    /// server's stop would race each other; nothing about one worktree is a
+    /// reason to hold up another.
+    const [busy_on, set_busy_on] = useState<ReadonlySet<string>>(new Set());
 
     const refresh = useCallback(async () => {
         const current = await list_repos();
@@ -63,8 +68,8 @@ export function RepoPanel({ active }: { active: boolean }) {
     }, [refresh, active]);
 
     const run = useCallback(
-        async (action: () => Promise<unknown>) => {
-            set_busy(true);
+        async (key: string, action: () => Promise<unknown>) => {
+            set_busy_on((held) => new Set(held).add(key));
             set_error(null);
             try {
                 await action();
@@ -72,7 +77,11 @@ export function RepoPanel({ active }: { active: boolean }) {
             } catch (cause) {
                 set_error(cause instanceof Error ? cause.message : String(cause));
             } finally {
-                set_busy(false);
+                set_busy_on((held) => {
+                    const next = new Set(held);
+                    next.delete(key);
+                    return next;
+                });
             }
         },
         [refresh],
@@ -96,10 +105,11 @@ export function RepoPanel({ active }: { active: boolean }) {
                                 set_needs_git(null);
                             }}
                         />
-                        <button
+                        <Press
                             className="rounded-lg border border-reef px-3 py-1 font-mono text-[11px] text-shell hover:border-foam"
-                            onClick={() =>
-                                run(async () => {
+                            disabled={busy_on.has("open")}
+                            on_press={() =>
+                                run("open", async () => {
                                     const chosen = await pick_folder("Open a project folder", path || undefined);
                                     if (chosen) {
                                         set_path(chosen);
@@ -109,14 +119,15 @@ export function RepoPanel({ active }: { active: boolean }) {
                             }
                         >
                             browse…
-                        </button>
-                        <button
+                        </Press>
+                        <Press
                             className="rounded-lg border border-turquoise px-3 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40"
-                            disabled={busy || path.trim().length === 0}
-                            onClick={() => {
+                            disabled={busy_on.has("open") || path.trim().length === 0}
+                            busy_says="opening…"
+                            on_press={() => {
                                 const wanted = path.trim();
                                 set_needs_git(null);
-                                run(async () => {
+                                return run("open", async () => {
                                     try {
                                         await add_repo(wanted);
                                         set_path("");
@@ -134,7 +145,7 @@ export function RepoPanel({ active }: { active: boolean }) {
                             }}
                         >
                             open folder
-                        </button>
+                        </Press>
                     </div>
 
                     {needs_git ? (
@@ -143,11 +154,12 @@ export function RepoPanel({ active }: { active: boolean }) {
                                 {needs_git} is not a git repository yet. Each agent works in its own worktree,
                                 which needs one.
                             </span>
-                            <button
+                            <Press
                                 className="rounded-lg border border-sun px-2 py-[3px] font-mono text-[11px] text-sun hover:bg-sun/10"
-                                disabled={busy}
-                                onClick={() =>
-                                    run(async () => {
+                                disabled={busy_on.has("open")}
+                                busy_says="starting one…"
+                                on_press={() =>
+                                    run("open", async () => {
                                         await add_repo(needs_git, true);
                                         set_needs_git(null);
                                         set_path("");
@@ -155,7 +167,7 @@ export function RepoPanel({ active }: { active: boolean }) {
                                 }
                             >
                                 start one here
-                            </button>
+                            </Press>
                         </div>
                     ) : null}
 
@@ -166,10 +178,11 @@ export function RepoPanel({ active }: { active: boolean }) {
                             value={url}
                             onChange={(event) => set_url(event.target.value)}
                         />
-                        <button
+                        <Press
                             className="rounded-lg border border-reef px-3 py-1 font-mono text-[11px] text-shell hover:border-foam"
-                            onClick={() =>
-                                run(async () => {
+                            disabled={busy_on.has("clone")}
+                            on_press={() =>
+                                run("clone", async () => {
                                     const chosen = await pick_folder("Clone into…", into || undefined);
                                     if (chosen) {
                                         set_into(chosen);
@@ -178,19 +191,20 @@ export function RepoPanel({ active }: { active: boolean }) {
                             }
                         >
                             clone into…
-                        </button>
-                        <button
+                        </Press>
+                        <Press
                             className="rounded-lg border border-turquoise px-3 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40"
-                            disabled={busy || !is_clonable(url) || into.trim().length === 0}
-                            onClick={() =>
-                                run(async () => {
+                            disabled={busy_on.has("clone") || !is_clonable(url) || into.trim().length === 0}
+                            busy_says="cloning…"
+                            on_press={() =>
+                                run("clone", async () => {
                                     await clone_repo(as_url(url), into.trim());
                                     set_url("");
                                 })
                             }
                         >
                             clone
-                        </button>
+                        </Press>
                     </div>
 
                     {url.trim() && into.trim() ? (
@@ -227,14 +241,15 @@ export function RepoPanel({ active }: { active: boolean }) {
                                 {repo.remotes.length > 0
                                     ? ` · ${repo.remotes.map((remote) => `${remote.name}@${remote.provider}`).join(", ")}`
                                     : " · no remote"}
-                                <button
+                                <Press
                                     className={`rounded px-1 hover:text-coral ${repo.missing ? "border border-coral text-coral" : "text-shade"}`}
                                     title="stop tracking this project — the folder is left alone"
-                                    disabled={busy}
-                                    onClick={() => run(() => forget_repo(repo.id))}
+                                    disabled={busy_on.has(repo.id)}
+                                    busy_says="forgetting…"
+                                    on_press={() => run(repo.id, () => forget_repo(repo.id))}
                                 >
                                     forget
-                                </button>
+                                </Press>
                             </span>
                         </header>
 
@@ -288,37 +303,41 @@ export function RepoPanel({ active }: { active: boolean }) {
                                                     >
                                                         {preview === service.url ? "hide preview" : "preview"}
                                                     </button>
-                                                    <button
+                                                    <Press
                                                         className="border border-foam px-2 py-1 text-[11px] disabled:opacity-40 rounded-lg"
-                                                        disabled={busy}
-                                                        onClick={() => run(() => stop_service(repo.id, entry.name))}
+                                                        disabled={busy_on.has(key)}
+                                                        busy_says="stopping…"
+                                                        on_press={() => run(key, () => stop_service(repo.id, entry.name))}
                                                     >
                                                         stop server
-                                                    </button>
+                                                    </Press>
                                                 </>
                                             ) : (
-                                                <button
+                                                <Press
                                                     className="border border-foam px-2 py-1 text-[11px] disabled:opacity-40 rounded-lg"
-                                                    disabled={busy || entry.missing}
-                                                    onClick={() => run(() => start_service(repo.id, entry.name))}
+                                                    disabled={busy_on.has(key) || entry.missing}
+                                                    busy_says="starting…"
+                                                    on_press={() => run(key, () => start_service(repo.id, entry.name))}
                                                 >
                                                     start server
-                                                </button>
+                                                </Press>
                                             )}
-                                            <button
+                                            <Press
                                                 className="border border-foam px-2 py-1 text-[11px] disabled:opacity-40 rounded-lg"
-                                                disabled={busy}
-                                                onClick={() => run(() => remove_worktree(repo.id, entry.name, false))}
+                                                disabled={busy_on.has(key)}
+                                                busy_says="removing…"
+                                                on_press={() => run(key, () => remove_worktree(repo.id, entry.name, false))}
                                             >
                                                 remove
-                                            </button>
-                                            <button
+                                            </Press>
+                                            <Press
                                                 className="border border-coral px-2 py-1 text-[11px] text-coral disabled:opacity-40 rounded-lg"
-                                                disabled={busy}
-                                                onClick={() => run(() => remove_worktree(repo.id, entry.name, true))}
+                                                disabled={busy_on.has(key)}
+                                                busy_says="removing…"
+                                                on_press={() => run(key, () => remove_worktree(repo.id, entry.name, true))}
                                             >
                                                 force
-                                            </button>
+                                            </Press>
                                         </div>
                                     </div>
                                 );
@@ -333,18 +352,19 @@ export function RepoPanel({ active }: { active: boolean }) {
                                         set_names((current) => ({ ...current, [repo.id]: event.target.value }))
                                     }
                                 />
-                                <button
+                                <Press
                                     className="border border-foam px-3 py-1 font-mono text-[11px] disabled:opacity-40 rounded-lg"
-                                    disabled={busy || !(names[repo.id] ?? "").trim()}
-                                    onClick={() =>
-                                        run(async () => {
+                                    disabled={busy_on.has(repo.id) || !(names[repo.id] ?? "").trim()}
+                                    busy_says="creating…"
+                                    on_press={() =>
+                                        run(repo.id, async () => {
                                             await create_worktree(repo.id, (names[repo.id] ?? "").trim());
                                             set_names((current) => ({ ...current, [repo.id]: "" }));
                                         })
                                     }
                                 >
                                     create worktree
-                                </button>
+                                </Press>
                             </div>
                         </div>
                     </section>

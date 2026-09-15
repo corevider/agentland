@@ -173,13 +173,32 @@ export function Jumper({ open, views, commands, open_shell_in, on_close, on_go }
         [world, views, runnable, query],
     );
 
+    // The row on its way somewhere. A switch that takes a moment used to leave
+    // the palette looking untouched, and a second Enter went there twice.
+    const [going, set_going] = useState<string | null>(null);
+
     const go = useCallback(
         (place: Place) => {
+            if (going) {
+                return;
+            }
+
             // A command happens where the person already is: nothing to switch
             // to and nowhere to go.
             if (place.kind === "command") {
-                runnable.find((command) => `command:${command.id}` === place.id)?.run();
-                on_close();
+                const result: unknown = runnable.find((command) => `command:${command.id}` === place.id)?.run();
+                if (!(result instanceof Promise)) {
+                    on_close();
+                    return;
+                }
+
+                set_going(place.id);
+                result
+                    .catch((cause: unknown) => console.error(cause))
+                    .finally(() => {
+                        set_going(null);
+                        on_close();
+                    });
                 return;
             }
 
@@ -191,14 +210,16 @@ export function Jumper({ open, views, commands, open_shell_in, on_close, on_go }
                     ? activate_workspace(place.workspace_id)
                     : Promise.resolve(null);
 
+            set_going(place.id);
             switching
                 .catch(() => undefined)
                 .then(() => {
                     on_go(place);
+                    set_going(null);
                     on_close();
                 });
         },
-        [world, runnable, on_go, on_close],
+        [going, world, runnable, on_go, on_close],
     );
 
     if (!open) {
@@ -253,9 +274,14 @@ export function Jumper({ open, views, commands, open_shell_in, on_close, on_go }
                                 index === cursor ? "bg-shallow" : "hover:bg-shallow/60"
                             }`}
                             onMouseEnter={() => set_cursor(index)}
+                            disabled={going !== null}
+                            aria-busy={going === place.id || undefined}
                             onClick={() => go(place)}
                         >
                             <div className="flex items-baseline gap-2">
+                                {going === place.id ? (
+                                    <Waiting says="" className="font-mono text-[10px] text-turquoise" />
+                                ) : null}
                                 <span className="text-[12px] text-linen">{place.name}</span>
                                 <span className={`font-mono text-[9px] ${KIND_TINT[place.kind]}`}>
                                     {KIND_WORD[place.kind]}

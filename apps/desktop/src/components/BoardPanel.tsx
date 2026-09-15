@@ -46,6 +46,8 @@ import {
     type Task,
 } from "@/lib/core";
 import { Picker } from "@/components/Picker";
+import { Press } from "@/components/Press";
+import { Spinner } from "@/components/Spinner";
 import { checks_for, type CheckState } from "@/lib/checks";
 import { notes_as_review, type Note } from "@/lib/annotations";
 import { on_card_asked, take_asked_card, take_new_card_ask } from "@/lib/asked_card";
@@ -357,7 +359,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
         return [
             { label: "Open", run: () => set_opened(task.id) },
             ...(task.worktree
-                ? [{ label: "Review the work", run: () => void open_review(task) }]
+                ? [{ label: "Review the work", run: () => open_review(task) }]
                 : []),
             {
                 label: "Move to",
@@ -429,12 +431,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                       {
                           label: "Open every review",
                           disabled: here.length === 0,
-                          run: () => {
-                              const first = here[0];
-                              if (first) {
-                                  void open_review(first);
-                              }
-                          },
+                          run: () => (here[0] ? open_review(here[0]) : undefined),
                       },
                   ]
                 : []),
@@ -508,9 +505,13 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
             return;
         }
         set_error(null);
-        const data = await review_worktree(task.repository_id, task.worktree);
-        set_notes([]);
-        set_review({ task, data });
+        try {
+            const data = await review_worktree(task.repository_id, task.worktree);
+            set_notes([]);
+            set_review({ task, data });
+        } catch (cause) {
+            set_error(cause instanceof Error ? cause.message : String(cause));
+        }
     }, []);
 
     // A panel on the right — a card, its diff, or the editor — shares the
@@ -587,10 +588,11 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                                 disabled={busy}
                                 on_arm={() => set_arming(true)}
                                 on_cancel={() => set_arming(false)}
-                                on_set={(wanted) => {
-                                    set_arming(false);
-                                    void run(async () => set_dispatch(await set_merge_policy(wanted)));
-                                }}
+                                on_set={(wanted) =>
+                                    run(async () => set_dispatch(await set_merge_policy(wanted))).then(() =>
+                                        set_arming(false),
+                                    )
+                                }
                             />
                         </span>
                     ) : null}
@@ -654,12 +656,12 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                                         agents={agents}
                                         on_open={() => set_opened(task.id)}
                                         on_assign={(agent_id) => run(() => assign_task(task.id, agent_id))}
-                                        on_review={() => void open_review(task)}
+                                        on_review={() => open_review(task)}
                                         on_delete={() => run(() => delete_task(task.id))}
                                         on_merge={
                                             task.column === "ready" && task.worktree
                                                 ? () =>
-                                                      void run(() =>
+                                                      run(() =>
                                                           merge_worktree(task.repository_id, task.worktree!, task.id),
                                                       )
                                                 : undefined
@@ -761,17 +763,13 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                     on_changed={() => void refresh()}
                     on_review={() => {
                         const held = tasks.find((task) => task.id === opened);
-                        if (held) {
-                            void open_review(held);
-                        }
+                        return held ? open_review(held) : undefined;
                     }}
                     on_merge={() => {
                         const held = tasks.find((task) => task.id === opened);
-                        if (held?.worktree) {
-                            void run(() =>
-                                merge_worktree(held.repository_id, held.worktree!, held.id),
-                            );
-                        }
+                        return held?.worktree
+                            ? run(() => merge_worktree(held.repository_id, held.worktree!, held.id))
+                            : undefined;
                     }}
                 />
             ) : null}
@@ -786,14 +784,15 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                             {review.data.uncommitted ? " · uncommitted work" : ""}
                         </div>
                         <div className="flex gap-2">
-                            <button
+                            <Press
                                 className="border border-sun px-2 py-1 font-mono text-[11px] text-sun disabled:opacity-40 rounded-lg"
                                 disabled={busy || notes.length === 0}
                                 title="send every pinned note back to whoever holds the card, as one request for changes"
-                                onClick={() => {
+                                busy_says="sending…"
+                                on_press={() => {
                                     const sending = notes;
                                     const card = review.task;
-                                    void run(async () => {
+                                    return run(async () => {
                                         await submit_review(
                                             card.repository_id,
                                             card.worktree as string,
@@ -809,11 +808,12 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                                 }}
                             >
                                 send {notes.length > 0 ? `${notes.length} ` : ""}note{notes.length === 1 ? "" : "s"}
-                            </button>
-                            <button
+                            </Press>
+                            <Press
                                 className="border border-turquoise px-2 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40 rounded-lg"
                                 disabled={busy}
-                                onClick={() =>
+                                busy_says="opening it…"
+                                on_press={() =>
                                     run(async () => {
                                         const result = await open_pull_request(
                                             review.task.repository_id,
@@ -827,7 +827,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                                 }
                             >
                                 open pull request
-                            </button>
+                            </Press>
                             <button
                                 className="border border-foam px-2 py-1 font-mono text-[11px] rounded-lg"
                                 onClick={() => set_review(null)}
@@ -980,7 +980,7 @@ function MergeSwitch({
     disabled: boolean;
     on_arm: () => void;
     on_cancel: () => void;
-    on_set: (wanted: boolean) => void;
+    on_set: (wanted: boolean) => unknown;
 }) {
     const pill = "rounded-lg border px-1.5 py-[1px] font-mono text-[10px] normal-case tracking-normal disabled:opacity-40";
 
@@ -988,9 +988,9 @@ function MergeSwitch({
         return (
             <span className="flex shrink-0 items-center gap-1 normal-case tracking-normal">
                 <span className="text-[10px] text-sun">merge on its own?</span>
-                <button className={`${pill} border-sun text-sun`} disabled={disabled} onClick={() => on_set(true)}>
+                <Press className={`${pill} border-sun text-sun`} disabled={disabled} on_press={() => on_set(true)}>
                     yes
-                </button>
+                </Press>
                 <button className={`${pill} border-reef text-shell`} onClick={on_cancel}>
                     no
                 </button>
@@ -999,10 +999,10 @@ function MergeSwitch({
     }
 
     return (
-        <button
+        <Press
             className={`${pill} shrink-0 ${on ? "border-palm text-palm" : "border-reef text-shade hover:text-linen"}`}
             disabled={disabled}
-            onClick={() => (on ? on_set(false) : on_arm())}
+            on_press={() => (on ? on_set(false) : on_arm())}
             title={
                 on
                     ? "cards that pass every check merge themselves — click to turn this off"
@@ -1010,7 +1010,7 @@ function MergeSwitch({
             }
         >
             auto-merge {on ? "on" : "off"}
-        </button>
+        </Press>
     );
 }
 
@@ -1087,8 +1087,8 @@ function CardDetail({
     on_close: () => void;
     on_edit: () => void;
     on_changed: () => void;
-    on_review: () => void;
-    on_merge: () => void;
+    on_review: () => unknown;
+    on_merge: () => unknown;
 }) {
     const now = Math.floor(Date.now() / 1000);
     const finish = task.evidence.filter((entry) => what_of(entry).kind === "finished").at(-1);
@@ -1284,22 +1284,24 @@ function CardDetail({
 
                 <div className="flex flex-wrap gap-2">
                     {task.worktree ? (
-                        <button
+                        <Press
                             className="rounded-lg border border-turquoise px-2 py-0.5 font-mono text-[11px] text-turquoise"
-                            onClick={on_review}
+                            busy_says="reading it…"
+                            on_press={on_review}
                         >
                             read the diff
-                        </button>
+                        </Press>
                     ) : null}
 
                     {task.column === "ready" && task.worktree ? (
-                        <button
+                        <Press
                             className="rounded-lg border border-palm px-2 py-0.5 font-mono text-[11px] text-palm"
-                            onClick={on_merge}
+                            busy_says="merging…"
+                            on_press={on_merge}
                             title="squash and merge the pull request, and finish this card"
                         >
                             merge it
-                        </button>
+                        </Press>
                     ) : null}
 
                     {why_not_race(task, race) === null ? <RaceStarter task={task} on_started={on_raced} /> : null}
@@ -1339,13 +1341,14 @@ function BoardCard({
     agents: Agent[];
     on_take?: (event: React.PointerEvent<HTMLElement>) => void;
     on_open: () => void;
-    on_assign: (agent_id: string) => void;
-    on_review: () => void;
-    on_delete: () => void;
-    on_merge?: () => void;
+    on_assign: (agent_id: string) => unknown;
+    on_review: () => unknown;
+    on_delete: () => unknown;
+    on_merge?: () => unknown;
     on_menu?: (event: React.MouseEvent) => void;
 }) {
     const checks = task.column === "review" || task.column === "ready" ? checks_for(task, agents) : [];
+    const [assigning, set_assigning] = useState(false);
 
     return (
         <article
@@ -1459,49 +1462,60 @@ function BoardCard({
                                             {task.assignee}
                                         </span>
                                     ) : (
-                                        <Picker
-                                            className="min-w-[7rem] flex-1 rounded-lg border border-reef bg-lagoon-deep px-2 py-[1px] font-mono text-[10px]"
-                                            value=""
-                                            placeholder="assign…"
-                                            choices={agents
-                                                .filter(
-                                                    (agent) =>
-                                                        agent.repository_id === task.repository_id,
-                                                )
-                                                .map((agent) => ({
-                                                    value: agent.id,
-                                                    label: agent.name,
-                                                }))}
-                                            on_pick={on_assign}
-                                        />
+                                        <>
+                                            <Picker
+                                                className="min-w-[7rem] flex-1 rounded-lg border border-reef bg-lagoon-deep px-2 py-[1px] font-mono text-[10px]"
+                                                value=""
+                                                placeholder={assigning ? "handing it over…" : "assign…"}
+                                                disabled={assigning}
+                                                choices={agents
+                                                    .filter(
+                                                        (agent) =>
+                                                            agent.repository_id === task.repository_id,
+                                                    )
+                                                    .map((agent) => ({
+                                                        value: agent.id,
+                                                        label: agent.name,
+                                                    }))}
+                                                on_pick={(agent_id) => {
+                                                    set_assigning(true);
+                                                    void Promise.resolve(on_assign(agent_id)).finally(() =>
+                                                        set_assigning(false),
+                                                    );
+                                                }}
+                                            />
+                                            {assigning ? <Spinner label="handing it over" className="text-turquoise" /> : null}
+                                        </>
                                     )}
 
                                     {task.worktree ? (
-                                        <button
+                                        <Press
                                             className="border border-reef px-1 font-mono text-[10px] text-driftwood rounded-lg"
-                                            onClick={() => on_review()}
+                                            on_press={() => on_review()}
                                         >
                                             review
-                                        </button>
+                                        </Press>
                                     ) : null}
 
                                     {on_merge ? (
-                                        <button
+                                        <Press
                                             className="border border-palm px-1 font-mono text-[10px] text-palm rounded-lg"
-                                            onClick={() => on_merge()}
+                                            busy_says="merging…"
+                                            on_press={() => on_merge()}
                                             title="squash and merge the pull request, and finish this card"
                                         >
                                             merge
-                                        </button>
+                                        </Press>
                                     ) : null}
                                 </div>
 
-                                <button
+                                <Press
                                     className="border border-reef px-1 font-mono text-[10px] text-shell rounded-lg"
-                                    onClick={() => on_delete()}
+                                    busy_says="deleting…"
+                                    on_press={() => on_delete()}
                                 >
                                     delete
-                                </button>
+                                </Press>
                             </div>
                         </article>
     );

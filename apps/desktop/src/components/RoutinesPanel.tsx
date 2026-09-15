@@ -19,6 +19,7 @@ import { belongs_here, place_routines, type PlacedRoutine } from "@/lib/places";
 import { EMPTY_DRAFT, draft_from_routine, payload_of, schedule_in_words, type RoutineDraft } from "@/lib/routines";
 import { use_services } from "@/workspace/registry";
 import { RoutineEditor } from "@/components/RoutineEditor";
+import { Press } from "@/components/Press";
 
 const OUTCOME_COLOUR: Record<Routine["history"][number]["outcome"], string> = {
     ran: "text-palm",
@@ -97,7 +98,7 @@ export function RoutinesPanel({ active }: { active: boolean }) {
     const act = useCallback(
         (action: () => Promise<unknown>) => {
             set_notice(null);
-            action()
+            return action()
                 .then(() => refresh())
                 .catch((cause) => set_notice(cause instanceof Error ? cause.message : String(cause)));
         },
@@ -109,7 +110,7 @@ export function RoutinesPanel({ active }: { active: boolean }) {
             const payload = payload_of(draft);
             const writing = editing;
 
-            act(async () => {
+            return act(async () => {
                 if (writing === "new") {
                     await create_routine(payload);
                 } else if (writing) {
@@ -188,20 +189,21 @@ export function RoutinesPanel({ active }: { active: boolean }) {
                             {routine.draft_only ? " · draft only" : ""}
                         </span>
                         <span className="ml-auto flex items-center gap-1">
-                            <button
+                            <Press
                                 className="rounded border border-reef px-1.5 font-mono text-[10px] text-shell hover:border-turquoise hover:text-turquoise"
                                 title="run it now, whatever the schedule says"
-                                onClick={() => act(() => run_routine(routine.id))}
+                                busy_says="running…"
+                                on_press={() => act(() => run_routine(routine.id))}
                             >
                                 run now
-                            </button>
+                            </Press>
                             <button
                                 className="rounded border border-reef px-1.5 font-mono text-[10px] text-shell hover:border-foam"
                                 onClick={() => set_editing(routine.id)}
                             >
                                 edit
                             </button>
-                            <button
+                            <Press
                                 className={`rounded border px-1.5 font-mono text-[10px] ${
                                     proposed
                                         ? "border-sun text-sun"
@@ -209,16 +211,17 @@ export function RoutinesPanel({ active }: { active: boolean }) {
                                           ? "border-palm text-palm"
                                           : "border-shade text-shade"
                                 }`}
-                                onClick={() => act(() => set_routine_enabled(routine.id, !routine.enabled))}
+                                on_press={() => act(() => set_routine_enabled(routine.id, !routine.enabled))}
                             >
                                 {proposed ? "turn on" : routine.enabled ? "on" : "off"}
-                            </button>
-                            <button
+                            </Press>
+                            <Press
                                 className="rounded border border-reef px-1.5 font-mono text-[10px] hover:border-coral hover:text-coral"
-                                onClick={() => act(() => delete_routine(routine.id))}
+                                busy_says="deleting…"
+                                on_press={() => act(() => delete_routine(routine.id))}
                             >
                                 delete
-                            </button>
+                            </Press>
                         </span>
                     </div>
 

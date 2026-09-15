@@ -50,7 +50,8 @@ export interface WorkspaceServices {
     /// Where the person last said they wanted to be, from the jumper: a project
     /// and, when they picked one, the worktree inside it.
     going: { repository_id: string | null; worktree: string | null; at: number } | null;
-    open_session: (id: string) => void;
+    /// Waited for by whatever opened it: finding the pane asks the core.
+    open_session: (id: string) => Promise<void>;
     close_session: (id: string) => void;
     open_shell_in: (cwd: string) => void;
     /// Take a pane the panel opened for itself into the workspace, focused.

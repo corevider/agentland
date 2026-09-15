@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { Waiting } from "@/components/Spinner";
+import { Press } from "@/components/Press";
+import { Spinner, Waiting } from "@/components/Spinner";
 import {
     forget_standards,
     read_saved_standards,
@@ -26,8 +27,11 @@ export function StandardsSection() {
     const [rules, set_rules] = useState<HouseRules | null>(null);
     const [notice, set_notice] = useState<string | null>(null);
     const [saying, set_saying] = useState<string | null>(null);
-    const [saving, set_saving] = useState(false);
     const [showing, set_showing] = useState<{ id: string; text: string } | null>(null);
+    // A saved page being fetched says so beside its date, and asking for it
+    // again while it is on its way asks for nothing more.
+    const [opening, set_opening] = useState<string | null>(null);
+    const opening_ref = useRef<string | null>(null);
     const [now, set_now] = useState(() => Math.floor(Date.now() / 1000));
 
     const refresh = useCallback(async () => {
@@ -65,9 +69,7 @@ export function StandardsSection() {
             return;
         }
 
-        set_saving(true);
         await run(() => set_standards(draft), "saved");
-        set_saving(false);
     }, [draft, run]);
 
     const copy = useCallback(async () => {
@@ -90,13 +92,23 @@ export function StandardsSection() {
                 set_showing(null);
                 return;
             }
+            if (opening_ref.current === held.id) {
+                return;
+            }
 
+            opening_ref.current = held.id;
+            set_opening(held.id);
             try {
                 set_notice(null);
                 const page = await read_saved_standards(held.id);
                 set_showing({ id: held.id, text: page.text });
             } catch (cause) {
                 set_notice(cause instanceof Error ? cause.message : String(cause));
+            } finally {
+                if (opening_ref.current === held.id) {
+                    opening_ref.current = null;
+                    set_opening(null);
+                }
             }
         },
         [showing],
@@ -149,20 +161,20 @@ export function StandardsSection() {
             />
 
             <div className="flex flex-wrap items-center gap-2">
-                <button
+                <Press
                     className="rounded-lg border border-turquoise px-2 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40"
-                    disabled={saving}
-                    onClick={() => void save()}
+                    busy_says="saving…"
+                    on_press={save}
                 >
-                    {saving ? "saving…" : "save"}
-                </button>
-                <button
+                    save
+                </Press>
+                <Press
                     className="rounded-lg border border-reef px-2 py-1 font-mono text-[11px] text-shell hover:border-turquoise hover:text-turquoise"
                     title="the page as it stands in the box, on the clipboard"
-                    onClick={() => void copy()}
+                    on_press={copy}
                 >
                     copy
-                </button>
+                </Press>
                 {unsaved ? (
                     <span className="font-mono text-[10px] text-sun">unsaved</span>
                 ) : null}
@@ -197,9 +209,12 @@ export function StandardsSection() {
                     >
                         <div className="flex flex-wrap items-baseline gap-2">
                             <span
-                                className="cursor-pointer font-mono text-[11px] text-shell hover:text-turquoise"
+                                className={`font-mono text-[11px] text-shell hover:text-turquoise ${
+                                    opening === held.id ? "cursor-wait" : "cursor-pointer"
+                                }`}
                                 role="button"
                                 tabIndex={0}
+                                aria-busy={opening === held.id || undefined}
                                 title={exactly(held.at)}
                                 onClick={() => void show(held)}
                                 onKeyDown={(event) => {
@@ -209,7 +224,8 @@ export function StandardsSection() {
                                     }
                                 }}
                             >
-                                {showing?.id === held.id ? "▾" : "▸"} {when(held.at, now)}
+                                {opening === held.id ? <Spinner /> : showing?.id === held.id ? "▾" : "▸"}{" "}
+                                {when(held.at, now)}
                             </span>
                             <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-driftwood">
                                 {held.opens}
@@ -221,7 +237,7 @@ export function StandardsSection() {
                                 <span className="font-mono text-[10px] text-turquoise">in force</span>
                             ) : null}
                             <span className="flex items-center gap-1">
-                                <button
+                                <Press
                                     className="rounded border border-reef px-1.5 font-mono text-[10px] text-shell hover:border-turquoise hover:text-turquoise disabled:opacity-40"
                                     disabled={held.current}
                                     title={
@@ -229,17 +245,19 @@ export function StandardsSection() {
                                             ? "this is the page in force"
                                             : "save this page again, so it becomes the rules and the newest save"
                                     }
-                                    onClick={() => void put_back(held)}
+                                    busy_says="putting back…"
+                                    on_press={() => put_back(held)}
                                 >
                                     put back
-                                </button>
-                                <button
+                                </Press>
+                                <Press
                                     className="rounded border border-reef px-1.5 font-mono text-[10px] text-shell hover:border-coral hover:text-coral"
                                     title="forget this save — the rules in force are not touched"
-                                    onClick={() => void forget(held)}
+                                    busy_says="forgetting…"
+                                    on_press={() => forget(held)}
                                 >
                                     forget
-                                </button>
+                                </Press>
                             </span>
                         </div>
 

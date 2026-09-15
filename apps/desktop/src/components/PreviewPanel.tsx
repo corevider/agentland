@@ -13,6 +13,7 @@ import {
 } from "@/lib/core";
 import { design_note, path_of, recipients, type Pick } from "@/lib/design";
 import { Picker } from "@/components/Picker";
+import { Press } from "@/components/Press";
 
 interface Props {
     active: boolean;
@@ -43,6 +44,8 @@ export function PreviewPanel({ active }: Props) {
     const [shot, set_shot] = useState<"taking" | PickPicture | { error: string } | null>(null);
     const port_ref = useRef<number | null>(null);
     const turn_ref = useRef(0);
+    // Ctrl+Enter sends as the button does, so both share one guard.
+    const sending = useRef(false);
 
     // Taken the moment a pick arrives, from the dev server the pick came from.
     // A picture that comes back after another pick was made belongs to the
@@ -138,7 +141,7 @@ export function PreviewPanel({ active }: Props) {
             set_pick(null);
             return;
         }
-        open_preview(current.port)
+        return open_preview(current.port)
             .then(({ url }) => {
                 set_designing({ key: current.key, url });
                 set_error(null);
@@ -165,17 +168,21 @@ export function PreviewPanel({ active }: Props) {
     const chosen = choices.some((agent) => agent.id === to) ? to : (choices[0]?.id ?? "");
 
     const send = () => {
-        if (!pick || !current || !chosen || !said.trim()) {
+        if (!pick || !current || !chosen || !said.trim() || sending.current) {
             return;
         }
         const picture = shot && typeof shot === "object" && "path" in shot ? shot.path : null;
-        send_mail("a person", chosen, design_note(pick, said, current, picture))
+        sending.current = true;
+        return send_mail("a person", chosen, design_note(pick, said, current, picture))
             .then(() => {
                 set_sent(`sent to ${chosen} · it reads this when its pane is quiet`);
                 set_said("");
                 set_pick(null);
             })
-            .catch((cause) => set_error(message_of(cause)));
+            .catch((cause) => set_error(message_of(cause)))
+            .finally(() => {
+                sending.current = false;
+            });
     };
 
     return (
@@ -196,14 +203,15 @@ export function PreviewPanel({ active }: Props) {
                     {current?.url ?? ""}
                 </span>
 
-                <button
+                <Press
                     className={`${BUTTON} ${design ? "border-sun text-sun" : "border-foam"}`}
                     disabled={!current}
                     title="show the page through Agentland, where you can point at an element and hand it to an agent"
-                    onClick={switch_design}
+                    busy_says="opening the preview…"
+                    on_press={switch_design}
                 >
                     design mode {design ? "on" : "off"}
-                </button>
+                </Press>
 
                 {design ? (
                     picking ? (
@@ -283,13 +291,14 @@ export function PreviewPanel({ active }: Props) {
                                 nobody works on {current.repository_id} yet
                             </span>
                         )}
-                        <button
+                        <Press
                             className={`${BUTTON} border-sun text-sun`}
                             disabled={!chosen || !said.trim()}
-                            onClick={send}
+                            busy_says={`sending to ${chosen}…`}
+                            on_press={send}
                         >
                             send to {chosen || "…"} · ctrl+enter
-                        </button>
+                        </Press>
                         <button className={`${BUTTON} border-reef text-shell`} onClick={() => set_pick(null)}>
                             discard
                         </button>

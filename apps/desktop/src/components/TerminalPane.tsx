@@ -4,6 +4,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
+import { Press } from "@/components/Press";
 import { ReadablePane } from "@/components/ReadablePane";
 import { upgrade_soon } from "@/lib/gpu_queue";
 import { names_the_agent } from "@/lib/shells";
@@ -75,8 +76,8 @@ interface Props {
     on_zoom?: (id: string) => void;
     zoomed?: boolean;
     /// Open another shell: here, in another worktree, or a new one.
-    on_add?: (session: SessionInfo, event: React.MouseEvent) => void;
-    on_tear_out?: (session: SessionInfo) => void;
+    on_add?: (session: SessionInfo, event: React.MouseEvent) => unknown;
+    on_tear_out?: (session: SessionInfo) => unknown;
     stats_from?: SessionInfo | null;
     now_from?: number;
     readable?: boolean;
@@ -586,16 +587,17 @@ export function TerminalPane({ session, crown, kept = false, focused, on_focus, 
                 ) : null}
 
                 {on_add && session.cwd ? (
-                    <button
+                    <Press
                         className="shrink-0 rounded px-1 font-mono text-[11px] text-shade hover:text-turquoise"
                         title="another shell — here, in another worktree, or a new one"
-                        onClick={(event) => {
+                        busy_says=""
+                        on_press={(event) => {
                             event.stopPropagation();
-                            on_add(session, event);
+                            return on_add(session, event);
                         }}
                     >
                         +
-                    </button>
+                    </Press>
                 ) : null}
 
                 {on_readable ? (
@@ -614,16 +616,17 @@ export function TerminalPane({ session, crown, kept = false, focused, on_focus, 
                 ) : null}
 
                 {on_tear_out ? (
-                    <button
+                    <Press
                         className="shrink-0 rounded px-1 font-mono text-[11px] text-shade hover:text-turquoise"
                         title="open this terminal in its own window"
-                        onClick={(event) => {
+                        busy_says=""
+                        on_press={(event) => {
                             event.stopPropagation();
-                            on_tear_out(session);
+                            return on_tear_out(session);
                         }}
                     >
                         ⧉
-                    </button>
+                    </Press>
                 ) : null}
 
                 {on_zoom ? (

@@ -2699,3 +2699,29 @@ of one that is on pauses it again for the same reason.
 The chief's and the commanders' panes open on the DOM renderer on every surface
 now, whatever the settings say for the rest — they are the panes a person types
 into and glances at, and the pane's own footer still moves one to WebGL.
+
+## Buttons that say they are working
+
+A button that asked the core for something looked the same while the core
+worked as it did before it was pressed. So the person pressed again, and the
+core did the thing twice: a routine saved twice, a CLI pane opened twice. Of
+roughly a hundred and fifty controls that start work, three in four said
+nothing while it ran, and a menu row closed before its work had even begun.
+
+Every one of them now says so from the press until the work is done — a
+spinner, and words where there is room, *saving…*, *deleting…* — takes no
+second press in between, and when the work fails, says so on itself for a
+moment rather than going back to looking untouched. A menu row stays open and
+turning until its work is done, and so does a row in the palette. Panels that
+froze every row for one action now wait row by row. Two keep a shared wait on
+purpose, because the actions in them collide: starting and stopping the same
+agent, and calling off a race while keeping one of its entrants.
+
+Underneath the buttons, every change sent to the core is counted, and a line
+runs along the top of the window while one is on its way, so a drop, a key or
+a menu entry is covered too. The same change asked for again while the first is
+still on its way is answered by the first, so a double press that slipped past
+a button still reaches the core once. Keystrokes, resizes, benchmark samples
+and pen marks are left out of both: they come by the dozen and each one has to
+arrive. On the phone, approve, reject, send and delete say they are working as
+well.

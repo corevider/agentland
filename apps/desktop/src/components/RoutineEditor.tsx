@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 
 import type { RoutineDay, RoutineTemplate } from "@/lib/core";
 import { Picker } from "@/components/Picker";
+import { Press } from "@/components/Press";
 import {
     DAYS,
     DAY_NAMES,
@@ -97,7 +98,8 @@ export function RoutineEditor({
     templates: RoutineTemplate[];
     variables: { name: string; says: string }[];
     saving_label: string;
-    on_save: (draft: RoutineDraft) => void;
+    /// Waited for: the save button says it is saving until this settles.
+    on_save: (draft: RoutineDraft) => unknown;
     on_cancel: () => void;
 }) {
     const [draft, set_draft] = useState<RoutineDraft>(initial);
@@ -129,7 +131,7 @@ export function RoutineEditor({
     const save = () => {
         set_tried(true);
         if (!problem) {
-            on_save(draft);
+            return on_save(draft);
         }
     };
 
@@ -373,13 +375,13 @@ export function RoutineEditor({
                     >
                         cancel
                     </button>
-                    <button
-                        type="button"
+                    <Press
                         className="rounded-md border border-turquoise px-2 py-0.5 font-mono text-[11px] text-turquoise"
-                        onClick={save}
+                        busy_says="saving…"
+                        on_press={save}
                     >
                         {saving_label}
-                    </button>
+                    </Press>
                 </span>
             </div>
         </section>

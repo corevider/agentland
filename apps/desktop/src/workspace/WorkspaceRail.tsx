@@ -13,6 +13,7 @@ import { chief_of } from "@/lib/commander";
 import { PRESENCE_COLOR } from "@/island/geometry";
 import type { PanelId } from "@/workspace/layout";
 import { PANELS } from "@/workspace/registry";
+import { Press } from "@/components/Press";
 
 interface Props {
     visible: PanelId[];
@@ -26,7 +27,7 @@ interface Props {
     collapsed: boolean;
     on_collapse: (next: boolean) => void;
     on_open_panel: (panel: PanelId) => void;
-    on_open_agent: (agent: Agent) => void;
+    on_open_agent: (agent: Agent) => unknown;
     footer: React.ReactNode;
 }
 
@@ -65,16 +66,16 @@ export function WorkspaceRail({
         set_workspaces(held.workspaces);
     }, []);
 
+    // The switcher stays open, its row turning, until the core has moved over.
+    // It used to close first and swallow a refusal, so a switch that never
+    // happened looked exactly like one that had.
     const switch_to = useCallback(
-        (id: string) => {
-            set_switching(false);
-            activate_workspace(id)
-                .then(() => {
-                    on_switched();
-                    return refresh();
-                })
-                .catch(() => undefined);
-        },
+        (id: string) =>
+            activate_workspace(id).then(() => {
+                set_switching(false);
+                on_switched();
+                return refresh();
+            }),
         [on_switched, refresh],
     );
 
@@ -177,19 +178,19 @@ export function WorkspaceRail({
                             ).length;
 
                             return (
-                                <button
+                                <Press
                                     key={workspace.id}
                                     className={`flex w-full items-center gap-2 px-2 py-[3px] text-left text-[12px] hover:bg-shallow ${
                                         workspace.id === active_workspace ? "text-turquoise" : "text-shell"
                                     }`}
-                                    onClick={() => switch_to(workspace.id)}
+                                    on_press={() => switch_to(workspace.id)}
                                 >
                                     <span className="truncate">{workspace.name}</span>
                                     <span className="ml-auto shrink-0 font-mono text-[9px] text-shade">
                                         {workspace.repository_ids.length}
                                         {busy > 0 ? ` · ${busy} live` : ""}
                                     </span>
-                                </button>
+                                </Press>
                             );
                         })}
                     </div>
@@ -223,15 +224,15 @@ export function WorkspaceRail({
                 })}
 
                 {chief ? (
-                    <button
-                        onClick={() => on_open_agent(chief)}
+                    <Press
+                        on_press={() => on_open_agent(chief)}
                         title={`${chief.name} commands this workspace — ${chief.reason}`}
                         className="mt-1 flex w-full items-center gap-2 rounded py-[2px] pl-2 pr-2 text-left text-[12px] text-shell hover:bg-lagoon-deep/60 hover:text-linen"
                     >
                         <Dot presence={chief.presence} />
                         <span className="truncate">{chief.name}</span>
                         <span className="ml-auto truncate font-mono text-[10px] text-shade">chief</span>
-                    </button>
+                    </Press>
                 ) : null}
 
                 <h2 className="px-1 pb-0.5 pt-3 font-mono text-[9px] uppercase tracking-[0.16em] text-shade">
@@ -272,9 +273,9 @@ export function WorkspaceRail({
                             {shut
                                 ? null
                                 : crew.map((agent) => (
-                                      <button
+                                      <Press
                                           key={agent.id}
-                                          onClick={() => on_open_agent(agent)}
+                                          on_press={() => on_open_agent(agent)}
                                           title={agent.reason}
                                           className="flex w-full items-center gap-2 rounded py-[2px] pl-[24px] pr-2 text-left text-[12px] text-shell hover:bg-lagoon-deep/60 hover:text-linen"
                                       >
@@ -283,7 +284,7 @@ export function WorkspaceRail({
                                           <span className="ml-auto truncate font-mono text-[10px] text-shade">
                                               {agent.worktree}
                                           </span>
-                                      </button>
+                                      </Press>
                                   ))}
                         </div>
                     );

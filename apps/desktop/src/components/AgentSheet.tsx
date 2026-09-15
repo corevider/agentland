@@ -13,6 +13,7 @@ import {
     type Approval,
 } from "@/lib/core";
 import { PRESENCE_COLOR, PRESENCE_LABEL } from "@/island/geometry";
+import { Press } from "@/components/Press";
 
 interface Props {
     agent: Agent;
@@ -25,6 +26,9 @@ export function AgentSheet({ agent, on_close, on_open_pane, on_changed }: Props)
     const [tail, set_tail] = useState<string>("");
     const [approvals, set_approvals] = useState<Approval[]>([]);
     const [instruction, set_instruction] = useState("");
+    /// One agent, one action at a time: a stop and a start pressed together
+    /// would race each other to the same pane, so every action here waits for
+    /// the one in flight. The pressed button is the one that shows it.
     const [busy, set_busy] = useState(false);
     const [notice, set_notice] = useState<string | null>(null);
 
@@ -78,16 +82,16 @@ export function AgentSheet({ agent, on_close, on_open_pane, on_changed }: Props)
 
     const give_work = useCallback(() => {
         const title = instruction.trim();
-        if (!title) {
+        if (!title || busy) {
             return;
         }
 
-        void run(async () => {
+        return run(async () => {
             const task = await create_task(title, "", agent.repository_id);
             await assign_task(task.id, agent.id);
             set_instruction("");
         }, `${agent.name} took it on`);
-    }, [agent.id, agent.name, agent.repository_id, instruction, run]);
+    }, [agent.id, agent.name, agent.repository_id, busy, instruction, run]);
 
     return (
         <motion.aside
@@ -130,20 +134,22 @@ export function AgentSheet({ agent, on_close, on_open_pane, on_changed }: Props)
                                     <div className="mt-1 font-mono text-[11px] text-shell">{approval.detail}</div>
                                 ) : null}
                                 <div className="mt-2 flex gap-2">
-                                    <button
+                                    <Press
                                         className="flex-1 rounded-lg border border-palm px-2 py-1 text-[11px] text-palm disabled:opacity-40"
                                         disabled={busy}
-                                        onClick={() => run(() => answer_approval(approval.id, true), "Approved")}
+                                        busy_says="approving…"
+                                        on_press={() => run(() => answer_approval(approval.id, true), "Approved")}
                                     >
                                         Approve
-                                    </button>
-                                    <button
+                                    </Press>
+                                    <Press
                                         className="flex-1 rounded-lg border border-coral px-2 py-1 text-[11px] text-coral disabled:opacity-40"
                                         disabled={busy}
-                                        onClick={() => run(() => answer_approval(approval.id, false), "Rejected")}
+                                        busy_says="rejecting…"
+                                        on_press={() => run(() => answer_approval(approval.id, false), "Rejected")}
                                     >
                                         Reject
-                                    </button>
+                                    </Press>
                                 </div>
                             </div>
                         ))}
@@ -166,13 +172,14 @@ export function AgentSheet({ agent, on_close, on_open_pane, on_changed }: Props)
                                 }
                             }}
                         />
-                        <button
+                        <Press
                             className="rounded-lg border border-turquoise px-3 py-1 text-[11px] text-turquoise disabled:opacity-40"
                             disabled={busy || instruction.trim().length === 0}
-                            onClick={give_work}
+                            busy_says="sending…"
+                            on_press={give_work}
                         >
                             send
-                        </button>
+                        </Press>
                     </div>
                     <p className="mt-1 font-mono text-[10px] text-shade">
                         Becomes a card, then its opening prompt.
@@ -182,36 +189,40 @@ export function AgentSheet({ agent, on_close, on_open_pane, on_changed }: Props)
                 <section className="flex flex-wrap gap-2">
                     {agent.session_id ? (
                         <>
-                            <button
+                            <Press
                                 className="rounded-lg border border-foam px-3 py-1 text-[11px]"
-                                onClick={() => on_open_pane(agent.session_id as string)}
+                                busy_says="opening…"
+                                on_press={() => on_open_pane(agent.session_id as string)}
                             >
                                 open its terminal
-                            </button>
-                            <button
+                            </Press>
+                            <Press
                                 className="rounded-lg border border-foam px-3 py-1 text-[11px] disabled:opacity-40"
                                 disabled={busy}
-                                onClick={() => run(() => stop_agent(agent.id), "Stopped")}
+                                busy_says="stopping…"
+                                on_press={() => run(() => stop_agent(agent.id), "Stopped")}
                             >
                                 stop
-                            </button>
+                            </Press>
                         </>
                     ) : (
                         <>
-                            <button
+                            <Press
                                 className="rounded-lg border border-foam px-3 py-1 text-[11px] disabled:opacity-40"
                                 disabled={busy}
-                                onClick={() => run(() => start_agent(agent.id, false), "Started")}
+                                busy_says="starting…"
+                                on_press={() => run(() => start_agent(agent.id, false), "Started")}
                             >
                                 start
-                            </button>
-                            <button
+                            </Press>
+                            <Press
                                 className="rounded-lg border border-foam px-3 py-1 text-[11px] disabled:opacity-40"
                                 disabled={busy}
-                                onClick={() => run(() => start_agent(agent.id, true), "Resumed")}
+                                busy_says="resuming…"
+                                on_press={() => run(() => start_agent(agent.id, true), "Resumed")}
                             >
                                 resume
-                            </button>
+                            </Press>
                         </>
                     )}
                 </section>

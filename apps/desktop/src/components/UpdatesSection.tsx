@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
+import { Press } from "@/components/Press";
 import { Spinner, Waiting } from "@/components/Spinner";
 import { is_tauri } from "@/lib/core";
 import {
@@ -109,8 +110,15 @@ export function UpdatesSection() {
     }, [state]);
 
     const restart = useCallback(async () => {
-        const { relaunch } = await import("@tauri-apps/plugin-process");
-        await relaunch();
+        try {
+            const { relaunch } = await import("@tauri-apps/plugin-process");
+            await relaunch();
+        } catch (cause) {
+            set_state({
+                kind: "trouble",
+                why: cause instanceof Error ? cause.message : String(cause),
+            });
+        }
     }, []);
 
     const notes = state.kind === "available" ? notes_for_reading(state.notes, NOTE_LINES) : null;
@@ -133,30 +141,33 @@ export function UpdatesSection() {
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                    <button
+                    <Press
                         className="rounded-lg border border-reef px-3 py-1 font-mono text-[11px] text-shell hover:border-foam disabled:opacity-40"
                         disabled={!can_check(state)}
-                        onClick={() => void check()}
+                        busy_says="checking…"
+                        on_press={check}
                     >
                         check now
-                    </button>
+                    </Press>
 
                     {can_install(state) ? (
-                        <button
+                        <Press
                             className="rounded-lg border border-turquoise px-3 py-1 font-mono text-[11px] text-turquoise"
-                            onClick={() => void install()}
+                            busy_says="taking it…"
+                            on_press={install}
                         >
                             download and install
-                        </button>
+                        </Press>
                     ) : null}
 
                     {state.kind === "ready" ? (
-                        <button
+                        <Press
                             className="rounded-lg border border-palm px-3 py-1 font-mono text-[11px] text-palm"
-                            onClick={() => void restart()}
+                            busy_says="restarting…"
+                            on_press={restart}
                         >
                             restart now
-                        </button>
+                        </Press>
                     ) : null}
                 </div>
             </div>

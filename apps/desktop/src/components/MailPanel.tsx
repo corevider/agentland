@@ -1,7 +1,7 @@
 import { use_poll } from "@/lib/poll";
 
 import { exactly, when } from "@/lib/when";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
     list_mail,
@@ -13,6 +13,7 @@ import {
 } from "@/lib/core";
 import { use_services } from "@/workspace/registry";
 import { Picker } from "@/components/Picker";
+import { Press } from "@/components/Press";
 
 export function MailPanel({ active }: { active: boolean }) {
     const { crew } = use_services();
@@ -36,14 +37,20 @@ export function MailPanel({ active }: { active: boolean }) {
     const run = useCallback(
         (action: () => Promise<unknown>) => {
             set_notice(null);
-            action()
+            return action()
                 .then(() => refresh())
                 .catch((cause) => set_notice(cause instanceof Error ? cause.message : String(cause)));
         },
         [refresh],
     );
 
+    // Enter in the box sends as the button does, so both share one guard.
+    const sending = useRef(false);
+
     const send = useCallback(() => {
+        if (sending.current) {
+            return;
+        }
         const text = draft.text.trim();
         const from = draft.from || names[0];
         const to = draft.to || names[1] || names[0];
@@ -53,9 +60,12 @@ export function MailPanel({ active }: { active: boolean }) {
             return;
         }
 
-        run(async () => {
+        sending.current = true;
+        return run(async () => {
             await send_mail(from, to, text);
             set_draft({ ...draft, text: "" });
+        }).finally(() => {
+            sending.current = false;
         });
     }, [draft, names, run]);
 
@@ -72,25 +82,25 @@ export function MailPanel({ active }: { active: boolean }) {
                     {policy?.paused ? "mail is paused" : "mail is flowing"}
                 </span>
 
-                <button
+                <Press
                     className="rounded-md border border-foam px-2 py-0.5 font-mono text-[11px]"
                     disabled={!policy}
-                    onClick={() => policy && run(() => set_mail_policy({ ...policy, paused: !policy.paused }))}
+                    on_press={() => policy && run(() => set_mail_policy({ ...policy, paused: !policy.paused }))}
                 >
                     {policy?.paused ? "let it flow" : "pause everything"}
-                </button>
+                </Press>
 
-                <button
+                <Press
                     className="rounded-md border border-reef px-2 py-0.5 font-mono text-[11px] text-shell hover:border-foam"
                     disabled={!policy}
-                    onClick={() =>
+                    on_press={() =>
                         policy &&
                         run(() => set_mail_policy({ ...policy, allow_unlisted: !policy.allow_unlisted }))
                     }
                     title="whether an agent may write to someone it has no grant for"
                 >
                     unlisted pairs: {policy?.allow_unlisted ? "allowed" : "refused"}
-                </button>
+                </Press>
 
                 <span className="font-mono text-[10px] text-shade">
                     {waiting.length} waiting · {messages.length} in the record
@@ -126,12 +136,13 @@ export function MailPanel({ active }: { active: boolean }) {
                     onChange={(event) => set_draft({ ...draft, text: event.target.value })}
                     onKeyDown={(event) => event.key === "Enter" && send()}
                 />
-                <button
+                <Press
                     className="rounded-md border border-turquoise px-2 py-0.5 font-mono text-[11px] text-turquoise"
-                    onClick={send}
+                    busy_says="sending…"
+                    on_press={send}
                 >
                     send
-                </button>
+                </Press>
             </section>
 
             <section className="min-h-0">

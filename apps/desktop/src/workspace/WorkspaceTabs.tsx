@@ -13,6 +13,7 @@ import {
     type Workspace,
 } from "@/lib/core";
 import { Picker } from "@/components/Picker";
+import { Press } from "@/components/Press";
 import { hireable_engines } from "@/lib/hiring_rules";
 
 interface Props {
@@ -64,7 +65,7 @@ export function WorkspaceTabs({ turn, active, on_active, on_switched, counts }: 
     const choose = useCallback(
         (id: string) => {
             set_editing(null);
-            activate_workspace(id)
+            return activate_workspace(id)
                 .then(() => {
                     on_switched();
                     return refresh();
@@ -74,11 +75,16 @@ export function WorkspaceTabs({ turn, active, on_active, on_switched, counts }: 
         [refresh, on_switched],
     );
 
+    // A workspace is made on Enter, in either box, and Enter held a moment too
+    // long made two. One at a time.
+    const making = useRef(false);
     const create = useCallback(() => {
         const trimmed = name.trim();
-        if (!trimmed) {
+        if (!trimmed || making.current) {
             return;
         }
+
+        making.current = true;
 
         // An empty field means the name it offered. The suggestion is not
         // written into the field, so a person who types nothing is agreeing to
@@ -92,7 +98,10 @@ export function WorkspaceTabs({ turn, active, on_active, on_switched, counts }: 
                 set_editing(created.id);
                 return activate_workspace(created.id).then(() => refresh());
             })
-            .catch((cause) => set_error(cause instanceof Error ? cause.message : String(cause)));
+            .catch((cause) => set_error(cause instanceof Error ? cause.message : String(cause)))
+            .finally(() => {
+                making.current = false;
+            });
     }, [chief, engine_id, name, suggested, refresh]);
 
     // What this workspace's chief would be called, asked as the name is typed.
@@ -126,7 +135,7 @@ export function WorkspaceTabs({ turn, active, on_active, on_switched, counts }: 
                 ? workspace.repository_ids.filter((id) => id !== repository_id)
                 : [...workspace.repository_ids, repository_id];
 
-            set_workspace_repos(workspace.id, held)
+            return set_workspace_repos(workspace.id, held)
                 .then(() => refresh())
                 .catch((cause) => set_error(cause instanceof Error ? cause.message : String(cause)));
         },
@@ -140,9 +149,9 @@ export function WorkspaceTabs({ turn, active, on_active, on_switched, counts }: 
             {workspaces.map((workspace) => {
                 const chosen = workspace.id === active;
                 return (
-                    <button
+                    <Press
                         key={workspace.id}
-                        onClick={() => (chosen ? set_editing(chosen && editing ? null : workspace.id) : choose(workspace.id))}
+                        on_press={() => (chosen ? set_editing(chosen && editing ? null : workspace.id) : choose(workspace.id))}
                         title={
                             chosen
                                 ? "click again to choose its repositories"
@@ -158,7 +167,7 @@ export function WorkspaceTabs({ turn, active, on_active, on_switched, counts }: 
                                 {counts[workspace.id]}
                             </span>
                         ) : null}
-                    </button>
+                    </Press>
                 );
             })}
 
@@ -247,20 +256,21 @@ export function WorkspaceTabs({ turn, active, on_active, on_switched, counts }: 
                     {repos.map((repo) => {
                         const held = current.repository_ids.includes(repo.id);
                         return (
-                            <button
+                            <Press
                                 key={repo.id}
-                                onClick={() => toggle_repo(current, repo.id)}
+                                on_press={() => toggle_repo(current, repo.id)}
                                 className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left text-[12px] hover:bg-lagoon"
                             >
                                 <span className={held ? "text-palm" : "text-shade"}>{held ? "✓" : "·"}</span>
                                 <span className="truncate text-linen">{repo.name}</span>
-                            </button>
+                            </Press>
                         );
                     })}
                     <div className="mt-1 flex justify-between border-t border-reef/70 pt-1">
-                        <button
+                        <Press
                             className="rounded px-1.5 py-0.5 font-mono text-[10px] text-coral hover:underline"
-                            onClick={() => {
+                            busy_says="deleting…"
+                            on_press={() =>
                                 remove_workspace(current.id)
                                     .then(() => {
                                         set_editing(null);
@@ -268,11 +278,11 @@ export function WorkspaceTabs({ turn, active, on_active, on_switched, counts }: 
                                     })
                                     .catch((cause) =>
                                         set_error(cause instanceof Error ? cause.message : String(cause)),
-                                    );
-                            }}
+                                    )
+                            }
                         >
                             delete
-                        </button>
+                        </Press>
                         <button
                             className="rounded px-1.5 py-0.5 font-mono text-[10px] text-shell hover:text-linen"
                             onClick={() => set_editing(null)}
