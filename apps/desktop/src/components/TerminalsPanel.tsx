@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from "motion/react";
 
 import type { MenuItem } from "@/components/ContextMenu";
 import { TerminalPane } from "@/components/TerminalPane";
+import { Press } from "@/components/Press";
 import {
     create_worktree,
     is_tauri,
@@ -136,12 +137,14 @@ export function TerminalsPanel({ active }: { active: boolean }) {
             .catch(() => undefined);
     }, 1000, active);
 
-    const tear_out = useCallback((id: string, title: string) => {
-        set_window(id, { holder: "window" })
-            .then(() => (is_tauri() ? invoke("open_pane_window", { sessionId: id, title }) : undefined))
-            .then(() => list_windows().then(set_views))
-            .catch(() => undefined);
-    }, []);
+    const tear_out = useCallback(
+        (id: string, title: string) =>
+            set_window(id, { holder: "window" })
+                .then(() => (is_tauri() ? invoke("open_pane_window", { sessionId: id, title }) : undefined))
+                .then(() => list_windows().then(set_views))
+                .catch((cause: unknown) => console.error(cause)),
+        [],
+    );
 
     const agent_of = useCallback(
         (id: string) => services.crew.find((agent) => agent.session_id === id),
@@ -153,13 +156,14 @@ export function TerminalsPanel({ active }: { active: boolean }) {
     /// is what "back in the grid" means for the second, and a no-op for the
     /// first — a pane with no window of its own has none to close.
     const bring_back = useCallback(
-        (id: string) => {
-            set_window(id, { holder: "grid" })
-                .then(set_views)
-                .then(() => (is_tauri() ? invoke("close_pane_window", { sessionId: id }) : undefined))
-                .catch(() => undefined);
-            services.open_session(id);
-        },
+        (id: string) =>
+            Promise.all([
+                set_window(id, { holder: "grid" })
+                    .then(set_views)
+                    .then(() => (is_tauri() ? invoke("close_pane_window", { sessionId: id }) : undefined))
+                    .catch((cause: unknown) => console.error(cause)),
+                services.open_session(id),
+            ]).then(() => undefined),
         [services],
     );
 
@@ -423,24 +427,29 @@ export function TerminalsPanel({ active }: { active: boolean }) {
     /// and comes back to a fresh pane, so its name is kept on the agent. A
     /// shell nobody was hired into does not come back at all, and its name has
     /// nothing to outlive.
+    // Naming is a change on its way until the core answers. The box used to
+    // close at once and swallow any refusal, so a name that never took looked
+    // exactly like one that had.
+    const naming = useRef(false);
     const rename_pane = useCallback(
-        (title: string) => {
-            if (!renaming) {
+        async (title: string) => {
+            if (!renaming || naming.current) {
                 return;
             }
 
-            const held = agent_of(renaming.id);
-            if (held) {
-                shape_agent(held.id, { title })
-                    .then(() => services.refresh_crew())
-                    .catch(() => undefined);
-            } else {
-                set_window(renaming.id, { title })
-                    .then(set_views)
-                    .catch(() => undefined);
+            naming.current = true;
+            try {
+                const held = agent_of(renaming.id);
+                if (held) {
+                    await shape_agent(held.id, { title });
+                    await services.refresh_crew();
+                } else {
+                    set_views(await set_window(renaming.id, { title }));
+                }
+                set_renaming(null);
+            } finally {
+                naming.current = false;
             }
-
-            set_renaming(null);
         },
         [agent_of, renaming, services],
     );
@@ -457,7 +466,7 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                 ? create_worktree(wanted.repository_id, wanted.name.trim()).then((made) => made.path)
                 : Promise.resolve(wanted.cwd);
 
-        place
+        return place
             .then((cwd) =>
                 wanted.engine_id === A_TERMINAL
                     ? spawn_default_shell(cwd)
@@ -646,26 +655,28 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                             onChange={(event) => set_renaming({ ...renaming, title: event.target.value })}
                             onKeyDown={(event) => {
                                 if (event.key === "Enter") {
-                                    rename_pane(renaming.title.trim());
+                                    rename_pane(renaming.title.trim()).catch((cause: unknown) => console.error(cause));
                                 }
                                 if (event.key === "Escape") {
                                     set_renaming(null);
                                 }
                             }}
                         />
-                        <button
+                        <Press
                             className="rounded border border-turquoise px-2 py-1 font-mono text-[11px] text-turquoise"
-                            onClick={() => rename_pane(renaming.title.trim())}
+                            busy_says="naming…"
+                            on_press={() => rename_pane(renaming.title.trim())}
                         >
                             name it
-                        </button>
-                        <button
+                        </Press>
+                        <Press
                             className="px-1 font-mono text-[11px] text-shade hover:text-linen"
                             title="back to whatever it would be called otherwise"
-                            onClick={() => rename_pane("")}
+                            busy_says=""
+                            on_press={() => rename_pane("")}
                         >
                             ×
-                        </button>
+                        </Press>
                     </div>
                 </div>
             ) : null}
@@ -801,17 +812,18 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                         >
                             cancel
                         </button>
-                        <button
+                        <Press
                             className="rounded border border-turquoise px-2 py-1 font-mono text-[11px] text-turquoise disabled:opacity-40"
                             disabled={
                                 !starting.engine_id ||
                                 cli_places.length === 0 ||
                                 (starting.cwd === A_NEW_WORKTREE && !starting.name.trim())
                             }
-                            onClick={start_cli}
+                            busy_says="starting…"
+                            on_press={start_cli}
                         >
                             start
-                        </button>
+                        </Press>
                     </div>
 
                     {engines.length > 0 && !engines.some((engine) => engine.installed) ? (
@@ -836,12 +848,12 @@ export function TerminalsPanel({ active }: { active: boolean }) {
             <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-4 text-center">
                 {popovers}
                 <p className="font-mono text-[11px] text-shell">No terminal is open.</p>
-                <button
+                <Press
                     className="rounded border border-reef px-2 py-1 font-mono text-[11px] text-shell hover:border-turquoise hover:text-linen"
-                    onClick={(event) => void open_shell_menu(event, null)}
+                    on_press={(event) => open_shell_menu(event, null)}
                 >
                     + shell
-                </button>
+                </Press>
                 <p className="font-mono text-[10px] text-shade">
                     in a project's checkout, one of its worktrees, or a new one
                 </p>
@@ -893,13 +905,13 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                 ) : null}
 
                 <span className="ml-auto flex items-center gap-1">
-                    <button
+                    <Press
                         className="mr-2 rounded border border-reef px-1.5 hover:border-turquoise hover:text-linen"
                         title="open a shell — in a worktree, the main checkout, or a new worktree"
-                        onClick={(event) => void open_shell_menu(event, null)}
+                        on_press={(event) => open_shell_menu(event, null)}
                     >
                         + shell
-                    </button>
+                    </Press>
                     <span className="text-shade">columns</span>
                     <button
                         className={`rounded px-1.5 ${
@@ -960,12 +972,13 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                         <span className="font-mono text-[10px] text-shade">
                             open in its own window
                         </span>
-                        <button
+                        <Press
                             className="mt-1 rounded border border-reef px-2 py-0.5 font-mono text-[10px] text-shell hover:border-foam"
-                            onClick={() => bring_back(session.id)}
+                            busy_says="bringing it back…"
+                            on_press={() => bring_back(session.id)}
                         >
                             bring it back
-                        </button>
+                        </Press>
                     </motion.article>
                 ) : (
                 <TerminalPane
@@ -1001,7 +1014,7 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                     on_close={services.close_session}
                     on_zoom={(id) => set_zoomed((held) => (held === id ? null : id))}
                     zoomed={zoomed === session.id}
-                    on_add={(entry, event) => void open_shell_menu(event, entry.cwd)}
+                    on_add={(entry, event) => open_shell_menu(event, entry.cwd)}
                     readable={views[session.id]?.readable ?? false}
                     on_readable={(wanted) => {
                         set_window(session.id, { readable: wanted })

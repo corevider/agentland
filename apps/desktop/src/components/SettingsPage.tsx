@@ -9,6 +9,7 @@ import { VoiceSection } from "@/components/VoiceSection";
 import type { GpuReport } from "@/lib/gpu";
 import { RENDERERS, resolve_renderer, type Renderer, type Settings } from "@/lib/settings";
 import { Picker } from "@/components/Picker";
+import { Press } from "@/components/Press";
 
 const PANE_CHOICES = [1, 2, 4, 8, 12];
 const RATE_CHOICES = [1_000, 5_000, 10_000, 20_000, 50_000];
@@ -44,9 +45,12 @@ interface Props {
     gpu: GpuReport;
     surface: string;
     busy: boolean;
-    on_run_benchmark: () => void;
-    on_open_shells: () => void;
-    on_clear: () => void;
+    on_run_benchmark: () => unknown;
+    on_open_shells: () => unknown;
+    on_clear: () => unknown;
+    /// Bring a pane forward: the engine's own sign-in opens in one, and it has
+    /// to be in front of the person to be finished.
+    on_open_pane?: (session_id: string) => unknown;
 }
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
@@ -95,6 +99,7 @@ export function SettingsPage({
     on_run_benchmark,
     on_open_shells,
     on_clear,
+    on_open_pane,
 }: Props) {
     const [section, set_section] = useState<SectionId>("updates");
 
@@ -132,7 +137,7 @@ export function SettingsPage({
                 <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
                     {section === "updates" ? <UpdatesSection /> : null}
 
-                    {section === "accounts" ? <AccountsSection /> : null}
+                    {section === "accounts" ? <AccountsSection on_open_pane={on_open_pane} /> : null}
 
                     {section === "hiring" ? <HiringSection /> : null}
 
@@ -176,30 +181,33 @@ export function SettingsPage({
                                 hint={`${settings.panes} × ${settings.lines_per_second.toLocaleString()} lps — closes every pane first, then reads the HUD`}
                             >
                                 <div className="flex items-center gap-2">
-                                    <button
+                                    <Press
                                         className="rounded-lg border border-turquoise/70 px-3 py-1 font-mono text-xs text-turquoise disabled:opacity-40"
-                                        onClick={on_run_benchmark}
+                                        on_press={on_run_benchmark}
+                                        busy_says="running…"
                                         disabled={busy}
                                     >
                                         run benchmark
-                                    </button>
-                                    <button
+                                    </Press>
+                                    <Press
                                         className="rounded-lg border border-reef px-3 py-1 font-mono text-xs text-shell hover:border-foam disabled:opacity-40"
-                                        onClick={on_open_shells}
+                                        on_press={on_open_shells}
+                                        busy_says="opening…"
                                         disabled={busy}
                                     >
                                         open shells
-                                    </button>
+                                    </Press>
                                 </div>
                             </Row>
                             <Row label="Clear" hint="close every pane, generators and shells alike">
-                                <button
+                                <Press
                                     className="rounded-lg border border-reef px-3 py-1 font-mono text-xs text-shell hover:border-coral hover:text-coral disabled:opacity-40"
-                                    onClick={on_clear}
+                                    on_press={on_clear}
+                                    busy_says="clearing…"
                                     disabled={busy}
                                 >
                                     clear the panes
-                                </button>
+                                </Press>
                             </Row>
                         </div>
                     ) : null}

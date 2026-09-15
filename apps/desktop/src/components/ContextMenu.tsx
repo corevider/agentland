@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { Spinner } from "@/components/Spinner";
 import { place_menu, place_submenu, type Spot } from "@/lib/menu_place";
 
 export interface MenuItem {
@@ -8,7 +9,9 @@ export interface MenuItem {
     danger?: boolean;
     disabled?: boolean;
     items?: MenuItem[];
-    run?: () => void | Promise<void>;
+    /// Whatever it returns is waited for: a row whose work is a promise stays
+    /// open, turning, until the work is done.
+    run?: () => unknown;
 }
 
 export interface MenuRequest {
@@ -54,6 +57,7 @@ export function useContextMenu() {
 
 function Row({ item, on_close }: { item: MenuItem; on_close: () => void }) {
     const [open, set_open] = useState(false);
+    const [running, set_running] = useState(false);
     const [spot, set_spot] = useState<Spot | null>(null);
     const row = useRef<HTMLDivElement>(null);
     const panel = useRef<HTMLDivElement>(null);
@@ -84,18 +88,37 @@ function Row({ item, on_close }: { item: MenuItem; on_close: () => void }) {
     }, [open]);
 
     if (nested.length === 0) {
+        // A row whose work takes a moment stays open and says so until the work
+        // is done. It used to close first and drop what the work returned, so a
+        // slow entry looked exactly like one that had done nothing, and the
+        // person opened the menu again and chose it a second time.
         return (
             <button
                 className={`flex w-full items-baseline justify-between gap-3 px-3 py-2 text-left text-xs disabled:opacity-40 ${
                     item.danger ? "text-coral hover:bg-lagoon" : "text-linen hover:bg-shallow"
-                }`}
-                disabled={item.disabled}
+                } ${running ? "cursor-wait" : ""}`}
+                disabled={item.disabled || running}
+                aria-busy={running || undefined}
                 onClick={() => {
-                    on_close();
-                    void item.run?.();
+                    const result: unknown = item.run?.();
+                    if (!(result instanceof Promise)) {
+                        on_close();
+                        return;
+                    }
+
+                    set_running(true);
+                    result
+                        .catch((cause: unknown) => console.error(cause))
+                        .finally(() => {
+                            set_running(false);
+                            on_close();
+                        });
                 }}
             >
-                <span>{item.label}</span>
+                <span className="inline-flex items-center gap-1.5">
+                    {running ? <Spinner /> : null}
+                    {item.label}
+                </span>
                 {item.hint ? <span className="font-mono text-[10px] text-shade">{item.hint}</span> : null}
             </button>
         );

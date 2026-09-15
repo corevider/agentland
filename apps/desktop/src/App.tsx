@@ -28,6 +28,7 @@ import { Jumper, PlaceTrail } from "@/components/Jumper";
 import { ask_for_a_new_card, ask_for_card } from "@/lib/asked_card";
 import { ask_for_file } from "@/lib/asked_file";
 import { SettingsPage } from "@/components/SettingsPage";
+import { WorkingBar } from "@/components/WorkingBar";
 import { TerminalPane, type PaneMetrics } from "@/components/TerminalPane";
 import {
     is_tauri,
@@ -442,7 +443,17 @@ export default function App() {
 
     const open_session = useCallback(async (session_id: string) => {
         put_away.current.delete(session_id);
-        const current = await list_sessions();
+
+        // Every "open its pane" in the window comes through here, and a core
+        // that did not answer used to reach nothing but the console.
+        let current: SessionInfo[];
+        try {
+            current = await list_sessions();
+        } catch (cause) {
+            set_error(cause instanceof Error ? cause.message : String(cause));
+            return;
+        }
+
         const session = current.find((entry) => entry.id === session_id);
         if (!session) {
             set_error(`session ${session_id} is gone`);
@@ -476,7 +487,14 @@ export default function App() {
     );
 
     const clear = useCallback(async () => {
-        const current = await list_sessions();
+        let current: SessionInfo[];
+        try {
+            current = await list_sessions();
+        } catch (cause) {
+            set_error(cause instanceof Error ? cause.message : String(cause));
+            return;
+        }
+
         await Promise.all(current.map((session) => kill_session(session.id).catch(() => undefined)));
         metrics_ref.current.clear();
         run_ref.current = null;
@@ -858,6 +876,7 @@ export default function App() {
             className="relative flex h-screen flex-col bg-lagoon-deep text-linen"
             onContextMenu={open_window_menu}
         >
+            <WorkingBar />
             <ContextMenu request={menu.request} on_close={menu.close} />
             {settings_open ? (
                 <SettingsPage
@@ -875,7 +894,11 @@ export default function App() {
                         set_settings_open(false);
                         void open_shells();
                     }}
-                    on_clear={() => void clear()}
+                    on_clear={() => clear()}
+                    on_open_pane={(session_id) => {
+                        set_settings_open(false);
+                        return open_session(session_id);
+                    }}
                 />
             ) : null}
 
@@ -1122,10 +1145,9 @@ export default function App() {
                     on_open_panel={focus_panel}
                     on_open_agent={(agent) => {
                         if (agent.session_id) {
-                            void open_session(agent.session_id);
-                        } else {
-                            focus_panel("island");
+                            return open_session(agent.session_id);
                         }
+                        focus_panel("island");
                     }}
                     footer={
                         <div className="flex items-center justify-between font-mono text-[10px] text-shade">
