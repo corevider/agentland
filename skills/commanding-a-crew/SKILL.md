@@ -64,8 +64,14 @@ need it.
 Shape an agent when you hand it work, not once at the start. The right model for
 a step is a property of the step.
 
-If the crew you have cannot cover the plan, hire — `crew_engines` says what is
-installed on this machine, `crew_hire` puts someone in a worktree. Hire for work
+If the crew you have cannot cover the plan, hire — `crew_engines` says what you
+may hire onto, `crew_hire` puts someone in a worktree. It lists only the engines
+and logins the person opened for the crew, with what they wrote about each engine
+and how much of each login's week is gone. Their note is the rule for that
+engine: if it says implementers and not reviews, a reviewer goes elsewhere. Spread
+new hires towards the logins with the most room — a crew that all sits on one
+subscription stops the day that week does — and never on one that says `spent`.
+Anything not listed is refused; ask the person rather than work around it. Hire for work
 you can name and dismiss when it is finished: an idle agent is a pane the human
 has to ignore. Leave the colour to Agentland unless you have a reason; it picks
 one nobody is wearing.

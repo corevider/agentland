@@ -114,7 +114,7 @@ pub fn spending_since(worktree: &Path, since: u64) -> Vec<crate::meter::Spend> {
 /// Hand-rolled because the whole of a date library would be carried for one
 /// format that never varies, and getting this wrong is visible immediately: a
 /// window that never fills, or one that never empties.
-fn seconds_of(stamp: &str) -> Option<u64> {
+pub(crate) fn seconds_of(stamp: &str) -> Option<u64> {
     let (date, rest) = stamp.split_once('T')?;
     let time = rest.split(['.', 'Z']).next()?;
 
@@ -141,11 +141,21 @@ fn seconds_of(stamp: &str) -> Option<u64> {
 
 /// Whether the engine has a record of being told this.
 ///
-/// `None` means there is no transcript to consult — not that nothing arrived.
+/// Asked of Claude Code's transcript for the folder and of the newest Codex
+/// session that ran there, since either engine may be the one sitting in it.
+/// `None` means neither kept a record — not that nothing arrived.
 pub fn was_told(worktree: &Path, fingerprint: &str) -> Option<bool> {
-    let transcript = find(worktree)?;
-    let raw = std::fs::read_to_string(&transcript.path).ok()?;
-    Some(mentions(&raw, fingerprint))
+    let claude = find(worktree)
+        .and_then(|transcript| std::fs::read_to_string(&transcript.path).ok())
+        .map(|raw| mentions(&raw, fingerprint));
+    let codex = crate::rollouts::home(None)
+        .and_then(|home| crate::rollouts::newest_in(&home, worktree))
+        .map(|session| session.mentions(fingerprint));
+
+    match (claude, codex) {
+        (None, None) => None,
+        (claude, codex) => Some(claude.unwrap_or(false) || codex.unwrap_or(false)),
+    }
 }
 
 pub fn mentions(transcript: &str, fingerprint: &str) -> bool {
@@ -179,7 +189,7 @@ fn text_of(row: &serde_json::Value) -> String {
     }
 }
 
-fn squash(text: &str) -> String {
+pub(crate) fn squash(text: &str) -> String {
     text.chars()
         .filter(|character| !character.is_whitespace())
         .flat_map(|character| character.to_lowercase())

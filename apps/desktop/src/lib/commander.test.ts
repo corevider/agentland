@@ -1,8 +1,25 @@
 import { describe, expect, it } from "vitest";
 
-import { chief_of, clear_is_recommended, commander_of } from "@/lib/commander";
+import { chief_of, clear_is_recommended, commander_of, CROWN, crown_of } from "@/lib/commander";
 
 const rested = { has_pane: true, running_plans: 0, open_cards: 0, finished_anything: true };
+
+describe("telling a chief from a commander", () => {
+    it("crowns the chief and the commander differently, and nobody else", () => {
+        expect(crown_of("chief")).toBe("chief");
+        expect(crown_of("commander")).toBe("commander");
+        expect(crown_of("implementer")).toBeNull();
+        expect(crown_of(undefined)).toBeNull();
+    });
+
+    it("says chief on the chief, in a colour of its own", () => {
+        expect(CROWN.chief.word).toBe("chief");
+        expect(CROWN.chief.glyph).not.toBe(CROWN.commander.glyph);
+        expect(CROWN.chief.colour).not.toBe(CROWN.commander.colour);
+        expect(CROWN.chief.says).toContain("chief");
+        expect(CROWN.commander.says).not.toContain("chief");
+    });
+});
 
 describe("recommending a clear chat to the commander", () => {
     it("recommends it once everything it held is over", () => {

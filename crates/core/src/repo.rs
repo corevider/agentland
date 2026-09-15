@@ -197,6 +197,13 @@ fn git(args: &[&str], cwd: Option<&Path>) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
+/// The folder a repository lives in, asked from any of its worktrees: the one
+/// holding the git directory they all share. None outside a repository.
+pub fn root_of(worktree: &Path) -> Option<PathBuf> {
+    let shared = git(&["rev-parse", "--path-format=absolute", "--git-common-dir"], Some(worktree)).ok()?;
+    Path::new(&shared).parent().map(crate::exec::settled)
+}
+
 fn slugify(value: &str) -> String {
     let slug: String = value
         .chars()

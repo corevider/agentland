@@ -27,6 +27,8 @@ import {
 import { what_is_held } from "@/lib/leaving";
 import { hiring_targets, target_value, worktree_for, type Target } from "@/lib/hiring";
 import { Picker } from "@/components/Picker";
+import { read_hiring, type HiringReport } from "@/lib/core";
+import { open_to_the_crew } from "@/lib/hiring_rules";
 
 /// How much an agent does without asking, in the engine's own words.
 const PERMISSIONS = [
@@ -72,17 +74,20 @@ export function CrewPanel({ active, on_open_session }: Props) {
     const [leaving, set_leaving] = useState<{ agent: Agent; holdings: Holdings } | null>(null);
     const [logins, set_logins] = useState<Account[]>([]);
     const [workspaces, set_workspaces] = useState<Workspace[]>([]);
+    const [hiring, set_hiring] = useState<HiringReport | null>(null);
 
     const refresh = useCallback(async () => {
-        const [available, crew, repos, accounts, workspaces] = await Promise.all([
+        const [available, crew, repos, accounts, workspaces, rules] = await Promise.all([
             list_engines(),
             list_agents(),
             list_repos(),
             list_accounts().catch(() => ({ accounts: [] as Account[] })),
             list_workspaces(),
+            read_hiring().catch(() => null),
         ]);
 
         set_engines(available);
+        set_hiring(rules);
         set_agents(crew);
         set_logins(accounts.accounts);
         set_workspaces(workspaces.workspaces);
@@ -93,7 +98,7 @@ export function CrewPanel({ active, on_open_session }: Props) {
 
         set_draft((current) => ({
             ...current,
-            engine_id: current.engine_id || available.find((entry) => entry.installed)?.id || "",
+            engine_id: current.engine_id || open_to_the_crew(available, rules)[0]?.id || "",
             target:
                 open.some((target) => target_value(target) === current.target) || open.length === 0
                     ? current.target
@@ -150,6 +155,7 @@ export function CrewPanel({ active, on_open_session }: Props) {
     }, [agents, now]);
 
     const installed = engines.filter((entry) => entry.installed);
+    const hireable = open_to_the_crew(engines, hiring);
 
     return (
         <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-5 overflow-y-auto p-2.5">
@@ -216,7 +222,7 @@ export function CrewPanel({ active, on_open_session }: Props) {
                             className="rounded-lg border border-reef bg-lagoon-deep px-2 py-1 font-mono text-[11px]"
                             value={draft.engine_id}
                             placeholder="which engine"
-                            choices={installed.map((engine) => ({ value: engine.id, label: engine.name }))}
+                            choices={hireable.map((engine) => ({ value: engine.id, label: engine.name }))}
                             on_pick={(held) => set_draft({ ...draft, engine_id: held })}
                         />
                         <Picker
@@ -303,10 +309,22 @@ export function CrewPanel({ active, on_open_session }: Props) {
                             {agent.name}
                         </span>
                         <span className="text-shell">{agent.role}</span>
-                        <span className="text-turquoise">
-                            {agent.engine_id}
-                            {agent.model ? ` · ${agent.model}` : ""}
-                        </span>
+                        <Picker
+                            className="rounded border border-reef bg-lagoon-deep px-1 py-[1px] font-mono text-[10px] text-turquoise"
+                            title="the engine this agent runs on — a stopped agent moves at once and starts fresh there; stop a running one first"
+                            value={agent.engine_id}
+                            placeholder={agent.engine_id}
+                            choices={hireable.map((engine) => ({ value: engine.id, label: engine.name }))}
+                            on_pick={(held) => {
+                                if (held === agent.engine_id) {
+                                    return;
+                                }
+                                shape_agent(agent.id, { engine_id: held })
+                                    .then(() => refresh())
+                                    .catch((cause) => set_error(String(cause)));
+                            }}
+                        />
+                        {agent.model ? <span className="text-turquoise">{agent.model}</span> : null}
                         <Picker
                             className={`rounded border border-reef bg-lagoon-deep px-1 py-[1px] font-mono text-[10px] ${
                                 agent.permissions === "bypassPermissions" ? "text-coral" : "text-shade"

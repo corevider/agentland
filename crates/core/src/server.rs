@@ -400,6 +400,8 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
         .route("/accounts/failover", post(set_failover))
         .route("/accounts/{engine_id}/{label}", delete(forget_account))
         .route("/accounts/{engine_id}/{label}/login", post(sign_in_account))
+        .route("/hiring", get(read_hiring).post(set_hiring))
+        .route("/hiring/choices", get(hiring_choices))
         .route("/stacks", get(list_starters))
         .route("/repos/{id}/commander", post(ignite))
         .route("/start", post(begin))
@@ -693,8 +695,10 @@ fn identity_for(state: &AppState, agent: &Agent) -> Option<String> {
         // a commander did exactly that: it planned, delegated, was told nobody
         // was there to take the step, and stopped. Nobody being hired yet is
         // the first thing to do, not the reason to stop.
-        "Nobody is hired yet. Read crew_engines for what this machine has, then crew_hire \
-         the people your plan needs — one per step that can run beside another."
+        "Nobody is hired yet. Read crew_engines for what you may hire onto — the engines \
+         and logins the person opened for the crew, what they said each is for, and how \
+         much of each login's week is left — then crew_hire the people your plan needs, \
+         one per step that can run beside another."
             .to_owned()
     } else {
         format!(
@@ -1201,8 +1205,16 @@ fn spawn_supervisor(state: AppState) {
                         continue;
                     };
 
+                    let spends = match agent.engine_id.as_str() {
+                        "codex" => codex_home_of(&state, &agent)
+                            .and_then(|home| codex_session_of(&home, &agent, &entry.worktree.path))
+                            .map(|session| session.spending_since(since))
+                            .unwrap_or_default(),
+                        _ => crate::transcript::spending_since(&entry.worktree.path, since),
+                    };
+
                     let window = fresh.entry(identity_of(&agent)).or_default();
-                    for spend in crate::transcript::spending_since(&entry.worktree.path, since) {
+                    for spend in spends {
                         window.record(spend);
                     }
                 }
@@ -1219,6 +1231,10 @@ fn spawn_supervisor(state: AppState) {
                     continue;
                 };
 
+                if agent.conversation.is_none() && crate::crew::resume_by_id(&agent.engine_id).is_some() {
+                    remember_the_conversation(&state, &agent, &session_id);
+                }
+
                 let tail = state
                     .manager
                     .read_log(&session_id, 8 * 1024)
@@ -1233,7 +1249,14 @@ fn spawn_supervisor(state: AppState) {
                 // what the crew has spent in the last minute, from the record
                 // the engine keeps. Neither number is one this app could count
                 // for itself.
-                if let Some(usage) = crate::budget::read_usage(&tail) {
+                let usage = crate::budget::read_usage(&tail).or_else(|| {
+                    (agent.engine_id == "codex")
+                        .then(|| codex_home_of(&state, &agent))
+                        .flatten()
+                        .and_then(|home| crate::rollouts::usage_in(&home, now))
+                });
+
+                if let Some(usage) = usage {
                     // Attributed to the allowance this agent spends from, not
                     // to a single global number: two subscriptions are two
                     // weeks and neither says anything about the other.
@@ -2254,6 +2277,7 @@ fn standing_in(state: &AppState, called: &str) -> Result<(Workspace, bool), ApiE
         name: called.to_owned(),
         repository_ids: Vec::new(),
         chief: None,
+        engine_id: None,
     })?;
 
     give_it_a_chief(state, &made);
@@ -2312,6 +2336,55 @@ fn room_for(state: &AppState, identity: &str) -> crate::budget::Room {
 }
 
 /// The room an engine has when nobody has named a particular login on it.
+/// Where a Codex agent's sessions are kept: its own login's folder, or this
+/// machine's.
+fn codex_home_of(state: &AppState, agent: &Agent) -> Option<PathBuf> {
+    crate::rollouts::home(
+        crate::accounts::env_for(&state.data_dir, "codex", agent.account.as_deref()).as_ref(),
+    )
+}
+
+/// The Codex session an agent is in: its own once it has been found, or else
+/// the newest one in the folder it works from.
+fn codex_session_of(
+    home: &std::path::Path,
+    agent: &Agent,
+    folder: &std::path::Path,
+) -> Option<crate::rollouts::Rollout> {
+    match agent.conversation.as_deref() {
+        Some(id) => crate::rollouts::find(home, id),
+        None => crate::rollouts::newest_in(home, folder),
+    }
+}
+
+/// Find the conversation a Codex pane opened, so its next start opens that one
+/// again rather than whichever was last in the folder.
+fn remember_the_conversation(state: &AppState, agent: &Agent, session_id: &str) {
+    let Some(started) = state
+        .manager
+        .live(session_id)
+        .map(|session| session.stats().started_at)
+    else {
+        return;
+    };
+    let (Ok(folder), Some(home)) = (where_it_sits(state, agent), codex_home_of(state, agent)) else {
+        return;
+    };
+
+    let taken: Vec<String> = state
+        .crew
+        .list()
+        .into_iter()
+        .filter(|other| other.id != agent.id)
+        .filter_map(|other| other.conversation)
+        .collect();
+
+    if let Some(found) = crate::rollouts::started_in(&home, &folder, started, &taken) {
+        tracing::info!(agent = %agent.id, conversation = %found.id, "found the conversation its pane opened");
+        state.crew.remember_conversation(&agent.id, &found.id);
+    }
+}
+
 fn room_for_engine(state: &AppState, engine: &str) -> crate::budget::Room {
     let wanted = crate::budget::identity_of(engine, None);
 
@@ -4619,6 +4692,8 @@ fn take_on(state: &AppState, request: HireRequest) -> Result<Agent, ApiError> {
         )));
     }
 
+    may_hire_onto(state, &request.engine_id, request.account.as_deref())?;
+
     let commander = request.role == "commander";
     let agent = state.crew.hire(request)?;
 
@@ -5170,6 +5245,21 @@ async fn shape_agent(
     scope: Option<axum::Extension<crate::auth::Scope>>,
     Json(wanted): Json<crate::crew::Shaping>,
 ) -> Result<Json<Agent>, ApiError> {
+    let moving = wanted.engine_id.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    let spending = wanted.account.as_deref().map(str::trim);
+    if moving.is_some() || spending.is_some_and(|value| !value.is_empty()) {
+        if let Some(agent) = state.crew.list().into_iter().find(|entry| entry.id == id) {
+            let engine = moving.unwrap_or(&agent.engine_id);
+            let account = match spending {
+                Some(value) if !value.is_empty() => Some(value),
+                Some(_) => None,
+                None if moving.is_some() => None,
+                None => agent.account.as_deref(),
+            };
+            may_hire_onto(&state, engine, account)?;
+        }
+    }
+
     // The human is the one who decides how much rope the crew gets, and this is
     // their own machine: from the app a raise simply applies. From an agent it
     // does not, whatever the agent says about itself.
@@ -5496,8 +5586,13 @@ async fn create_workspace(
     // panel offers a chief by name instead of a button that says nobody is here
     // yet, and nothing spends a turn until a person asks it to.
     let wanted = body.chief.clone();
+    let engine_id = body
+        .engine_id
+        .as_deref()
+        .map(|chosen| engine_or_the_default(&state, Some(chosen)))
+        .transpose()?;
     let made = state.workspaces.create(body)?;
-    give_it_a_chief_called(&state, &made, wanted.as_deref());
+    give_it_a_chief_called(&state, &made, wanted.as_deref(), engine_id.as_deref());
     Ok(Json(made))
 }
 
@@ -5597,11 +5692,16 @@ async fn ignite(
         .into_iter()
         .find(|agent| agent.role == "commander" && agent.repository_id == repository.id);
 
+    let hiring_on = held
+        .is_none()
+        .then(|| engine_or_the_default(&state, body.engine_id.as_deref()))
+        .transpose()?;
+
     // Hiring is starting work. Telling a commander that already exists is not,
     // so a person can still reach the one they have.
     let room = match &held {
         Some(commander) => room_for(&state, &identity_of(commander)),
-        None => room_for_engine(&state, "claude"),
+        None => room_for_engine(&state, hiring_on.as_deref().unwrap_or_default()),
     };
 
     if held.is_none() && !room.may_start_work() {
@@ -5619,21 +5719,7 @@ async fn ignite(
                 did.push(format!("gave {} a desk on {}", repository.name, desk.branch));
             }
 
-            let engine_id = match body
-                .engine_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                Some(chosen) => chosen.to_owned(),
-                None => crate::start::engine_for_a_commander(&crate::crew::engines()).ok_or_else(
-                    || {
-                        ApiError(anyhow::anyhow!(
-                            "no coding agent is installed — put one on PATH and start again"
-                        ))
-                    },
-                )?,
-            };
+            let engine_id = hiring_on.clone().unwrap_or_default();
 
             let hired = take_on(
                 &state,
@@ -5982,14 +6068,7 @@ fn take_the_workspace_on(
     name: Option<&str>,
     engine_id: Option<&str>,
 ) -> Result<Agent, ApiError> {
-    let engine_id = match engine_id.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(chosen) => chosen.to_owned(),
-        None => crate::start::engine_for_a_commander(&crate::crew::engines()).ok_or_else(|| {
-            ApiError(anyhow::anyhow!(
-                "no coding agent is installed — put one on PATH and start again"
-            ))
-        })?,
-    };
+    let engine_id = engine_or_the_default(state, engine_id)?;
 
     let ids: Vec<String> = state.crew.list().into_iter().map(|agent| agent.id).collect();
     let wanted = name
@@ -6032,16 +6111,51 @@ fn take_the_workspace_on(
 /// Called where a workspace comes into being. A machine with no engine on PATH
 /// still gets its workspace — the chief is what is missing, not the workspace,
 /// and the panel says so with a button rather than an error nobody asked for.
-fn give_it_a_chief(state: &AppState, workspace: &Workspace) {
-    give_it_a_chief_called(state, workspace, None);
+/// The engine a chief or commander is hired on: the one a person chose, as long
+/// as it is on this machine, or else the first installed one that takes the
+/// crew's tools.
+fn engine_or_the_default(state: &AppState, chosen: Option<&str>) -> Result<String, ApiError> {
+    let rules = hiring_rules(state);
+    let engines: Vec<crate::crew::Engine> = crate::crew::engines()
+        .into_iter()
+        .filter(|engine| rules.engine_open(engine.id))
+        .collect();
+
+    match chosen.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(chosen) => {
+            if !rules.engine_open(chosen) {
+                may_hire_onto(state, chosen, None)?;
+            }
+
+            engines
+                .iter()
+                .find(|engine| engine.id == chosen && engine.installed)
+                .map(|engine| engine.id.to_owned())
+                .ok_or_else(|| ApiError(anyhow::anyhow!("{chosen} is not installed on this machine")))
+        }
+        None => crate::start::engine_for_a_commander(&engines).ok_or_else(|| {
+            ApiError(anyhow::anyhow!(
+                "no coding agent the crew may use is installed — put one on PATH, or open one in the hiring settings"
+            ))
+        }),
+    }
 }
 
-fn give_it_a_chief_called(state: &AppState, workspace: &Workspace, name: Option<&str>) {
+fn give_it_a_chief(state: &AppState, workspace: &Workspace) {
+    give_it_a_chief_called(state, workspace, None, None);
+}
+
+fn give_it_a_chief_called(
+    state: &AppState,
+    workspace: &Workspace,
+    name: Option<&str>,
+    engine_id: Option<&str>,
+) {
     if chief_of(state, &workspace.id).is_some() {
         return;
     }
 
-    match take_the_workspace_on(state, workspace, name, None) {
+    match take_the_workspace_on(state, workspace, name, engine_id) {
         Ok(chief) => tracing::info!(chief = %chief.id, workspace = %workspace.id, "hired, and waiting"),
         Err(error) => tracing::info!(error = %error.0, workspace = %workspace.id, "no chief yet"),
     }
@@ -6078,9 +6192,14 @@ async fn command_the_workspace(
 
     // Hiring is starting work. Telling a chief that already exists is not, so a
     // person can still reach the one they have when the week is nearly gone.
+    let hiring_on = held
+        .is_none()
+        .then(|| engine_or_the_default(&state, body.engine_id.as_deref()))
+        .transpose()?;
+
     let room = match &held {
         Some(chief) => room_for(&state, &identity_of(chief)),
-        None => room_for_engine(&state, "claude"),
+        None => room_for_engine(&state, hiring_on.as_deref().unwrap_or_default()),
     };
 
     if held.is_none() && !room.may_start_work() {
@@ -6097,7 +6216,7 @@ async fn command_the_workspace(
                 &state,
                 &workspace,
                 body.name.as_deref(),
-                body.engine_id.as_deref(),
+                hiring_on.as_deref(),
             )?;
             did.push(format!("hired {} to command {}", hired.name, workspace.name));
             hired
@@ -6293,8 +6412,10 @@ async fn hand_over_to_a_stand_in(state: &AppState, agent: &crate::crew::Agent) {
     let data_dir = state.config.data_dir.clone();
     let engine = agent.engine_id.clone();
 
+    let rules = hiring_rules(state);
     let spent = |label: &str| {
-        !room_for(state, &crate::budget::identity_of(&engine, Some(label))).may_start_work()
+        !rules.login_open(&engine, Some(label))
+            || !room_for(state, &crate::budget::identity_of(&engine, Some(label))).may_start_work()
     };
 
     let Some(stand_in) = crate::accounts::stand_in(&data_dir, &engine, agent.account.as_deref(), &spent)
@@ -6395,6 +6516,157 @@ async fn set_failover(
     crate::db::save_state(&state.config.data_dir, "settings", &*state.settings.lock());
 
     list_accounts(State(state)).await
+}
+
+const HIRING: &str = "hiring";
+
+/// What the person decided the crew may hire onto.
+fn hiring_rules(state: &AppState) -> crate::hiring::Rules {
+    state
+        .settings
+        .lock()
+        .get(HIRING)
+        .and_then(|held| serde_json::from_str(held).ok())
+        .unwrap_or_default()
+}
+
+/// Refuse a hire or a move onto an engine or a login the person closed.
+fn may_hire_onto(state: &AppState, engine_id: &str, account: Option<&str>) -> Result<(), ApiError> {
+    let rules = hiring_rules(state);
+    if rules.login_open(engine_id, account) {
+        return Ok(());
+    }
+
+    let open: Vec<&str> = crate::crew::engines()
+        .into_iter()
+        .filter(|engine| engine.installed && rules.engine_open(engine.id))
+        .map(|engine| engine.id)
+        .collect();
+
+    Ok(rules.allow(engine_id, account, &open)?)
+}
+
+#[derive(Serialize)]
+struct HireableLogin {
+    /// None for the login this machine is signed in as.
+    account: Option<String>,
+    open: bool,
+    /// What the engine says, where it can be asked; None where it cannot.
+    signed_in: Option<bool>,
+    room: crate::budget::Room,
+    session_percent: Option<f32>,
+    weekly_percent: Option<f32>,
+}
+
+#[derive(Serialize)]
+struct HireableEngine {
+    id: String,
+    name: String,
+    installed: bool,
+    takes_the_tools: bool,
+    open: bool,
+    note: Option<String>,
+    model_flag: Option<&'static str>,
+    logins: Vec<HireableLogin>,
+}
+
+#[derive(Serialize)]
+struct HiringReport {
+    rules: crate::hiring::Rules,
+    engines: Vec<HireableEngine>,
+}
+
+fn login_as_hired(
+    state: &AppState,
+    rules: &crate::hiring::Rules,
+    engine_id: &str,
+    account: Option<&str>,
+    signed_in: Option<bool>,
+) -> HireableLogin {
+    let identity = crate::budget::identity_of(engine_id, account);
+    let read = state.quota.lock().get(&identity).map(|(usage, _)| *usage);
+
+    HireableLogin {
+        account: account.map(str::to_owned),
+        open: rules.login_open(engine_id, account),
+        signed_in,
+        room: room_for(state, &identity),
+        session_percent: read.map(|usage| usage.session),
+        weekly_percent: read.map(|usage| usage.weekly),
+    }
+}
+
+/// Every engine with its logins, as the one hiring needs to see them: whether
+/// the person opened it, what they said it is for, and how much room each
+/// login has. `only_open` leaves out what the crew may not choose.
+fn engines_to_hire_onto(state: &AppState, only_open: bool) -> Vec<HireableEngine> {
+    let rules = hiring_rules(state);
+    let data_dir = state.config.data_dir.clone();
+
+    crate::crew::engines()
+        .into_iter()
+        .filter(|engine| !only_open || (engine.installed && rules.engine_open(engine.id)))
+        .map(|engine| {
+            let mut logins = Vec::new();
+            if engine.installed {
+                logins.push(login_as_hired(state, &rules, engine.id, None, None));
+                for account in crate::accounts::list(&data_dir, engine.id) {
+                    let signed_in = account.askable.then_some(account.signed_in);
+                    logins.push(login_as_hired(state, &rules, engine.id, Some(&account.label), signed_in));
+                }
+            }
+            if only_open {
+                logins.retain(|login| login.open);
+            }
+
+            HireableEngine {
+                id: engine.id.to_owned(),
+                name: engine.name.to_owned(),
+                installed: engine.installed,
+                takes_the_tools: engine.takes_the_tools,
+                open: rules.engine_open(engine.id),
+                note: rules.note(engine.id).map(str::to_owned),
+                model_flag: engine.model_flag,
+                logins,
+            }
+        })
+        .collect()
+}
+
+async fn read_hiring(State(state): State<AppState>) -> Json<HiringReport> {
+    Json(HiringReport {
+        rules: hiring_rules(&state),
+        engines: engines_to_hire_onto(&state, false),
+    })
+}
+
+/// What the chief and the commanders may choose from when they hire.
+async fn hiring_choices(State(state): State<AppState>) -> Json<Vec<HireableEngine>> {
+    Json(engines_to_hire_onto(&state, true))
+}
+
+/// Change what the crew may hire onto. The person's to decide: an agent that
+/// could open an engine for itself would make the rule a suggestion.
+async fn set_hiring(
+    State(state): State<AppState>,
+    scope: Option<axum::Extension<crate::auth::Scope>>,
+    Json(rules): Json<crate::hiring::Rules>,
+) -> Result<Json<HiringReport>, ApiError> {
+    let asked_by_a_human = matches!(
+        scope.map(|axum::Extension(held)| held),
+        Some(crate::auth::Scope::Full) | None
+    );
+    if !asked_by_a_human {
+        return Err(ApiError(anyhow::anyhow!(
+            "what the crew may hire onto is the person's to decide"
+        )));
+    }
+
+    let rendered = serde_json::to_string(&rules).map_err(|error| ApiError(error.into()))?;
+    state.settings.lock().insert(HIRING.to_owned(), rendered);
+    crate::db::save_state(&state.config.data_dir, "settings", &*state.settings.lock());
+
+    Ok(read_hiring(State(state)).await)
 }
 
 #[derive(Serialize)]
@@ -7716,6 +7988,7 @@ async fn begin(
                 name: name.to_owned(),
                 repository_ids: Vec::new(),
                 chief: None,
+                engine_id: None,
             })?;
             give_it_a_chief(&state, &made);
             did.push(format!("made the {} workspace", made.name));
@@ -7777,21 +8050,7 @@ async fn begin(
     let commander = match held {
         Some(commander) => commander,
         None => {
-            let engine_id = match body
-                .engine_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                Some(chosen) => chosen.to_owned(),
-                None => crate::start::engine_for_a_commander(&crate::crew::engines()).ok_or_else(
-                    || {
-                        ApiError(anyhow::anyhow!(
-                            "no coding agent is installed — put one on PATH and start again"
-                        ))
-                    },
-                )?,
-            };
+            let engine_id = engine_or_the_default(&state, body.engine_id.as_deref())?;
 
             let ids: Vec<String> = crew.iter().map(|agent| agent.id.clone()).collect();
             let hired = take_on(

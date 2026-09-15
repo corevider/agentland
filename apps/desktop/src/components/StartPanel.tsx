@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
     begin_project,
-    list_engines,
     list_starters,
     type Begun,
     type Engine,
@@ -16,6 +15,7 @@ import {
 import { Spinner, Waiting } from "@/components/Spinner";
 import { recipe_for } from "@/lib/installs";
 import { name_trouble } from "@/lib/naming";
+import { hireable_engines } from "@/lib/hiring_rules";
 import { as_url, clone_target, is_clonable, pick_folder } from "@/lib/pick";
 import { use_services } from "@/workspace/registry";
 import { Picker } from "@/components/Picker";
@@ -97,8 +97,8 @@ export function StartPanel({ active }: { active: boolean }) {
             return;
         }
 
-        list_engines()
-            .then((known) => set_engines(known.filter((engine) => engine.installed)))
+        hireable_engines()
+            .then(set_engines)
             .catch(() => undefined);
     }, [active]);
 

@@ -39,6 +39,7 @@ import {
 } from "@/lib/grid";
 import { apply_order, move_onto, order_of, prune_order } from "@/lib/order";
 import { belongs_here } from "@/lib/places";
+import { crown_of } from "@/lib/commander";
 import {
     folder_name,
     out_of_sight,
@@ -978,12 +979,9 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                     place={place_label(session.cwd, known.repos, known.trees)}
                     crew_name={agent_of(session.id)?.name}
                     crew_role={agent_of(session.id)?.role}
-                    crowned={(() => {
-                        const role = services.crew.find(
-                            (agent) => agent.session_id === session.id,
-                        )?.role;
-                        return role === "commander" || role === "chief";
-                    })()}
+                    crown={crown_of(
+                        services.crew.find((agent) => agent.session_id === session.id)?.role,
+                    )}
                     kept={services.crew.some((agent) => agent.session_id === session.id)}
                     focused={
                         active &&

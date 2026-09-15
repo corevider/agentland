@@ -23,6 +23,7 @@ import {
     type StationPlacement,
     type Tier,
 } from "@/island/geometry";
+import { CROWN } from "@/lib/commander";
 
 
 function Terrain({ tier, seed }: { tier: Tier; seed: string }) {
@@ -143,6 +144,19 @@ function Station({
                     <coneGeometry args={[0.12, 0.7, 5]} />
                     <meshLambertMaterial color="#9aa7ad" flatShading />
                 </mesh>
+            ) : null}
+
+            {shape === "flag" ? (
+                <group position={[0.74, 0, -0.3]} userData={{ agent_id: agent.id }}>
+                    <mesh position={[0, 0.7, 0]} castShadow userData={{ agent_id: agent.id }}>
+                        <cylinderGeometry args={[0.035, 0.045, 1.4, 6]} />
+                        <meshLambertMaterial color="#d8d2c0" flatShading />
+                    </mesh>
+                    <mesh position={[0.22, 1.22, 0]} castShadow userData={{ agent_id: agent.id }}>
+                        <boxGeometry args={[0.42, 0.26, 0.03]} />
+                        <meshLambertMaterial color={CROWN.chief.colour} flatShading />
+                    </mesh>
+                </group>
             ) : null}
 
             {shape === "workbench" ? (

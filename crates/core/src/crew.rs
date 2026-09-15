@@ -278,6 +278,12 @@ pub fn engines() -> Vec<Engine> {
 /// same server is spelled out as overrides — nothing written to anybody's
 /// `config.toml`, and no secret in the argument list, because what the tool
 /// needs to reach the core is in a file only it is told the path of.
+///
+/// Codex also asks before every call to an MCP server's tools, which in a crew
+/// pane is a commander stopping at each card it moves — measured on
+/// `codex-cli 0.153.4` as "MCP tool call requires approval". The asking is
+/// waived for Agentland's own server and nothing else; the sandbox still
+/// decides what a command may do.
 pub fn tools_for(engine_id: &str, tools: &Path, endpoint: &Path) -> Vec<String> {
     match engine_id {
         "claude" => vec![
@@ -295,6 +301,8 @@ pub fn tools_for(engine_id: &str, tools: &Path, endpoint: &Path) -> Vec<String> 
                     "mcp_servers.agentland.args=[\"--endpoint\",\"{}\"]",
                     endpoint.to_string_lossy()
                 ),
+                "-c".to_owned(),
+                "mcp_servers.agentland.default_tools_approval_mode=\"approve\"".to_owned(),
             ]
         }
         // Gemini already has the file, in the worktree where it looks. What it
@@ -331,6 +339,50 @@ fn approve_the_tools(engine_id: &str, worktree: &Path) {
         .args(["mcp", "enable", "agentland"])
         .current_dir(worktree)
         .output();
+}
+
+/// What an engine is told so that its pane opens straight onto the work.
+///
+/// Codex stops at "do you trust the contents of this directory?" in any folder
+/// it has not been told about, and at "update available" on every start while
+/// a newer version is out, each waiting for a person in a pane nobody is
+/// watching — measured on `codex-cli 0.153.4`, where a hired agent sat on the
+/// first for as long as it was left. Both are answered on the command line for
+/// this one process, so nothing lands in anybody's `config.toml`. Codex keys
+/// trust on the repository a worktree belongs to, so the repository is named
+/// along with the folder itself.
+pub fn quiet_start(engine_id: &str, worktree: &Path) -> Vec<String> {
+    match engine_id {
+        "codex" => {
+            let mut trusted = vec![crate::exec::settled(worktree)];
+            if let Some(root) = crate::repo::root_of(worktree).filter(|root| !trusted.contains(root)) {
+                trusted.push(root);
+            }
+
+            vec![
+                "-c".to_owned(),
+                "check_for_update_on_startup=false".to_owned(),
+                "-c".to_owned(),
+                format!("projects={}", trust_table(&trusted)),
+            ]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Folders as a TOML inline table of trusted projects. The dotted spelling,
+/// `projects."/a/b".trust_level=…`, is not read as a path by Codex's `-c` —
+/// measured, the question still came — so the table is written whole.
+fn trust_table(folders: &[PathBuf]) -> String {
+    let entries: Vec<String> = folders
+        .iter()
+        .map(|folder| {
+            let spelled = folder.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"");
+            format!("\"{spelled}\"={{trust_level=\"trusted\"}}")
+        })
+        .collect();
+
+    format!("{{{}}}", entries.join(","))
 }
 
 /// The tool program, read back out of the file written for the engine that
@@ -408,6 +460,19 @@ fn what_was_handed(data_dir: &std::path::Path) -> Vec<String> {
             crate::permits::reading_under(&folder)
         })
         .collect()
+}
+
+/// The word that opens one of this engine's conversations again by the id the
+/// engine gave it, where the engine names its own and cannot be handed a name.
+///
+/// A brief can follow it. `codex resume <id> <prompt>` binds the id first, so
+/// the prompt is read as the prompt — unlike `resume --last <prompt>`, where a
+/// lone word is taken for the name of a session.
+pub fn resume_by_id(engine_id: &str) -> Option<&'static str> {
+    match engine_id {
+        "codex" => Some("resume"),
+        _ => None,
+    }
 }
 
 pub fn settings_flag(engine_id: &str) -> Option<&'static str> {
@@ -545,6 +610,10 @@ pub struct Shaping {
     /// fixed when the process starts, and nothing can move it after.
     #[serde(default)]
     pub account: Option<String>,
+    /// Which engine this agent runs on from its next start. Its conversation,
+    /// model and login belong to the engine it leaves, so they are left there.
+    #[serde(default)]
+    pub engine_id: Option<String>,
     /// Set by the core when a human has approved this exact raise; never by the
     /// commander, which is why it is not in the tool it calls.
     #[serde(default, skip)]
@@ -816,11 +885,43 @@ impl Crew {
     /// What the commander decided about an agent. Only the fields it names change;
     /// the rest keep whatever they had, so one decision at a time is possible.
     pub fn shape(&self, id: &str, wanted: Shaping) -> Result<Agent> {
+        let moving_to = wanted
+            .engine_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|chosen| !chosen.is_empty())
+            .map(|chosen| engine(chosen).ok_or_else(|| anyhow!("unknown engine: {chosen}")))
+            .transpose()?;
+
         let mut state = self.state.lock();
         let agent = state
             .agents
             .get_mut(id)
             .ok_or_else(|| anyhow!("unknown agent: {id}"))?;
+
+        if let Some(moving_to) = moving_to.filter(|chosen| chosen.id != agent.engine_id) {
+            if !moving_to.installed {
+                bail!("{} is not on PATH", moving_to.command);
+            }
+
+            let running = agent
+                .session_id
+                .as_deref()
+                .is_some_and(|session| self.manager.live(session).is_some());
+            if running {
+                bail!(
+                    "{} is running on {} — stop it before moving it to {}",
+                    agent.id,
+                    agent.engine_id,
+                    moving_to.id
+                );
+            }
+
+            agent.engine_id = moving_to.id.to_owned();
+            agent.model = model_for_role(moving_to.id, &agent.role).map(str::to_owned);
+            agent.conversation = None;
+            agent.account = None;
+        }
 
         if let Some(model) = wanted.model {
             let trimmed = model.trim().to_owned();
@@ -1042,6 +1143,8 @@ impl Crew {
             approve_the_tools(&agent.engine_id, worktree_path);
         }
 
+        args.extend(quiet_start(&agent.engine_id, worktree_path));
+
         let mode = agent
             .permissions
             .as_deref()
@@ -1134,10 +1237,26 @@ impl Crew {
             // handed to an argument that means something else. A brief that
             // vanishes is an agent sitting at a prompt with nothing to do; a
             // fresh session that has been told what to do is only a shorter
-            // memory.
+            // memory. An engine that names its own conversations is opened
+            // by that name once it has been found, and then the brief travels.
             None => {
-                if resume && !engine.resume.is_empty() && (engine.resume_carries_a_brief || brief.is_none()) {
-                    args.extend(engine.resume.iter().map(|word| (*word).to_owned()));
+                let reopening = match (resume, resume_by_id(&agent.engine_id), conversation.as_deref()) {
+                    (true, Some(word), Some(id))
+                        if crate::rollouts::home(login.as_ref())
+                            .is_some_and(|home| crate::rollouts::find(&home, id).is_some()) =>
+                    {
+                        Some([word.to_owned(), id.to_owned()])
+                    }
+                    _ => None,
+                };
+
+                if let Some(words) = reopening {
+                    args.extend(words);
+                } else {
+                    conversation = None;
+                    if resume && !engine.resume.is_empty() && (engine.resume_carries_a_brief || brief.is_none()) {
+                        args.extend(engine.resume.iter().map(|word| (*word).to_owned()));
+                    }
                 }
             }
         }
@@ -1195,6 +1314,22 @@ impl Crew {
         self.persist(&state);
 
         Ok(updated)
+    }
+
+    /// Keep the conversation a pane turned out to have opened, so the next start
+    /// opens it again. Filled in once and never overwritten.
+    pub fn remember_conversation(&self, id: &str, conversation: &str) {
+        let mut state = self.state.lock();
+        let kept = state
+            .agents
+            .get_mut(id)
+            .filter(|agent| agent.conversation.is_none())
+            .map(|agent| agent.conversation = Some(conversation.to_owned()))
+            .is_some();
+
+        if kept {
+            self.persist(&state);
+        }
     }
 
     /// Say whether an agent is mid-turn, from what its pane is actually doing.
@@ -1618,6 +1753,12 @@ mod model_tests {
         assert_eq!(
             said[3],
             "mcp_servers.agentland.args=[\"--endpoint\",\"/d/endpoint.json\"]"
+        );
+        assert_eq!(said[4], "-c");
+        assert_eq!(
+            said[5],
+            "mcp_servers.agentland.default_tools_approval_mode=\"approve\"",
+            "a commander that asks before every card it moves is a commander that stops"
         );
 
         // Nothing in the argument list is a secret. The tool is told where to
@@ -2089,6 +2230,100 @@ mod pane_tests {
             permissions: None,
             account: None,
         }
+    }
+
+    #[test]
+    fn an_agent_is_not_moved_to_an_engine_nobody_has_heard_of() {
+        let crew = crew_with("unknown-engine", an_agent(None, AgentState::Offline));
+
+        let refused = crew
+            .shape("ada", Shaping { engine_id: Some("nothing-real".into()), ..Shaping::default() })
+            .expect_err("there is no such engine");
+
+        assert!(refused.to_string().contains("unknown engine"), "{refused}");
+        assert_eq!(held(&crew).engine_id, "claude");
+    }
+
+    #[test]
+    fn moving_to_another_engine_leaves_the_old_ones_words_behind() {
+        if !engine("codex").is_some_and(|codex| codex.installed) {
+            return;
+        }
+
+        let mut agent = an_agent(None, AgentState::Offline);
+        agent.model = Some("haiku".into());
+        agent.conversation = Some("a-claude-conversation".into());
+        agent.account = Some("work".into());
+        let crew = crew_with("moving-engine", agent);
+
+        let moved = crew
+            .shape("ada", Shaping { engine_id: Some("codex".into()), ..Shaping::default() })
+            .expect("codex is installed");
+
+        assert_eq!(moved.engine_id, "codex");
+        assert_eq!(moved.model, None, "haiku is a word only Claude Code knows");
+        assert_eq!(moved.conversation, None, "Codex cannot resume a Claude conversation");
+        assert_eq!(moved.account, None, "a Claude login is not a Codex one");
+    }
+
+    #[test]
+    fn naming_the_engine_it_already_runs_on_changes_nothing() {
+        let mut agent = an_agent(None, AgentState::Offline);
+        agent.conversation = Some("kept".into());
+        let crew = crew_with("same-engine", agent);
+
+        let shaped = crew
+            .shape("ada", Shaping { engine_id: Some("claude".into()), ..Shaping::default() })
+            .expect("claude is in the catalog");
+
+        assert_eq!(shaped.conversation.as_deref(), Some("kept"));
+    }
+
+    #[test]
+    fn codex_is_told_the_folder_is_trusted_and_not_to_ask_about_updates() {
+        let said = quiet_start("codex", Path::new("/nowhere/at-all"));
+
+        assert_eq!(said[..2], ["-c", "check_for_update_on_startup=false"]);
+        assert_eq!(said[2], "-c");
+        assert!(said[3].starts_with("projects={\""), "{said:?}");
+        assert!(said[3].contains("={trust_level=\"trusted\"}"), "{said:?}");
+
+        assert!(
+            quiet_start("claude", Path::new("/nowhere/at-all")).is_empty(),
+            "Claude Code is told through its own file"
+        );
+    }
+
+    #[test]
+    fn codex_trusts_the_repository_a_worktree_belongs_to() {
+        let dir = scratch("trusting-a-worktree");
+        let git = |args: &[&str]| {
+            crate::exec::command("git")
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .is_ok_and(|output| output.status.success())
+        };
+        let made = git(&["init", "-q", "repo"])
+            && git(&["-C", "repo", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "start"])
+            && git(&["-C", "repo", "worktree", "add", "-q", "../tree"]);
+        if !made {
+            return;
+        }
+
+        let said = quiet_start("codex", &dir.join("tree"));
+        let table = trust_table(&[crate::exec::settled(&dir.join("repo"))]);
+        let entry = table.strip_prefix('{').and_then(|held| held.strip_suffix('}')).expect("a table");
+
+        assert!(said[3].contains(entry), "Codex asks about the repository, not the worktree: {said:?}");
+    }
+
+    #[test]
+    fn a_trusted_folder_is_spelled_as_toml_whatever_is_in_its_name() {
+        assert_eq!(
+            trust_table(&[PathBuf::from("/w/desk"), PathBuf::from(r#"C:\a "quoted" dir"#)]),
+            r#"{"/w/desk"={trust_level="trusted"},"C:\\a \"quoted\" dir"={trust_level="trusted"}}"#
+        );
     }
 
     /// A crew as it is found on disk when the app starts: the agent was written

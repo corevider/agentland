@@ -190,6 +190,7 @@ export function Picker({
                 ? createPortal(
                       <div
                           ref={popup}
+                          data-picker-popup=""
                           className="fixed z-50 flex flex-col overflow-hidden rounded-lg border border-foam bg-lagoon-deep shadow-lg"
                           style={{
                               left: where.left,

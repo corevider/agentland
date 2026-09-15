@@ -239,7 +239,7 @@ fn tools() -> Value {
                         "type": "string",
                         "description": "implementer, reviewer, tester, security, ops or commander. reviewer, tester and security read and report rather than edit, and a card waits for every one of them the crew holds before a person is asked to merge it — hire the checks this work actually needs rather than all of them."
                     },
-                    "engine_id": { "type": "string", "description": "claude, codex, gemini and so on — see crew_engines" },
+                    "engine_id": { "type": "string", "description": "one of the engines crew_engines lists — anything else is closed to the crew and refused" },
                     "repository_id": { "type": "string" },
                     "worktree": { "type": "string", "description": "an existing worktree of that repository" },
                     "model": { "type": "string" },
@@ -252,7 +252,7 @@ fn tools() -> Value {
                     },
                     "account": {
                         "type": "string",
-                        "description": "which login on this engine the agent spends from, from crew_accounts. Leave it out to spend from whoever the machine is signed in as. Spreading the crew across the logins that exist is how a week lasts the week."
+                        "description": "which login on this engine the agent spends from, one crew_engines lists under it. Leave it out to spend from whoever the machine is signed in as, if crew_engines lists that login. Spreading the crew across the logins with room left is how a week lasts the week."
                     }
                 },
                 "required": ["name", "engine_id", "repository_id", "worktree"]
@@ -260,12 +260,12 @@ fn tools() -> Value {
         },
         {
             "name": "crew_accounts",
-            "description": "The logins this machine holds, per engine, and whether each is really signed in — read from the engine's own status rather than remembered. Hire onto one by passing its label as account, so two subscriptions on the same engine spend two separate weeks. An engine missing from this list holds one login only.",
+            "description": "The logins this machine holds, per engine, and whether each is really signed in — read from the engine's own status rather than remembered. Which of them the crew may spend from, and how much of each week is left, is in crew_engines; hire from there.",
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
             "name": "crew_engines",
-            "description": "The engines installed on this machine, with the flag each takes for choosing a model. Read this before hiring rather than assuming an engine is there.",
+            "description": "What you may hire onto: the engines the person opened for the crew, what they said each one is for, the flag each takes for choosing a model, and the logins on each you may spend from — with how much of each login's week and five hours is gone and whether it has room. Read it before every hire. Follow the person's notes, and put new work on the logins with the most room left rather than all on one.",
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
@@ -670,7 +670,7 @@ fn call_tool(core: &Core, name: &str, arguments: &Value) -> Result<Value, String
                 None,
             )
         }
-        "crew_engines" => core.call("GET", "/engines", None),
+        "crew_engines" => core.call("GET", "/hiring/choices", None),
         "crew_accounts" => core.call("GET", "/accounts", None),
         "crew_hire" => core.call(
             "POST",
