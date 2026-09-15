@@ -1009,6 +1009,8 @@ fn spawn_supervisor(state: AppState) {
         // The last model switch each agent's engine made, so a switch still on
         // the screen is said once and not on every tick.
         let mut switched: BTreeMap<String, String> = BTreeMap::new();
+        // When every Codex login's own sessions were last read for its limits.
+        let mut codex_read_at: u64 = 0;
 
         loop {
             interval.tick().await;
@@ -1243,6 +1245,23 @@ fn spawn_supervisor(state: AppState) {
                 *state.spending.lock() = fresh;
             }
 
+            // Every login's limits from the engines' own records rather than a
+            // pane's screen: what Claude Code handed the status line of any
+            // pane, and what each Codex login's newest session says. So a login
+            // has numbers before any pane of it has drawn a line.
+            let told = crate::status_line::readings(&state.data_dir, now);
+            for (identity, (usage, at)) in &told {
+                note_reading(&state, identity.clone(), *usage, *at);
+            }
+            if now.saturating_sub(codex_read_at) >= 60 {
+                codex_read_at = now;
+                for (identity, home) in codex_homes(&state) {
+                    if let Some(usage) = crate::rollouts::usage_in(&home, now) {
+                        note_reading(&state, identity, usage, now);
+                    }
+                }
+            }
+
             // What the panes say about themselves, once per tick: an agent that
             // finished its turn gives its slot back, and one that is mid-turn
             // takes it. Without this an idle pane counts against the engine cap
@@ -1270,25 +1289,29 @@ fn spawn_supervisor(state: AppState) {
                 // what the crew has spent in the last minute, from the record
                 // the engine keeps. Neither number is one this app could count
                 // for itself.
-                let usage = crate::budget::read_usage(&tail).or_else(|| {
-                    (agent.engine_id == "codex")
-                        .then(|| codex_home_of(&state, &agent))
-                        .flatten()
-                        .and_then(|home| crate::rollouts::usage_in(&home, now))
-                });
+                // Claude Code's own word, handed to the status line, speaks
+                // over the same numbers read back off the screen while fresh.
+                let identity = identity_of(&agent);
+                let reading = told
+                    .get(&identity)
+                    .copied()
+                    .filter(|(_, at)| now.saturating_sub(*at) < crate::status_line::FRESH)
+                    .or_else(|| {
+                        crate::budget::read_usage(&tail)
+                            .or_else(|| {
+                                (agent.engine_id == "codex")
+                                    .then(|| codex_home_of(&state, &agent))
+                                    .flatten()
+                                    .and_then(|home| crate::rollouts::usage_in(&home, now))
+                            })
+                            .map(|usage| (usage, now))
+                    });
 
-                if let Some(usage) = usage {
+                if let Some((usage, at)) = reading {
                     // Attributed to the allowance this agent spends from, not
                     // to a single global number: two subscriptions are two
-                    // weeks and neither says anything about the other. Written
-                    // down as well, so a restart does not blank every reading
-                    // until each pane happens to draw its status line again.
-                    let identity = identity_of(&agent);
-                    let mut quota = state.quota.lock();
-                    if crate::budget::worth_keeping(quota.get(&identity).copied(), usage, now) {
-                        quota.insert(identity, (usage, now));
-                        crate::db::save_state(&state.data_dir, "quota", &*quota);
-                    }
+                    // weeks and neither says anything about the other.
+                    note_reading(&state, identity, usage, at);
                 }
 
                 let limit = crate::context::read_rate_limit(&tail);
@@ -1306,8 +1329,8 @@ fn spawn_supervisor(state: AppState) {
                 // nowhere else to do it. The move waits for the pane to be at
                 // rest: it trades the pane for a new one, and doing that in the
                 // middle of a turn throws the turn away.
-                let past = usage.and_then(|held| {
-                    crate::budget::past_the_switch(held, now, now, switch_at(&state), session_switch_at(&state))
+                let past = reading.and_then(|(held, at)| {
+                    crate::budget::past_the_switch(held, at, now, switch_at(&state), session_switch_at(&state))
                 });
                 if (past.is_some() || state.limits.is_held(&agent.id))
                     && !working
@@ -2706,6 +2729,35 @@ async fn carry_on_after_limits(state: &AppState, now: u64) {
 /// Which allowance this agent spends from.
 fn identity_of(agent: &Agent) -> String {
     crate::budget::identity_of(&agent.engine_id, agent.account.as_deref())
+}
+
+/// Take a reading of a login's five hours and week, and write it down so a
+/// restart does not blank it until some pane happens to say it again. Two
+/// sources speak about one login, so a reading older than the one held is
+/// dropped.
+fn note_reading(state: &AppState, identity: String, usage: crate::budget::Usage, at: u64) {
+    let mut quota = state.quota.lock();
+    let held = quota.get(&identity).copied();
+    if held.is_some_and(|(_, then)| then > at) || !crate::budget::worth_keeping(held, usage, at) {
+        return;
+    }
+
+    quota.insert(identity, (usage, at));
+    crate::db::save_state(&state.data_dir, "quota", &*quota);
+}
+
+/// Every Codex login's folder: this machine's own, and each one named here.
+fn codex_homes(state: &AppState) -> Vec<(String, PathBuf)> {
+    let own = crate::rollouts::home(None).map(|home| ("codex".to_owned(), home));
+    let named = crate::accounts::labels(&state.data_dir, "codex")
+        .into_iter()
+        .filter_map(|label| {
+            let login = crate::accounts::env_for(&state.data_dir, "codex", Some(&label))?;
+            let home = crate::rollouts::home(Some(&login))?;
+            Some((crate::budget::identity_of("codex", Some(&label)), home))
+        });
+
+    own.into_iter().chain(named).collect()
 }
 
 /// The ceilings this allowance is held to, or the defaults nobody has changed.

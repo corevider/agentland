@@ -41,6 +41,7 @@ pub mod services;
 pub mod stacks;
 pub mod standards;
 pub mod start;
+pub mod status_line;
 pub mod pty;
 pub mod server;
 pub mod service;

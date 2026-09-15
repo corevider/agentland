@@ -15,6 +15,16 @@ fn split_env(name: &str, fallback: Vec<String>) -> Vec<String> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() == Some(agentland_core::status_line::SUBCOMMAND) {
+        let data_dir = args
+            .next()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(ServerConfig::data_dir_from_env);
+        agentland_core::status_line::run(&data_dir);
+        return Ok(());
+    }
+
     tracing_subscriber::fmt().with_target(false).init();
 
     let port: u16 = std::env::var("AGENTLAND_PORT")

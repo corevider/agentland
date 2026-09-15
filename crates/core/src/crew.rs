@@ -1073,7 +1073,14 @@ impl Crew {
             let file = folder.join(format!("{BY_HAND}-{}.json", slugify(&home)));
 
             if fs::create_dir_all(&folder).is_ok()
-                && fs::write(&file, crate::permits::settings_in(BY_HAND, &declared, &mode)).is_ok()
+                && fs::write(
+                    &file,
+                    crate::status_line::added_to(
+                        &crate::permits::settings_in(BY_HAND, &declared, &mode),
+                        &self.data_dir,
+                    ),
+                )
+                .is_ok()
             {
                 args.push((*flag).to_owned());
                 args.push(file.to_string_lossy().into_owned());
@@ -1172,7 +1179,10 @@ impl Crew {
             if fs::create_dir_all(&folder).is_ok()
                 && fs::write(
                     &file,
-                    crate::permits::settings_in(&agent.role, &declared, &mode),
+                    crate::status_line::added_to(
+                        &crate::permits::settings_in(&agent.role, &declared, &mode),
+                        &self.data_dir,
+                    ),
                 )
                 .is_ok()
             {
