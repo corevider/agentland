@@ -52,7 +52,7 @@ Each login says how much of its week is gone and who is spending from it, and
 with the hand-over on, an agent whose week runs out is carried to a login that
 still has one — the hand-overs are listed under the switch.
 
-![The logins panel: each login's week and five hours against the points agents are moved on at; the machine's own Claude login out on its five hours and back in 1h 12m, a second Claude login that Ada, Kai and Wren were handed to, Tor moved to a second Codex login when the first's five hours ran low, and the hand-overs with their reasons](docs/the-logins-they-hold.png)
+![The logins panel: each login's week and five hours against the points agents are moved on at; the machine's own Claude login out on its five hours and back in 1h 12m, a second Claude login that Ada, Kai and Wren were handed to, Tor moved to a second Codex login when the first's five hours ran low, a fallback from fable to opus for when a model's own limit runs out, and the hand-overs with their reasons](docs/the-logins-they-hold.png)
 
 These six are made by `node scripts/shots.mjs`, which stands up a core of its
 own on its own port, seeds a crew that exists nowhere else, photographs the built
@@ -2261,6 +2261,19 @@ hand, is told to carry on with it — it used to come back to an empty prompt an
 stop there — and the steps being watched follow it to the new pane rather than
 being judged against one that is gone. Each login in the panel shows its week
 against the point, who is spending from it, and where it stands in the order.
+
+### Along every agent's pane
+
+The Logins page says what every login has left, but it is a page away, and the
+question comes up while watching a pane: is this one about to stop, and whose
+week is it spending? So every agent's pane has a strip along its foot — its
+login's five hours on the left, its week on the right, which login it is
+between them, each bar marked where agents are moved on — and when the engine
+has said the login is out, the middle says *out on its five hours — back in 1h
+12m*. A plain shell has no login of its own and gets no strip. The strip's own
+× hides it under every pane at once, and Settings › Terminal brings it back. One
+reading of the budget every fifteen seconds serves every pane; the switch
+points ride along with it, so no pane has to ask every engine who it is.
 
 ## Checks, and a person at the end of them
 

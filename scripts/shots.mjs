@@ -636,7 +636,7 @@ try {
     await rest(800);
     await window.click("Logins");
     await window.wait_for("of the week spent");
-    await window.fit(900);
+    await window.fit(960);
     await window.shoot("the-logins-they-hold");
     await window.click("close");
     await window.stop_answering();
