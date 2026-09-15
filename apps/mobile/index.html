@@ -1550,11 +1550,32 @@
                                 <button class="approve">Approve</button>
                                 <button class="reject">Reject</button>
                             </div>
+                            <div class="detail answer-note"></div>
                         </div>
                     `);
 
-                    card.querySelector(".approve").addEventListener("click", () => answer(item.id, true));
-                    card.querySelector(".reject").addEventListener("click", () => answer(item.id, false));
+                    // Both buttons wait while one answer is on its way: a second
+                    // tap, or the other button, would answer the same question twice.
+                    const approve = card.querySelector(".approve");
+                    const reject = card.querySelector(".reject");
+                    const note = card.querySelector(".answer-note");
+                    const press = async (button, approved, doing) => {
+                        const label = button.innerHTML;
+                        approve.disabled = true;
+                        reject.disabled = true;
+                        button.textContent = doing;
+                        note.textContent = "";
+                        try {
+                            await answer(item.id, approved);
+                        } catch (cause) {
+                            note.textContent = String(cause.message ?? cause);
+                            approve.disabled = false;
+                            reject.disabled = false;
+                            button.innerHTML = label;
+                        }
+                    };
+                    approve.addEventListener("click", () => press(approve, true, "Approving…"));
+                    reject.addEventListener("click", () => press(reject, false, "Rejecting…"));
                     holder.append(card);
                 }
             }
@@ -1971,12 +1992,18 @@
                     if (!confirm(`Delete ${task.id}, "${task.title}"? Its history goes with it.`)) {
                         return;
                     }
+                    const remove = document.getElementById("edit-delete");
+                    const label = remove.innerHTML;
+                    remove.disabled = true;
+                    remove.textContent = "deleting…";
                     try {
                         await api(`/tasks/${encodeURIComponent(task.id)}`, { method: "DELETE" });
                         editing = null;
                         await refresh();
                     } catch (cause) {
                         document.getElementById("edit-note").textContent = cause.message;
+                        remove.disabled = false;
+                        remove.innerHTML = label;
                     }
                 });
 
@@ -2854,6 +2881,11 @@
                     return;
                 }
 
+                const send = document.getElementById("send");
+                const label = send.innerHTML;
+                send.disabled = true;
+                send.textContent = "sending…";
+
                 try {
                     if (whom.value === "card" || photos.length > 0) {
                         await send_a_card(text);
@@ -2875,6 +2907,9 @@
                         : "it is the project's goal now.";
                 } catch (cause) {
                     voice_note.textContent = String(cause.message ?? cause);
+                } finally {
+                    send.disabled = false;
+                    send.innerHTML = label;
                 }
             });
 
