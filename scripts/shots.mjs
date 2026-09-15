@@ -262,7 +262,8 @@ function sample_logins(hired) {
     const [ada, kai, wren, tor] = hired.map((agent) => agent.id);
     const now = Math.floor(Date.now() / 1000);
     const nothing = { input: 0, cached: 0, output: 0 };
-    const allowance = (identity, agents, weekly_percent, room, session_percent) => ({
+    const allowance = (identity, agents, weekly_percent, room, session_percent, out = {}) => ({
+        ...out,
         identity,
         agents,
         weekly_percent,
@@ -274,12 +275,12 @@ function sample_logins(hired) {
         room,
         says: "",
     });
-    const handed = (agent, ago) => ({
+    const handed = (agent, why, to, ago) => ({
         at: now - ago,
         kind: "accounts.handed_over",
         actor: "the supervisor",
         subject: agent,
-        detail: `${agent} ran out of week on the default login and carried on as second`,
+        detail: `${agent} ${why} on the default login and carried on as ${to}`,
     });
 
     const answers = {
@@ -300,10 +301,10 @@ function sample_logins(hired) {
         "/budget": {
             room: "plenty",
             allowances: [
-                allowance("claude", [], 96, "spent", 100),
+                allowance("claude", [], 96, "spent", 100, { limit_back_at: now + 72 * 60, limit_window: "session" }),
                 allowance("claude/second", [ada, kai, wren], 38, "plenty", 71),
-                allowance("codex", [tor], 64, "plenty", 88),
-                allowance("codex/work", [], 9, "plenty", 4),
+                allowance("codex", [], 64, "plenty", 97),
+                allowance("codex/work", [tor], 9, "plenty", 4),
             ],
         },
     };
@@ -311,7 +312,11 @@ function sample_logins(hired) {
     return (url) => {
         if (url.pathname === "/journal") {
             return url.searchParams.get("kind") === "accounts.handed_over"
-                ? [handed(wren, 3 * 3600 - 80), handed(kai, 3 * 3600 - 40), handed(ada, 3 * 3600)]
+                ? [
+                      handed(tor, "ran out of its five hours", "work", 20 * 60),
+                      handed(kai, "hit its limit", "second", 2 * 3600),
+                      handed(wren, "ran out of week", "second", 3 * 3600),
+                  ]
                 : null;
         }
         return answers[url.pathname] ?? null;
