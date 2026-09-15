@@ -1296,11 +1296,13 @@ fn spawn_supervisor(state: AppState) {
                 // nowhere else to do it. The move waits for the pane to be at
                 // rest: it trades the pane for a new one, and doing that in the
                 // middle of a turn throws the turn away.
-                let past_the_switch = usage.is_some_and(|held| held.weekly >= switch_at(&state));
-                if (past_the_switch || state.limits.is_held(&agent.id))
+                let past = usage.and_then(|held| {
+                    crate::budget::past_the_switch(held, now, now, switch_at(&state), session_switch_at(&state))
+                });
+                if (past.is_some() || state.limits.is_held(&agent.id))
                     && !working
                     && !asking
-                    && hand_over_to_a_stand_in(&state, &agent).await
+                    && hand_over_to_a_stand_in(&state, &agent, past).await
                 {
                     continue;
                 }
@@ -6950,6 +6952,13 @@ const ORDER: &str = "accounts_order";
 /// The share of a week at which an agent is moved on to the next login.
 const SWITCH_AT: &str = "accounts_switch_at";
 
+/// The share of a login's five hours at which an agent is moved on.
+const SESSION_SWITCH_AT: &str = "accounts_session_switch_at";
+
+/// Unset, a little before the wall: the five hours are spent in bursts, and a
+/// turn that starts at 96% can finish past it.
+const SESSION_SWITCH_DEFAULT: f32 = 95.0;
+
 fn login_order(state: &AppState) -> Vec<String> {
     state
         .settings
@@ -6971,18 +6980,31 @@ fn switch_at(state: &AppState) -> f32 {
         .unwrap_or(crate::budget::SPENT)
 }
 
+/// Where agents are moved on, as a percentage of a login's five hours.
+fn session_switch_at(state: &AppState) -> f32 {
+    state
+        .settings
+        .lock()
+        .get(SESSION_SWITCH_AT)
+        .and_then(|held| held.parse::<f32>().ok())
+        .filter(|percent| (50.0..=99.0).contains(percent))
+        .unwrap_or(SESSION_SWITCH_DEFAULT)
+}
+
 /// Whether a login may take an agent on: open to hiring, with room in its
 /// week and its minute, not stopped by its engine, and short of the point the
 /// person moves agents on at. The same point both ways, or an agent moved to a
 /// login just past it would be moved straight back out again on the next tick.
 fn login_has_room(state: &AppState, engine: &str, label: Option<&str>) -> bool {
     let identity = crate::budget::identity_of(engine, label);
-    let switch = switch_at(state);
+    let (week_at, five_hours_at, now) = (switch_at(state), session_switch_at(state), now_secs());
     let short_of_the_switch = state
         .quota
         .lock()
         .get(&identity)
-        .is_none_or(|(usage, _)| usage.weekly < switch);
+        .is_none_or(|(usage, read_at)| {
+            crate::budget::past_the_switch(*usage, *read_at, now, week_at, five_hours_at).is_none()
+        });
 
     hiring_rules(state).login_open(engine, label) && room_for(state, &identity).may_start_work() && short_of_the_switch
 }
@@ -7001,7 +7023,11 @@ const MOVED_ON: &str = "The login you were working on ran out, so you have been 
 /// the work it had been doing unmentioned; an agent that had work in hand is
 /// now told to carry on, and the steps being watched follow it to the new
 /// pane. One resting with nothing to do comes back resting.
-async fn hand_over_to_a_stand_in(state: &AppState, agent: &crate::crew::Agent) -> bool {
+async fn hand_over_to_a_stand_in(
+    state: &AppState,
+    agent: &crate::crew::Agent,
+    past: Option<crate::budget::Past>,
+) -> bool {
     if !failover_is_on(state) {
         return false;
     }
@@ -7053,7 +7079,11 @@ async fn hand_over_to_a_stand_in(state: &AppState, agent: &crate::crew::Agent) -
             let said = format!(
                 "{} {} on {} and carried on as {}",
                 agent.id,
-                if held_by_a_limit { "hit its limit" } else { "ran out of week" },
+                match (held_by_a_limit, past) {
+                    (true, _) => "hit its limit",
+                    (false, Some(crate::budget::Past::FiveHours)) => "ran out of its five hours",
+                    (false, _) => "ran out of week",
+                },
                 agent.account.as_deref().unwrap_or("the default login"),
                 stand_in.as_deref().unwrap_or("the default login"),
             );
@@ -7106,6 +7136,7 @@ async fn list_accounts(State(state): State<AppState>) -> Json<AccountsReport> {
         failover: failover_is_on(&state),
         order: crate::accounts::in_order(identities, &login_order(&state)),
         switch_at: switch_at(&state),
+        session_switch_at: session_switch_at(&state),
         accounts,
         engines,
     })
@@ -7122,6 +7153,8 @@ struct AccountsReport {
     order: Vec<String>,
     /// The share of a week, in percent, at which an agent is moved on.
     switch_at: f32,
+    /// The share of five hours, in percent, at which an agent is moved on.
+    session_switch_at: f32,
 }
 
 #[derive(Deserialize)]
@@ -7130,6 +7163,8 @@ struct Rotation {
     order: Option<Vec<String>>,
     #[serde(default)]
     switch_at: Option<f32>,
+    #[serde(default)]
+    session_switch_at: Option<f32>,
 }
 
 /// Put the logins in order, or move the point agents are moved on at.
@@ -7137,10 +7172,10 @@ async fn set_rotation(
     State(state): State<AppState>,
     Json(wanted): Json<Rotation>,
 ) -> Result<Json<AccountsReport>, ApiError> {
-    if let Some(percent) = wanted.switch_at {
-        if !(50.0..=99.0).contains(&percent) {
+    for (percent, of) in [(wanted.switch_at, "a week"), (wanted.session_switch_at, "five hours")] {
+        if let Some(percent) = percent.filter(|percent| !(50.0..=99.0).contains(percent)) {
             return Err(anyhow::anyhow!(
-                "move agents on somewhere between 50% and 99% of a week — {percent}% is not a point a week can be planned around"
+                "move agents on somewhere between 50% and 99% of {of} — {percent}% is not a point anything can be planned around"
             )
             .into());
         }
@@ -7158,6 +7193,9 @@ async fn set_rotation(
         }
         if let Some(percent) = wanted.switch_at {
             settings.insert(SWITCH_AT.to_owned(), format!("{}", percent.round()));
+        }
+        if let Some(percent) = wanted.session_switch_at {
+            settings.insert(SESSION_SWITCH_AT.to_owned(), format!("{}", percent.round()));
         }
         crate::db::save_state(&state.config.data_dir, "settings", &*settings);
     }

@@ -105,6 +105,37 @@ export function ordinal(rank: number): string {
     return `${rank}${{ 1: "st", 2: "nd", 3: "rd" }[rank % 10] ?? "th"}`;
 }
 
+/// How long a five-hour window lasts, in seconds.
+export const FIVE_HOURS = 5 * 60 * 60;
+
+/// How much of a login's five hours is gone, or why that is not known now.
+///
+/// A login is read only while a pane runs on it. One everybody has left keeps
+/// its last number, and a number older than the window it was read from says
+/// nothing — the core ignores it too, so the panel says so rather than showing
+/// a login as full that has long since come round.
+export function five_hours_words(allowance: Allowance | null): string {
+    const spent = allowance?.session_percent;
+    if (spent === undefined || spent === null) {
+        return "five hours not read yet";
+    }
+    if ((allowance?.read_seconds_ago ?? 0) >= FIVE_HOURS) {
+        return "five hours come round since it was last read";
+    }
+    return `${Math.round(spent)}% of its five hours`;
+}
+
+/// A bar's colour: past the point it is moved on at, close to it, or clear.
+export function nearness(percent: number | null | undefined, point: number): "plenty" | "tight" | "spent" {
+    if (percent === undefined || percent === null) {
+        return "plenty";
+    }
+    if (percent >= point) {
+        return "spent";
+    }
+    return percent >= point - 15 ? "tight" : "plenty";
+}
+
 /// How much of the week is gone, or why that is not known yet.
 export function week_words(allowance: Allowance | null): string {
     const spent = allowance?.weekly_percent;

@@ -1,7 +1,44 @@
 import { describe, expect, it } from "vitest";
 
 import type { AccountsReport, Agent, Allowance, JournalEntry } from "@/lib/core";
-import { hand_overs, login_rows, ordinal, rank_among, reorder, week_words, who_spends } from "@/lib/logins";
+import {
+    FIVE_HOURS,
+    five_hours_words,
+    hand_overs,
+    login_rows,
+    nearness,
+    ordinal,
+    rank_among,
+    reorder,
+    week_words,
+    who_spends,
+} from "@/lib/logins";
+
+describe("a login's five hours", () => {
+    const read = (session_percent: number | undefined, read_seconds_ago: number) =>
+        ({ ...allowance("claude", []), session_percent, read_seconds_ago }) as Allowance;
+
+    it("says how much of the five hours is gone", () => {
+        expect(five_hours_words(read(71.4, 60))).toBe("71% of its five hours");
+    });
+
+    it("says nothing is known before a pane has read it", () => {
+        expect(five_hours_words(read(undefined, 0))).toBe("five hours not read yet");
+        expect(five_hours_words(null)).toBe("five hours not read yet");
+    });
+
+    it("does not show a login as full on a reading older than the window", () => {
+        expect(five_hours_words(read(99, FIVE_HOURS))).toContain("come round");
+        expect(five_hours_words(read(99, FIVE_HOURS - 1))).toBe("99% of its five hours");
+    });
+
+    it("colours a bar by how near it is to the point agents are moved on at", () => {
+        expect(nearness(96, 95)).toBe("spent");
+        expect(nearness(85, 95)).toBe("tight");
+        expect(nearness(40, 95)).toBe("plenty");
+        expect(nearness(undefined, 95)).toBe("plenty");
+    });
+});
 
 function allowance(identity: string, agents: string[], weekly_percent?: number): Allowance {
     return {

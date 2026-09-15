@@ -614,10 +614,18 @@ export interface AccountsReport {
     order?: string[];
     /// The share of a week, in percent, at which an agent is moved on.
     switch_at?: number;
+    /// The share of a login's five hours, in percent, at which an agent is moved on.
+    session_switch_at?: number;
+}
+
+export interface RotationChange {
+    order?: string[];
+    switch_at?: number;
+    session_switch_at?: number;
 }
 
 /// The order logins are used in, and where an agent is moved on from one.
-export function set_account_rotation(change: { order?: string[]; switch_at?: number }): Promise<AccountsReport> {
+export function set_account_rotation(change: RotationChange): Promise<AccountsReport> {
     return request<AccountsReport>("/accounts/rotation", {
         method: "POST",
         body: JSON.stringify(change),
