@@ -9,6 +9,7 @@ import { Press } from "@/components/Press";
 import { read_budget, type Budget } from "@/lib/core";
 import { identity_of } from "@/lib/logins";
 import { login_label } from "@/lib/strip";
+import { load_settings, save_settings } from "@/lib/settings";
 import {
     create_worktree,
     is_tauri,
@@ -1072,6 +1073,25 @@ export function TerminalsPanel({ active }: { active: boolean }) {
                                 hint: "⧉",
                                 run: () => tear_out(session.id, name_of(session.id)),
                             },
+                            // The strip is hidden from its own ×, under every
+                            // pane at once, and this is where it comes back —
+                            // on the pane, where it was hidden from.
+                            ...(agent_of(session.id)
+                                ? [
+                                      {
+                                          label:
+                                              load_settings().pane_limits === false
+                                                  ? "Show the limits strip"
+                                                  : "Hide the limits strip",
+                                          hint: "5h · week",
+                                          run: () =>
+                                              save_settings({
+                                                  ...load_settings(),
+                                                  pane_limits: load_settings().pane_limits === false,
+                                              }),
+                                      },
+                                  ]
+                                : []),
                             {
                                 label: "Rename this pane…",
                                 hint: views[session.id]?.title ? "✎" : undefined,

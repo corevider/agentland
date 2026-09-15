@@ -98,7 +98,7 @@ export function LimitStrip({
             />
             <button
                 className="shrink-0 px-0.5 text-shade hover:text-linen"
-                title="hide the limits under every pane — Settings › Terminal brings them back"
+                title="hide the limits under every pane — right-click a pane to bring them back"
                 onClick={(event) => {
                     event.stopPropagation();
                     on_hide();
