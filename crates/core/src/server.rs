@@ -831,15 +831,8 @@ async fn compose_brief(state: &AppState, agent: &Agent, base: &str) -> String {
         mail,
     });
 
-    // An engine that takes a standing instruction has already been handed the
-    // house rules as a file, for every turn. One that does not is told at the
-    // top of its brief instead, which costs the words each time and is still
-    // better than an agent that does not know how the house works.
-    if crate::crew::standing_flag(&agent.engine_id).is_some() {
-        written
-    } else {
-        crate::standards::spoken(&state.standards.read(), &written)
-    }
+    // Rules are attached by Crew::start, including resumes and login handovers.
+    written
 }
 
 async fn start_agent_with_brief(state: &AppState, agent: &Agent, base: &str) -> Result<(), ApiError> {
@@ -1389,7 +1382,7 @@ fn spawn_supervisor(state: AppState) {
                         state.notices.push(
                             crate::notices::NewNotice {
                                 kind: crate::notices::Kind::Trouble,
-                                text: format!("{} is rate limited{wait}", agent.name),
+                                text: format!("{} is rate limited{wait}{}", agent.name, engine_switch_suggestion(&state, &agent.engine_id)),
                                 repository_id: Some(agent.repository_id.clone()),
                                 agent_id: Some(agent.id.clone()),
                                 // Its own screen, where the limit is written.
@@ -2625,6 +2618,7 @@ fn watch_the_limit(state: &AppState, agent: &Agent, tail: &str, working: bool, n
         ),
     };
 
+    let text = format!("{text}{}", engine_switch_suggestion(state, &agent.engine_id));
     tracing::warn!(agent = %agent.id, resets_at = hold.resets_at, "an agent is stopped at its usage limit");
     note(state, "engine.limit_hit", "the supervisor", &agent.id, &limit.said);
     state.notices.push(
@@ -6775,7 +6769,7 @@ fn engine_or_the_default(state: &AppState, chosen: Option<&str>) -> Result<Strin
                 .iter()
                 .find(|engine| engine.id == chosen && engine.installed)
                 .map(|engine| engine.id.to_owned())
-                .ok_or_else(|| ApiError(anyhow::anyhow!("{chosen} is not installed on this machine")))
+                .ok_or_else(|| ApiError(anyhow::anyhow!("{chosen} is not installed on this machine{}", engine_switch_suggestion(state, chosen))))
         }
         None => crate::start::engine_for_a_commander(&engines).ok_or_else(|| {
             ApiError(anyhow::anyhow!(
@@ -7499,6 +7493,19 @@ async fn set_failover(
 }
 
 const HIRING: &str = "hiring";
+
+fn engine_switch_suggestion(state: &AppState, current: &str) -> String {
+    let catalog = crate::crew::engines();
+    let alternative = crate::start::alternative_engine(&catalog, current, |id| {
+        login_has_room(state, id, None)
+            || crate::accounts::labels(&state.data_dir, id).iter()
+                .any(|label| login_has_room(state, id, Some(label)))
+    });
+    alternative.map(|engine| format!(
+        ". Try {}: select {} and an available login in the agent's crew settings, then restart it. Its role and shared rules are kept; check that login is signed in",
+        engine.name, engine.id,
+    )).unwrap_or_default()
+}
 
 /// What the person decided the crew may hire onto.
 fn hiring_rules(state: &AppState) -> crate::hiring::Rules {

@@ -142,14 +142,16 @@ export function StandardsSection() {
     return (
         <section className="flex min-h-0 flex-1 flex-col gap-3">
             <p className="font-mono text-[11px] text-shade">
-                Handed to every agent, in every project, on every turn. Claude Code is given the
-                file itself, so it costs nothing to repeat; an engine that takes no standing
-                instruction is told at the top of its brief instead.
+                Shared by every role and engine. Each start or restart includes these rules and
+                the project's AGENTS.md, CLAUDE.md and GEMINI.md instructions. Claude Code receives
+                a rule file; Codex receives a standing instruction to read it; other supported
+                engines receive that instruction in their opening brief.
             </p>
 
             <p className="font-mono text-[10px] text-shade">
-                A new machine starts with a page somebody would have written anyway — it is meant
-                to be edited, and emptying it means no rules rather than the page coming back.
+                Changes apply when an agent restarts. Emptying this page removes house rules;
+                project instructions still apply. CLI permission settings and hooks differ by engine
+                and are not converted by these rules.
             </p>
 
             <textarea

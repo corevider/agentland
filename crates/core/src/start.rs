@@ -172,10 +172,31 @@ pub fn engine_for_a_commander(engines: &[Engine]) -> Option<String> {
         .map(|engine| engine.id.to_owned())
 }
 
+/// Suggestions preserve the crew's tools and honor the caller's login policy.
+pub fn alternative_engine<'a>(
+    engines: &'a [Engine],
+    current: &str,
+    available: impl Fn(&str) -> bool,
+) -> Option<&'a Engine> {
+    engines.iter()
+        .filter(|engine| engine.id != current && engine.installed && engine.takes_the_tools && available(engine.id))
+        .min_by_key(|engine| match engine.id { "codex" => 0, "claude" => 1, _ => 2 })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::crew::PromptStyle;
+
+    #[test]
+    fn alternatives_keep_tools_and_respect_unavailable_engines() {
+        let catalog = vec![engine("claude", true, true), engine("gemini", true, true), engine("codex", true, true), engine("other", true, false)];
+        assert_eq!(alternative_engine(&catalog, "claude", |_| true).unwrap().id, "codex");
+        assert_eq!(alternative_engine(&catalog, "codex", |_| true).unwrap().id, "claude");
+        assert_eq!(alternative_engine(&catalog, "claude", |id| id != "codex").unwrap().id, "gemini");
+        assert!(alternative_engine(&catalog, "claude", |_| false).is_none());
+        assert!(alternative_engine(&[engine("codex", false, true)], "claude", |_| true).is_none());
+    }
 
     fn engine(id: &'static str, installed: bool, takes_the_tools: bool) -> Engine {
         Engine {
