@@ -482,19 +482,6 @@ pub fn settings_flag(engine_id: &str) -> Option<&'static str> {
     }
 }
 
-/// How an engine is handed a standing instruction — the house rules — for
-/// every turn rather than once in a brief.
-///
-/// A file, not an argument: a page of rules on a command line is a page of
-/// rules in every process listing. Only Claude Code's flag is known first-hand;
-/// the rest are told at the top of their brief instead.
-pub fn standing_flag(engine_id: &str) -> Option<&'static str> {
-    match engine_id {
-        "claude" => Some("--append-system-prompt-file"),
-        _ => None,
-    }
-}
-
 fn engine(id: &str) -> Option<Engine> {
     engines().into_iter().find(|entry| entry.id == id)
 }
@@ -1018,7 +1005,7 @@ impl Crew {
         let mut env = BTreeMap::new();
 
         if request.authority == Authority::Crew {
-            args.extend(self.crew_standing(&request.engine_id, &cwd, request));
+            args.extend(self.crew_standing(&request.engine_id, &cwd, request)?);
             if let Some((port, token)) = self.endpoint.lock().clone() {
                 env.insert("AGENTLAND_PORT".to_owned(), port.to_string());
                 env.insert("AGENTLAND_TOKEN".to_owned(), token);
@@ -1045,7 +1032,7 @@ impl Crew {
     /// the failure `tools_for` was written against, so the file is written
     /// where it is missing — and kept out of git, the way the worktrees' copies
     /// already are, so it is not a file somebody finds in their own diff.
-    fn crew_standing(&self, engine_id: &str, cwd: &Path, request: &CliRequest) -> Vec<String> {
+    fn crew_standing(&self, engine_id: &str, cwd: &Path, request: &CliRequest) -> Result<Vec<String>> {
         let mut args = Vec::new();
 
         let tools = cwd.join(".mcp.json");
@@ -1087,17 +1074,21 @@ impl Crew {
             }
         }
 
-        if let Some(flag) = standing_flag(engine_id) {
-            if let Some(file) = self.standing.lock().clone() {
-                if file.is_file() {
-                    args.push((*flag).to_owned());
-                    args.push(file.to_string_lossy().into_owned());
-                }
+        args.extend(permission_args(engine_id, &mode));
+        let file = crate::instructions::write(
+            &self.data_dir, &format!("shell-{}", slugify(engine_id)), cwd,
+            self.standing.lock().as_deref(),
+        )?;
+        args.extend(crate::instructions::args(engine_id, &file));
+        if let Some(brief) = crate::instructions::brief(engine_id, &file, None) {
+            let engine = engine(engine_id).ok_or_else(|| anyhow!("unknown engine: {engine_id}"))?;
+            match engine.prompt_style {
+                PromptStyle::Positional => args.push(brief),
+                PromptStyle::Flag(flag) => args.extend([flag.to_owned(), brief]),
+                PromptStyle::None => bail!("{engine_id} cannot receive the crew's shared instructions"),
             }
         }
-
-        args.extend(permission_args(engine_id, &mode));
-        args
+        Ok(args)
     }
 
     pub fn start(
@@ -1191,15 +1182,11 @@ impl Crew {
             }
         }
 
-        // The house rules, for every turn rather than once at the start of one.
-        if let Some(flag) = standing_flag(&agent.engine_id) {
-            if let Some(file) = self.standing.lock().clone() {
-                if file.is_file() {
-                    args.push((*flag).to_owned());
-                    args.push(file.to_string_lossy().into_owned());
-                }
-            }
-        }
+        let rules_file = crate::instructions::write(
+            &self.data_dir, &slugify(&agent.id), worktree_path,
+            self.standing.lock().as_deref(),
+        )?;
+        args.extend(crate::instructions::args(&agent.engine_id, &rules_file));
 
         args.extend(permission_args(&agent.engine_id, &mode));
 
@@ -1211,7 +1198,10 @@ impl Crew {
             }
         }
 
-        let brief = brief.filter(|value| !value.trim().is_empty());
+        let launch_brief = crate::instructions::brief(
+            &agent.engine_id, &rules_file, brief.filter(|value| !value.trim().is_empty()),
+        );
+        let brief = launch_brief.as_deref();
         let login = crate::accounts::env_for(&self.data_dir, &agent.engine_id, agent.account.as_deref());
         let mut conversation = agent.conversation.clone();
 
@@ -1278,7 +1268,7 @@ impl Crew {
                     args.push(flag.to_owned());
                     args.push(text.to_owned());
                 }
-                PromptStyle::None => {}
+                PromptStyle::None => bail!("{} cannot receive the crew's shared instructions", agent.engine_id),
             }
         }
 
@@ -2097,6 +2087,30 @@ mod pane_tests {
             permissions: None,
             account: None,
         }
+    }
+
+    #[test]
+    fn hand_opened_crew_panes_receive_rules_and_keep_their_permissions() {
+        let dir = scratch("shared-cli-rules");
+        let manager = Arc::new(crate::pty::PtyManager::with_log_dir(dir.join("sessions")));
+        let crew = Crew::new(manager, dir.clone());
+        fs::write(dir.join(".mcp.json"), "{}").unwrap();
+        fs::write(dir.join("CLAUDE.md"), "Run the project's checks.").unwrap();
+        let house = dir.join("house.md");
+        fs::write(&house, "Keep changes small.").unwrap();
+        crew.set_standing(Some(house));
+        for engine_id in ["claude", "codex", "gemini"] {
+            let request = CliRequest {
+                engine_id: engine_id.into(), cwd: dir.to_string_lossy().into_owned(),
+                authority: Authority::Crew, repository_id: None, workspace_id: None,
+            };
+            let args = crew.crew_standing(engine_id, &dir, &request).unwrap();
+            let permissions = permission_args(engine_id, permission_for_role(BY_HAND));
+            assert!(args.windows(permissions.len()).any(|words| words == permissions), "{engine_id}: {args:?}");
+            assert!(args.iter().any(|word| word.contains("instructions")), "{engine_id}: {args:?}");
+        }
+        assert_eq!(fs::read_to_string(dir.join("CLAUDE.md")).unwrap(), "Run the project's checks.");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
