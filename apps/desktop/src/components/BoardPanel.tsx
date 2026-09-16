@@ -2,6 +2,7 @@ import { use_poll } from "@/lib/poll";
 import type { MenuItem } from "@/components/ContextMenu";
 import { on_a_control, without_text_selection } from "@/lib/controls";
 import { dated } from "@/lib/dated";
+import { follow_board_edge } from "@/lib/board_drag";
 import { use_services } from "@/workspace/registry";
 
 import { exactly, when } from "@/lib/when";
@@ -120,6 +121,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
     // arrive continuously, and a fresh object each time redrew the whole board
     // dozens of times a second.
     const aim = useCallback((column: Column, before: string | null) => {
+        aiming_now.current = { column, before };
         set_aiming((held) =>
             held && held.column === column && held.before === before ? held : { column, before },
         );
@@ -132,6 +134,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
     const tasks_now = useRef(tasks);
     tasks_now.current = tasks;
     const carried_now = useRef<string | null>(null);
+    const pointer = useRef({ x: 0, y: 0 });
     const aiming_now = useRef(aiming);
     aiming_now.current = aiming;
 
@@ -154,7 +157,9 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
             const holder = under?.closest("[data-column]") as HTMLElement | null;
             const column = holder?.getAttribute("data-column");
 
-            if (!holder || !column) {
+            if (!holder || !column || !columns.current?.contains(holder)) {
+                aiming_now.current = null;
+                set_aiming(null);
                 return;
             }
 
@@ -196,12 +201,13 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
 
             aim(column as Column, above?.id ?? null);
         },
-        [aim],
+        [aim, columns],
     );
 
     const take = useCallback((task_id: string, event: React.PointerEvent<HTMLElement>) => {
         const box = event.currentTarget.getBoundingClientRect();
         seats.current.clear();
+        pointer.current = { x: event.clientX, y: event.clientY };
 
         set_carry({
             id: task_id,
@@ -465,38 +471,69 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
     carried_now.current = carried_id;
 
     useEffect(() => {
-        if (!carried_id) {
+        if (!carried_id || !active) {
+            set_carry(null);
+            set_aiming(null);
+            aiming_now.current = null;
             return;
         }
 
+        let ended = false;
         const moved = (event: PointerEvent) => {
+            if (ended) return;
+            pointer.current = { x: event.clientX, y: event.clientY };
             set_carry((held) => (held ? { ...held, x: event.clientX, y: event.clientY } : held));
             read_aim(event.clientX, event.clientY);
         };
 
-        const released = () => {
-            const wanted = aiming_now.current;
+        const stop_scrolling = columns.current
+            ? follow_board_edge(columns.current, () => pointer.current, ({ x, y }) => read_aim(x, y))
+            : () => {};
+
+        const cancel = () => {
+            ended = true;
+            stop_scrolling();
             seats.current.clear();
             set_carry(null);
+            aiming_now.current = null;
             set_aiming(null);
+        };
+
+        const released = (event: PointerEvent) => {
+            if (ended) return;
+            read_aim(event.clientX, event.clientY);
+            const wanted = aiming_now.current;
+            cancel();
 
             if (wanted) {
                 void run(() => place_task(carried_id, wanted.column, wanted.before ?? undefined));
             }
         };
 
+        const keyed = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                event.preventDefault();
+                cancel();
+            }
+        };
+
         const release_selection = without_text_selection();
         window.addEventListener("pointermove", moved);
         window.addEventListener("pointerup", released);
-        window.addEventListener("pointercancel", released);
+        window.addEventListener("pointercancel", cancel);
+        window.addEventListener("blur", cancel);
+        window.addEventListener("keydown", keyed);
 
         return () => {
             release_selection();
+            stop_scrolling();
             window.removeEventListener("pointermove", moved);
             window.removeEventListener("pointerup", released);
-            window.removeEventListener("pointercancel", released);
+            window.removeEventListener("pointercancel", cancel);
+            window.removeEventListener("blur", cancel);
+            window.removeEventListener("keydown", keyed);
         };
-    }, [carried_id, read_aim, run]);
+    }, [active, carried_id, columns, read_aim, run]);
 
 
     const open_review = useCallback(async (task: Task) => {
@@ -738,6 +775,9 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
             {!editing && !review && opened && tasks.some((task) => task.id === opened) ? (
                 <CardDetail
                     task={tasks.find((task) => task.id === opened)!}
+                    moving={busy}
+                    move_error={error}
+                    on_move={(column) => void run(() => place_task(opened, column))}
                     agents={agents}
                     race={race_on(races, opened)}
                     on_compare={(race_id) => set_comparing(race_id)}
@@ -1064,6 +1104,9 @@ function said(entry: Entry): string {
 /// answer rather than the answer.
 function CardDetail({
     task,
+    moving,
+    move_error,
+    on_move,
     agents,
     merges_itself,
     on_menu,
@@ -1077,6 +1120,9 @@ function CardDetail({
     on_raced,
 }: {
     task: Task;
+    moving: boolean;
+    move_error: string | null;
+    on_move: (column: Column) => void;
     agents: Agent[];
     merges_itself: boolean;
     /// The race running on this card, if one is.
@@ -1132,6 +1178,28 @@ function CardDetail({
             </header>
 
             <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-2.5">
+                <label className="flex items-center gap-2 font-mono text-[11px] text-shade">
+                    move to
+                    <Picker
+                        title="move this card to another column"
+                        className="rounded-lg border border-reef bg-lagoon px-2 py-1 text-linen disabled:opacity-40"
+                        value={task.column}
+                        disabled={moving}
+                        choices={COLUMNS.map((column) => ({
+                            value: column,
+                            label: column === "ready" ? "ready to merge" : column,
+                        }))}
+                        on_pick={(column) => {
+                            if (column !== task.column) on_move(column as Column);
+                        }}
+                    />
+                    {moving ? <Spinner label="moving card" /> : null}
+                </label>
+                {move_error ? (
+                    <p role="alert" className="rounded-lg border border-coral px-2 py-1 font-mono text-[11px] text-coral">
+                        {move_error}
+                    </p>
+                ) : null}
                 {task.body.trim() ? (
                     <p className="whitespace-pre-wrap text-[11px] text-shell">{task.body}</p>
                 ) : null}
