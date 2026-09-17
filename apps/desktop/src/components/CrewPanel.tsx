@@ -20,6 +20,7 @@ import {
     type Account,
     type Agent,
     type Engine,
+    type Repository,
     type Holdings,
     type SessionInfo,
     type Workspace,
@@ -67,6 +68,7 @@ interface Props {
 export function CrewPanel({ active, on_open_session }: Props) {
     const [engines, set_engines] = useState<Engine[]>([]);
     const [agents, set_agents] = useState<Agent[]>([]);
+    const [projects, set_projects] = useState<Repository[]>([]);
     const [targets, set_targets] = useState<Target[]>([]);
     const [draft, set_draft] = useState({ name: "", role: ROLES[0], engine_id: "", target: "" });
     const [error, set_error] = useState<string | null>(null);
@@ -92,6 +94,7 @@ export function CrewPanel({ active, on_open_session }: Props) {
         ]);
 
         set_engines(available);
+        set_projects(repos);
         set_hiring(rules);
         set_agents(crew);
         set_logins(accounts.accounts);
@@ -110,6 +113,8 @@ export function CrewPanel({ active, on_open_session }: Props) {
                     : target_value(open[0]),
         }));
     }, []);
+
+    use_poll(() => { refresh().catch(() => undefined); }, 10000, active);
 
     use_poll(() => {
         list_agents().then(set_agents).catch(() => undefined);
@@ -174,6 +179,17 @@ export function CrewPanel({ active, on_open_session }: Props) {
 
     const installed = engines.filter((entry) => entry.installed);
     const hireable = open_to_the_crew(engines, hiring);
+    const engines_for = (id: string) => {
+        const allowed = projects.find((project) => project.id === id)?.settings?.engine_ids ?? [];
+        return hireable.filter((engine) => !allowed.length || allowed.includes(engine.id));
+    };
+    const project_engines = engines_for(draft.target.split("/")[0]);
+    const project_engine_ids = project_engines.map((engine) => engine.id).join(",");
+    useEffect(() => {
+        const allowed = project_engine_ids ? project_engine_ids.split(",") : [];
+        set_draft((held) => allowed.includes(held.engine_id) ? held : { ...held, engine_id: allowed[0] ?? "" });
+    }, [project_engine_ids]);
+
 
     return (
         <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-5 overflow-y-auto p-2.5">
@@ -240,7 +256,7 @@ export function CrewPanel({ active, on_open_session }: Props) {
                             className="rounded-lg border border-reef bg-lagoon-deep px-2 py-1 font-mono text-[11px]"
                             value={draft.engine_id}
                             placeholder="which engine"
-                            choices={hireable.map((engine) => ({ value: engine.id, label: engine.name }))}
+                            choices={project_engines.map((engine) => ({ value: engine.id, label: engine.name }))}
                             on_pick={(held) => set_draft({ ...draft, engine_id: held })}
                         />
                         <Picker
@@ -255,7 +271,7 @@ export function CrewPanel({ active, on_open_session }: Props) {
                         />
                         <Press
                             className="border border-turquoise px-2 py-0.5 font-mono text-[11px] text-turquoise disabled:opacity-40 rounded-lg"
-                            disabled={!draft.name.trim() || !draft.target}
+                            disabled={!draft.name.trim() || !draft.target || !project_engines.some((engine) => engine.id === draft.engine_id)}
                             busy_says="hiring…"
                             on_press={() =>
                                 run(async () => {
@@ -335,7 +351,7 @@ export function CrewPanel({ active, on_open_session }: Props) {
                             value={agent.engine_id}
                             placeholder={agent.engine_id}
                             disabled={acting.has(agent.id)}
-                            choices={hireable.map((engine) => ({ value: engine.id, label: engine.name }))}
+                            choices={engines_for(agent.repository_id).map((engine) => ({ value: engine.id, label: engine.name }))}
                             on_pick={(held) => {
                                 if (held === agent.engine_id) {
                                     return;

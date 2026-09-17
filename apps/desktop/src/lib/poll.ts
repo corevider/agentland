@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { watch_projects_changed } from "@/lib/project_changes";
 
 export interface Attention {
     hidden: boolean;
@@ -66,9 +67,11 @@ export function use_poll(run: () => void, every: number, enabled = true): void {
 
         document.addEventListener("visibilitychange", wake);
         window.addEventListener("focus", wake);
+        const stop_projects = watch_projects_changed(wake);
 
         return () => {
             stopped = true;
+            stop_projects();
             window.clearTimeout(handle);
             document.removeEventListener("visibilitychange", wake);
             window.removeEventListener("focus", wake);

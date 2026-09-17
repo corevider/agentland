@@ -254,6 +254,8 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
     }, []);
 
     // A refresh in the middle of a drag replaces every card under the pointer.
+    use_poll(() => { refresh().catch(() => undefined); }, 10000, active && !carry);
+
     use_poll(() => {
         list_tasks().then(set_tasks).catch(() => undefined);
         list_races().then(set_races).catch(() => undefined);

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { use_poll } from "@/lib/poll";
+import { useCallback, useMemo, useState } from "react";
 
 import {
     activate_workspace,
@@ -84,11 +85,7 @@ export function WorkspaceRail({
         [repos, repositories],
     );
 
-    useEffect(() => {
-        refresh().catch(() => undefined);
-        const handle = window.setInterval(() => refresh().catch(() => undefined), 4000);
-        return () => window.clearInterval(handle);
-    }, [refresh]);
+    use_poll(() => { refresh().catch(() => undefined); }, 4000);
 
     // The chief stands beside the workspace rather than in any project, so it is
     // named under the workspace's own name instead of disappearing: grouped by

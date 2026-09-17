@@ -28,6 +28,8 @@ pub struct Repository {
     pub remotes: Vec<Remote>,
     #[serde(default)]
     pub origin: Option<String>,
+    #[serde(default)]
+    pub settings: crate::project_settings::ProjectSettings,
 }
 
 pub fn parse_remote(name: &str, url: &str) -> Remote {
@@ -132,6 +134,11 @@ pub struct RepoRegistry {
     state: Mutex<State>,
     data_dir: PathBuf,
     ports: SharedPorts,
+}
+
+pub fn saved_project_settings(data: &Path, id: &str) -> crate::project_settings::ProjectSettings {
+    let state: State = crate::db::load_state(data, "repositories");
+    state.repositories.get(id).map(|project| project.settings.clone()).unwrap_or_default()
 }
 
 /// Who git should say wrote a commit, when the machine has nobody to say.
@@ -317,19 +324,36 @@ impl RepoRegistry {
             .or_else(|| remotes.first())
             .map(|remote| remote.url.clone());
 
-        let repository = Repository {
+        let mut repository = Repository {
             id: id.clone(),
             name,
             primary_path,
             default_branch,
             remotes,
             origin,
+            settings: Default::default(),
         };
 
         let mut state = self.state.lock();
+        if let Some(existing) = state.repositories.get(&id) {
+            if existing.primary_path != repository.primary_path {
+                bail!("a different project named {id} is already registered at {}", existing.primary_path.display());
+            }
+            repository.settings = existing.settings.clone();
+        }
         state.repositories.insert(id, repository.clone());
         self.persist(&state);
 
+        Ok(repository)
+    }
+
+    pub fn set_settings(&self, id: &str, settings: crate::project_settings::ProjectSettings) -> Result<Repository> {
+        let settings = settings.validate()?;
+        let mut state = self.state.lock();
+        let repository = state.repositories.get_mut(id).ok_or_else(|| anyhow!("unknown repository: {id}"))?;
+        repository.settings = settings;
+        let repository = repository.clone();
+        self.persist(&state);
         Ok(repository)
     }
 
@@ -1616,6 +1640,30 @@ mod tests {
         let root = std::env::temp_dir().join(format!("agentland-adopt-data-{name}"));
         let _ = fs::remove_dir_all(&root);
         RepoRegistry::new(root)
+    }
+
+    #[test]
+    fn project_settings_survive_reopening_and_reach_shared_instructions() {
+        let registry = a_registry("project-settings");
+        let folder = a_folder("project-settings");
+        let project = registry.adopt(&folder).unwrap();
+        let settings = crate::project_settings::ProjectSettings {
+            engine_ids: vec!["codex".into()], commander_engine_id: Some("codex".into()),
+            reference_folders: vec![crate::project_settings::ReferenceFolder { path: folder.clone(), note: "reference only".into() }],
+        }.validate().unwrap();
+        registry.set_settings(&project.id, settings.clone()).unwrap();
+        assert_eq!(registry.register(&folder).unwrap().settings, settings);
+        assert_eq!(RepoRegistry::new(registry.data_dir.clone()).repositories()[0].settings, settings);
+        let instructions = registry.data_dir.join("shared.md");
+        fs::write(&instructions, "existing house rules").unwrap();
+        crate::project_settings::attach(&registry.data_dir, &project.id, &instructions).unwrap();
+        let text = fs::read_to_string(instructions).unwrap();
+        assert!(text.starts_with("existing house rules"));
+        assert!(text.contains("reference only") && text.contains("codex"));
+        let legacy: Repository = serde_json::from_value(serde_json::json!({
+            "id":"old", "name":"old", "primary_path":"/old", "default_branch":"main"
+        })).unwrap();
+        assert_eq!(legacy.settings, Default::default());
     }
 
     #[test]

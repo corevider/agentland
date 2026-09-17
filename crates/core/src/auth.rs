@@ -62,6 +62,7 @@ fn is_the_humans_alone(_method: &str, path: &str) -> bool {
     // use again is the commander's to tidy — and the handler refuses the rest,
     // where a person still has to see what would be lost.
     path == "/devices"
+        || (path.starts_with("/repos/") && path.ends_with("/settings") && _method != "GET")
 }
 
 pub fn permits(scope: Scope, method: &str, path: &str) -> bool {

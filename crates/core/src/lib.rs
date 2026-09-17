@@ -33,6 +33,7 @@ pub mod phone;
 pub mod plans;
 pub mod ports;
 pub mod preview;
+pub mod project_settings;
 pub mod pulls;
 pub mod races;
 pub mod repo;
