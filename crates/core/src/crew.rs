@@ -303,6 +303,8 @@ pub fn tools_for(engine_id: &str, tools: &Path, endpoint: &Path) -> Vec<String> 
                 ),
                 "-c".to_owned(),
                 "mcp_servers.agentland.default_tools_approval_mode=\"approve\"".to_owned(),
+                "-c".to_owned(),
+                "mcp_servers.agentland.tool_timeout_sec=360".to_owned(),
             ]
         }
         // Gemini already has the file, in the worktree where it looks. What it
@@ -1012,6 +1014,11 @@ impl Crew {
             }
         }
 
+        if request.authority == Authority::Crew {
+            env.insert("MCP_TOOL_TIMEOUT".to_owned(), std::env::var("MCP_TOOL_TIMEOUT").unwrap_or_else(|_| "360000".to_owned()));
+            crate::activity::install(&request.engine_id, &self.data_dir, &mut args, &mut env)?;
+        }
+
         let session = self.manager.spawn(PtySpawnSpec {
             command: engine.command.to_owned(),
             args,
@@ -1275,6 +1282,7 @@ impl Crew {
         let mut env = BTreeMap::new();
         env.insert("AGENTLAND_AGENT".to_owned(), agent.id.clone());
         env.insert("AGENTLAND_ROLE".to_owned(), agent.role.clone());
+        env.insert("MCP_TOOL_TIMEOUT".to_owned(), std::env::var("MCP_TOOL_TIMEOUT").unwrap_or_else(|_| "360000".to_owned()));
 
         // Which login this pane spends from. The variable is fixed when the
         // process starts and cannot be changed after: a running pane keeps the
@@ -1292,6 +1300,8 @@ impl Crew {
             env.insert("AGENTLAND_PORT".to_owned(), port.to_string());
             env.insert("AGENTLAND_TOKEN".to_owned(), token);
         }
+
+        crate::activity::install(&agent.engine_id, &self.data_dir, &mut args, &mut env)?;
 
         let session = self.manager.spawn(PtySpawnSpec {
             command: engine.command.to_owned(),

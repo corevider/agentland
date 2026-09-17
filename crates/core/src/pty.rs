@@ -148,6 +148,8 @@ pub struct Session {
     info: Mutex<SessionInfo>,
     broadcaster: Arc<Broadcaster>,
     handles: Option<PtyHandles>,
+    activity_file: Option<std::path::PathBuf>,
+    pub input_gate: tokio::sync::Mutex<()>,
 }
 
 impl Session {
@@ -163,6 +165,10 @@ impl Session {
         self.broadcaster.stats()
     }
 
+    pub fn activity(&self) -> Option<crate::activity::Reading> {
+        self.activity_file.as_deref().and_then(crate::activity::read)
+    }
+
     pub fn alive(&self) -> bool {
         match self.handles.as_ref() {
             Some(handles) => handles
@@ -170,7 +176,7 @@ impl Session {
                 .lock()
                 .try_wait()
                 .map(|status| status.is_none())
-                .unwrap_or(false),
+                .unwrap_or(true),
             None => true,
         }
     }
@@ -347,6 +353,8 @@ impl PtyManager {
         let session = Arc::new(Session {
             info: Mutex::new(info.clone()),
             broadcaster: broadcaster.clone(),
+            activity_file: spec.env.get(crate::activity::FILE_ENV).map(std::path::PathBuf::from),
+            input_gate: tokio::sync::Mutex::new(()),
             handles: Some(PtyHandles {
                 writer: Mutex::new(writer),
                 master: Mutex::new(pair.master),
@@ -379,6 +387,8 @@ impl PtyManager {
             info: Mutex::new(info.clone()),
             broadcaster,
             handles: None,
+            activity_file: None,
+            input_gate: tokio::sync::Mutex::new(()),
         });
 
         self.sessions.lock().insert(id, session);

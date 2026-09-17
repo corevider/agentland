@@ -62,3 +62,11 @@ compaction, successful Agentland tool calls, delegation and review, project test
 and refusal of actions outside the role's permissions. Keep task, rules, tool
 access and acceptance criteria identical. Record engine version, model, pass/fail
 and evidence; do not mark an engine equivalent solely because it launches.
+
+## Shared workflow enforcement
+
+[Workflow hardening](workflow-hardening.md) adds a common commit-bound merge
+gate, isolated `repo_test` execution and durable, bounded repair feedback.
+Agentland's own lifecycle hooks now normalize activity from Claude, Codex and
+Gemini; this does not import or translate a person's existing provider hooks.
+The same PR and test requirements apply regardless of a role's selected engine.

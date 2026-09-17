@@ -574,8 +574,7 @@ impl RepoRegistry {
             }
 
             if worktree.path.exists() {
-                fs::remove_dir_all(&worktree.path)
-                    .with_context(|| format!("cannot remove {}", worktree.path.display()))?;
+                self.keep_recovery(&worktree)?;
             }
 
             self.ports.release(&key);
@@ -586,26 +585,18 @@ impl RepoRegistry {
             return Ok(());
         }
 
-        if !force {
-            let status = self.status(worktree.clone());
-            if status.dirty_files > 0 {
-                bail!(
-                    "{key} has {} uncommitted file(s); pass force to discard them",
-                    status.dirty_files
-                );
-            }
-        }
-
-        let path_text = worktree.path.to_string_lossy().to_string();
-        let mut args = vec!["worktree", "remove", path_text.as_str()];
-        if force {
-            args.push("--force");
-        }
-
-        if worktree.path.exists() {
-            git(&args, Some(&repository.primary_path))?;
+        if force && worktree.path.exists() {
+            // Renaming preserves tracked, untracked, ignored and binary files,
+            // including files Git cannot snapshot if the main checkout is gone.
+            self.keep_recovery(&worktree)?;
+            git(&["worktree", "prune"], Some(&repository.primary_path))?;
+        } else if worktree.path.exists() {
+            // Let Git itself check cleanliness; a failed status probe must not
+            // be mistaken for an empty worktree.
+            let path_text = worktree.path.to_string_lossy().to_string();
+            git(&["worktree", "remove", &path_text], Some(&repository.primary_path))?;
         } else {
-            let _ = git(&["worktree", "prune"], Some(&repository.primary_path));
+            git(&["worktree", "prune"], Some(&repository.primary_path))?;
         }
 
         self.ports.release(&key);
@@ -616,6 +607,28 @@ impl RepoRegistry {
         self.persist(&state);
 
         Ok(())
+    }
+
+    fn keep_recovery(&self, worktree: &Worktree) -> Result<PathBuf> {
+        let root = self.data_dir.join("recoveries").join(crate::generate_token());
+        fs::create_dir_all(&root)?;
+        fs::write(root.join("worktree.json"), serde_json::to_vec_pretty(worktree)?)?;
+        // The index lives outside a linked worktree. Keep staged content and
+        // pin its objects before pruning its administrative directory.
+        if let Ok(index) = git(&["rev-parse", "--git-path", "index"], Some(&worktree.path)) {
+            let path = worktree.path.join(index);
+            if path.is_file() { fs::copy(&path, root.join("index"))?; }
+            let staged = git(&["write-tree"], Some(&worktree.path))?;
+            let parent = git(&["rev-parse", "HEAD"], Some(&worktree.path))?;
+            let commit = git(&["-c", "user.name=Agentland recovery", "-c", "user.email=recovery@localhost", "commit-tree", &staged, "-p", &parent, "-m", "Preserve worktree index before removal"], Some(&worktree.path))?;
+            let reference = format!("refs/agentland/recovery/{}", root.file_name().unwrap().to_string_lossy());
+            git(&["update-ref", &reference, &commit], Some(&worktree.path))?;
+            fs::write(root.join("recovery-ref.txt"), &reference)?;
+        }
+        let saved = root.join("files");
+        fs::rename(&worktree.path, &saved).with_context(|| format!("cannot preserve worktree at {}; nothing was deleted", saved.display()))?;
+        tracing::info!(path = %saved.display(), branch = %worktree.branch, "worktree preserved for recovery");
+        Ok(saved)
     }
 
     pub fn ports(&self) -> PortRegistry {
@@ -631,6 +644,8 @@ pub struct CommitInfo {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Review {
+    pub head_sha: String,
+    pub pull_url: String,
     pub base: String,
     pub branch: String,
     pub files: usize,
@@ -811,7 +826,8 @@ pub(crate) fn write_mcp_config(worktree: &Path, data_dir: &Path) {
             "agentland": {
                 "command": program,
                 "args": ["--endpoint", endpoint],
-                "trust": true
+                "trust": true,
+                "timeout": 360000
             }
         }
     });
@@ -1083,9 +1099,45 @@ impl RepoRegistry {
         Ok((repository, worktree))
     }
 
+    pub fn unresolved_threads(&self, repository_id: &str, worktree_name: &str, pull: &crate::pulls::PullState) -> Result<Vec<String>> {
+        let (_, worktree) = self.locate(repository_id, worktree_name)?;
+        crate::review_threads::read(&worktree.path, &pull.url, &pull.head_sha)
+    }
+
+    pub fn test_checkout(&self, repository_id: &str, worktree_name: &str, root: &Path, sha: &str) -> Result<PathBuf> {
+        let (_, worktree) = self.locate(repository_id, worktree_name)?;
+        crate::proving::prepare(&worktree.path, root, sha)
+    }
+
     pub fn review(&self, repository_id: &str, worktree_name: &str) -> Result<Review> {
         let (repository, worktree) = self.locate(repository_id, worktree_name)?;
         self.review_at(&repository, &worktree)
+    }
+
+    pub fn review_pull(&self, repository_id: &str, worktree_name: &str, pull: &crate::pulls::PullState) -> Result<Review> {
+        let (_, worktree) = self.locate(repository_id, worktree_name)?;
+        // Older gh versions expose headRefOid but not baseRefOid in `pr view`.
+        // The REST pull object supplies the exact base commit on those versions.
+        let parts: Vec<&str> = pull.url.trim_end_matches('/').split('/').collect();
+        anyhow::ensure!(parts.len() >= 7, "invalid pull-request URL");
+        let endpoint = format!("repos/{}/{}/pulls/{}", parts[parts.len()-4], parts[parts.len()-3], pull.number);
+        let base = crate::exec::command("gh").args(["api", &endpoint, "--jq", ".base.sha"])
+            .current_dir(&worktree.path).output()?;
+        anyhow::ensure!(base.status.success(), "cannot read the PR's base commit: {}", String::from_utf8_lossy(&base.stderr));
+        let base_sha = String::from_utf8_lossy(&base.stdout).trim().to_owned();
+        for sha in [&pull.head_sha, &base_sha] {
+            anyhow::ensure!((sha.len() == 40 || sha.len() == 64) && sha.bytes().all(|c| c.is_ascii_hexdigit()), "forge did not return a full commit SHA");
+            if git(&["cat-file", "-e", &format!("{sha}^{{commit}}")], Some(&worktree.path)).is_err() {
+                git(&["fetch", "origin", sha], Some(&worktree.path))?;
+            }
+        }
+        let range = format!("{}...{}", base_sha, pull.head_sha);
+        let patch = git(&["diff", &range], Some(&worktree.path))?;
+        let numbers = git(&["diff", "--numstat", &range], Some(&worktree.path))?;
+        let (files, insertions, deletions) = numstat_totals(&numbers);
+        Ok(Review { head_sha: pull.head_sha.clone(), pull_url: pull.url.clone(), base: pull.base.clone(),
+            branch: worktree.branch.clone(), files, insertions, deletions, commits: Vec::new(),
+            untracked: Vec::new(), uncommitted: false, patch })
     }
 
     /// The project's own checkout, read the way an agent's worktree is read.
@@ -1124,14 +1176,15 @@ impl RepoRegistry {
 
     fn review_at(&self, repository: &Repository, worktree: &Worktree) -> Result<Review> {
         let base = repository.default_branch.clone();
-        let range = format!("{base}...HEAD");
+        let head_sha = git(&["rev-parse", "HEAD"], Some(&worktree.path))?;
+        let range = format!("{base}...{head_sha}");
 
         let committed = git(&["diff", "--numstat", &range], Some(&worktree.path)).unwrap_or_default();
         let pending = git(&["diff", "--numstat"], Some(&worktree.path)).unwrap_or_default();
         let (files, insertions, deletions) = numstat_totals(&format!("{committed}\n{pending}"));
 
         let commits = git(
-            &["log", "--format=%h\u{1f}%s", &format!("{base}..HEAD")],
+            &["log", "--format=%h\u{1f}%s", &format!("{base}..{head_sha}")],
             Some(&worktree.path),
         )
         .unwrap_or_default()
@@ -1175,6 +1228,8 @@ impl RepoRegistry {
         }
 
         Ok(Review {
+            head_sha,
+            pull_url: String::new(),
             base,
             branch: worktree.branch.clone(),
             files: files + untracked.len(),
@@ -1238,7 +1293,7 @@ impl RepoRegistry {
                 "view",
                 &worktree.branch,
                 "--json",
-                "number,url,state,mergeable,mergeStateStatus,baseRefName,reviewDecision,statusCheckRollup",
+                "number,url,state,mergeable,mergeStateStatus,baseRefName,headRefOid,reviewDecision,statusCheckRollup",
             ])
             .current_dir(&worktree.path)
             .output()
@@ -1388,11 +1443,11 @@ impl RepoRegistry {
     /// Squashed, because a card is one piece of work and its branch is the
     /// workings. The branch is left alone: deleting it is destroying something
     /// and belongs to whoever decides to.
-    pub fn merge_pull_request(&self, repository_id: &str, worktree_name: &str) -> Result<String> {
+    pub fn merge_pull_request(&self, repository_id: &str, worktree_name: &str, head_sha: &str) -> Result<String> {
         let (_, worktree) = self.locate(repository_id, worktree_name)?;
 
         let output = crate::exec::command("gh")
-            .args(["pr", "merge", &worktree.branch, "--squash"])
+            .args(["pr", "merge", &worktree.branch, "--squash", "--match-head-commit", head_sha])
             .current_dir(&worktree.path)
             .output()
             .context("gh could not be run")?;
@@ -1558,7 +1613,9 @@ mod tests {
     }
 
     fn a_registry(name: &str) -> RepoRegistry {
-        RepoRegistry::new(std::env::temp_dir().join(format!("agentland-adopt-data-{name}")))
+        let root = std::env::temp_dir().join(format!("agentland-adopt-data-{name}"));
+        let _ = fs::remove_dir_all(&root);
+        RepoRegistry::new(root)
     }
 
     #[test]
@@ -1816,6 +1873,32 @@ mod tests {
         registry.remove_worktree(&repository.id, "desk", true).unwrap();
         assert!(!worktree.path.exists());
         registry.forget(&repository.id).expect("and now the project can be forgotten");
+    }
+
+    #[test]
+    fn forced_cleanup_preserves_staged_unstaged_untracked_and_ignored_work() {
+        let dir = a_folder("recovery");
+        git(&["init", "-b", "main"], Some(&dir)).unwrap();
+        fs::write(dir.join("tracked.txt"), "base").unwrap();
+        fs::write(dir.join(".gitignore"), "ignored.bin\n").unwrap();
+        git(&["add", "-A"], Some(&dir)).unwrap();
+        git(&["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-m", "base"], Some(&dir)).unwrap();
+        let registry = a_registry("recovery"); let repository = registry.adopt(&dir).unwrap();
+        let worktree = registry.create_worktree(&repository.id, "desk").unwrap();
+        fs::write(worktree.path.join("tracked.txt"), "staged").unwrap();
+        git(&["add", "tracked.txt"], Some(&worktree.path)).unwrap();
+        fs::write(worktree.path.join("tracked.txt"), "unstaged").unwrap();
+        fs::write(worktree.path.join("untracked.txt"), "untracked").unwrap();
+        fs::write(worktree.path.join("ignored.bin"), [0, 1, 255]).unwrap();
+        registry.remove_worktree(&repository.id, "desk", true).unwrap();
+        assert!(!worktree.path.exists());
+        let recovery = fs::read_dir(registry.data_dir.join("recoveries")).unwrap().next().unwrap().unwrap().path();
+        assert_eq!(fs::read_to_string(recovery.join("files/tracked.txt")).unwrap(), "unstaged");
+        assert_eq!(fs::read_to_string(recovery.join("files/untracked.txt")).unwrap(), "untracked");
+        assert_eq!(fs::read(recovery.join("files/ignored.bin")).unwrap(), [0, 1, 255]);
+        assert!(recovery.join("index").is_file());
+        let reference = fs::read_to_string(recovery.join("recovery-ref.txt")).unwrap();
+        assert_eq!(git(&["show", &format!("{reference}:tracked.txt")], Some(&dir)).unwrap(), "staged");
     }
 
     #[test]

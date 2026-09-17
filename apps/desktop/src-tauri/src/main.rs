@@ -795,6 +795,10 @@ fn main() {
     // A core served inside this window writes this binary into every Claude
     // pane's status line, so it is started once per redraw. It answers and
     // leaves before anything else runs: the rest of main opens a window.
+    if std::env::args().nth(1).as_deref() == Some(agentland_core::activity::SUBCOMMAND) {
+        agentland_core::activity::run(&std::env::args().nth(2).unwrap_or_default());
+        return;
+    }
     let mut args = std::env::args().skip(1);
     if args.next().as_deref() == Some(agentland_core::status_line::SUBCOMMAND) {
         let data_dir = args

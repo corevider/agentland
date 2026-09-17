@@ -25,6 +25,9 @@ interface Review {
     verdict: string;
     summary: string;
     at: number;
+    head_sha: string;
+    role: string;
+    pull_url: string;
 }
 
 function reviews_of(task: Task): Review[] {
@@ -36,35 +39,26 @@ function reviews_of(task: Task): Review[] {
             verdict: String(what.verdict ?? ""),
             summary: String(what.summary ?? ""),
             at: entry.at ?? 0,
+            head_sha: String(what.head_sha ?? ""),
+            role: String(what.role ?? ""),
+            pull_url: String(what.pull_url ?? ""),
         }));
 }
 
-/// Every check a card owes, and how each one stands.
-///
-/// The same rule the core merges by: a check is owed for each judging role the
-/// crew holds on the card's project, and an approval only stands if nobody has
-/// asked for changes since — a yes to code that has since moved is not a yes.
-/// A role nobody was hired for is not shown, because it gates nothing.
-export function checks_for(task: Task, agents: Agent[]): Check[] {
-    const crew = agents.filter((agent) => agent.repository_id === task.repository_id);
-    const role_of = (id: string) => crew.find((agent) => agent.id === id)?.role;
-    const reviews = reviews_of(task);
+/// Reviews apply only to the most recently observed pull-request commit.
+/// The backend rechecks the forge before merging, including after a manual move.
+export function checks_for(task: Task, _agents: Agent[]): Check[] {
+    const head = task.evidence.filter((entry) => entry.what?.kind === "pull_observed").at(-1)?.what;
+    const reviews = reviews_of(task).filter((review) =>
+        !!head?.head_sha && review.head_sha === head.head_sha && review.pull_url === head.url && review.by !== task.assignee);
     const sent_back = reviews.map((review) => review.verdict).lastIndexOf(CHANGES);
     const standing = reviews.slice(sent_back + 1).filter((review) => review.verdict === APPROVED);
-
-    return CHECKS.filter((role) => crew.some((agent) => agent.role === role)).map((role) => {
-        const passed = standing.filter((review) => role_of(review.by) === role).at(-1);
-        if (passed) {
-            return { role, state: "passed", by: passed.by, summary: passed.summary, at: passed.at };
-        }
-
-        const latest = reviews.filter((review) => role_of(review.by) === role).at(-1);
-        return {
-            role,
-            state: latest?.verdict === CHANGES ? "changes" : "waiting",
-            by: latest?.by ?? null,
-            summary: latest?.summary ?? "",
-            at: latest?.at ?? 0,
-        };
+    return CHECKS.map((role) => {
+        const passed = standing.filter((review) => review.role === role).at(-1);
+        const proof = task.evidence.filter((entry) => entry.what?.kind === "tested" && entry.what.head_sha === head?.head_sha && entry.what.is_test === true && entry.by === passed?.by).at(-1);
+        if (passed && (role !== "tester" || proof?.what.passed === true)) return { role, state: "passed", by: passed.by, summary: passed.summary, at: passed.at };
+        const latest = reviews.filter((review) => review.role === role).at(-1);
+        return { role, state: latest?.verdict === CHANGES ? "changes" : "waiting",
+            by: latest?.by ?? null, summary: latest?.summary ?? "", at: latest?.at ?? 0 };
     });
 }

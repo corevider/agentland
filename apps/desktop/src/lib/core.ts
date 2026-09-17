@@ -1622,6 +1622,8 @@ export interface CommitInfo {
 }
 
 export interface Review {
+    head_sha: string;
+    pull_url: string;
     base: string;
     branch: string;
     files: number;
@@ -1837,10 +1839,12 @@ export function submit_review(
     task_id: string,
     verdict: "approve" | "request_changes" | "comment",
     summary: string,
+    head_sha: string,
+    pull_url: string,
 ): Promise<Task> {
     return request<Task>(
         `/repos/${encodeURIComponent(repository_id)}/worktrees/${encodeURIComponent(worktree)}/review`,
-        { method: "POST", body: JSON.stringify({ task_id, verdict, summary }) },
+        { method: "POST", body: JSON.stringify({ task_id, verdict, summary, head_sha, pull_url }) },
     );
 }
 
@@ -2070,4 +2074,8 @@ export interface Approval {
 
 export function list_approvals(): Promise<Approval[]> {
     return request<Approval[]>("/approvals");
+}
+
+export function resume_repairs(task_id: string): Promise<Task> {
+    return request<Task>(`/tasks/${encodeURIComponent(task_id)}/resume-repairs`, { method: "POST" });
 }
