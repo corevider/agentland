@@ -1,9 +1,11 @@
+import { ProjectOptions, empty_project_settings } from "@/components/ProjectOptions";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
     begin_project,
     list_starters,
     type Begun,
+    type ProjectSettings,
     type Engine,
     type Starter,
     type StarterExtra,
@@ -18,7 +20,6 @@ import { name_trouble } from "@/lib/naming";
 import { hireable_engines } from "@/lib/hiring_rules";
 import { as_url, clone_target, is_clonable, pick_folder } from "@/lib/pick";
 import { use_services } from "@/workspace/registry";
-import { Picker } from "@/components/Picker";
 import { Press } from "@/components/Press";
 
 type Where = "new" | "folder" | "clone";
@@ -92,7 +93,7 @@ export function StartPanel({ active }: { active: boolean }) {
     const [starters, set_starters] = useState<Starter[] | null>(null);
     const [goal, set_goal] = useState("");
     const [engines, set_engines] = useState<Engine[]>([]);
-    const [engine_id, set_engine] = useState("");
+    const [settings, set_settings] = useState<ProjectSettings | undefined>();
     const [workspace, set_workspace] = useState("");
     const [worktree, set_worktree] = useState("");
     const [commander, set_commander] = useState("");
@@ -189,7 +190,7 @@ export function StartPanel({ active }: { active: boolean }) {
                     ...somewhere,
                     ...(workspace.trim() ? { workspace: workspace.trim() } : {}),
                     ...(worktree.trim() ? { worktree: worktree.trim() } : {}),
-                    ...(engine_id ? { engine_id } : {}),
+                    ...(settings ? { settings } : {}),
                     ...(commander.trim() ? { commander: commander.trim() } : {}),
                 });
 
@@ -211,7 +212,7 @@ export function StartPanel({ active }: { active: boolean }) {
                 set_busy(false);
             }
         },
-        [goal, where, path, url, into, stack, extras, name, workspace, worktree, engine_id, commander, open_session],
+        [goal, where, path, url, into, stack, extras, name, workspace, worktree, settings, commander, open_session],
     );
 
     if (begun) {
@@ -603,12 +604,16 @@ export function StartPanel({ active }: { active: boolean }) {
                 </p>
             </section>
 
+            <section className="rounded-lg border border-reef bg-lagoon-deep p-2">
+                <ProjectOptions value={settings ?? empty_project_settings()} on_change={set_settings} disabled={busy} />
+            </section>
+
             <section className="flex flex-col gap-2 rounded-lg border border-reef bg-lagoon-deep p-2">
                 <button
                     className="self-start font-mono text-[9px] uppercase tracking-[0.14em] text-shade hover:text-shell"
                     onClick={() => set_showing_more((held) => !held)}
                 >
-                    {showing_more ? "− names and engine" : "+ names and engine"}
+                    {showing_more ? "− names" : "+ names"}
                 </button>
 
                 {showing_more ? (
@@ -634,15 +639,7 @@ export function StartPanel({ active }: { active: boolean }) {
                                 value={commander}
                                 onChange={(event) => set_commander(event.target.value)}
                             />
-                            <Picker
-                                className="min-w-[10rem] flex-1 rounded-lg border border-reef bg-lagoon px-2 py-1 font-mono text-[11px]"
-                                value={engine_id}
-                                choices={[
-                                    { value: "", label: "engine — whichever takes the crew's tools" },
-                                    ...engines.map((engine) => ({ value: engine.id, label: engine.name })),
-                                ]}
-                                on_pick={set_engine}
-                            />
+
                         </div>
                     </div>
                 ) : null}

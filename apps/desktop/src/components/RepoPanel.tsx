@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { ProjectOptions, SavedProjectOptions, empty_project_settings } from "@/components/ProjectOptions";
+import { use_poll } from "@/lib/poll";
+import { useCallback, useState } from "react";
 
 import {
     add_repo,
@@ -12,6 +14,7 @@ import {
     start_service,
     stop_service,
     type Repository,
+    type ProjectSettings,
     type Service,
     type WorktreeStatus,
 } from "@/lib/core";
@@ -31,6 +34,7 @@ export function RepoPanel({ active }: { active: boolean }) {
     const [services, set_services] = useState<Record<string, Service>>({});
     const [preview, set_preview] = useState<string | null>(null);
     const [path, set_path] = useState("");
+    const [settings, set_settings] = useState<ProjectSettings | undefined>();
     const [url, set_url] = useState("");
     const [into, set_into] = useState("");
     const [needs_git, set_needs_git] = useState<string | null>(null);
@@ -55,17 +59,7 @@ export function RepoPanel({ active }: { active: boolean }) {
         set_services(Object.fromEntries(running.map((service) => [service.key, service])));
     }, []);
 
-    useEffect(() => {
-        if (!active) {
-            return;
-        }
-
-        refresh().catch((cause) => set_error(String(cause)));
-        const handle = window.setInterval(() => {
-            refresh().catch(() => undefined);
-        }, 3000);
-        return () => window.clearInterval(handle);
-    }, [refresh, active]);
+    use_poll(() => { refresh().catch((cause) => set_error(String(cause))); }, 3000, active);
 
     const run = useCallback(
         async (key: string, action: () => Promise<unknown>) => {
@@ -129,8 +123,9 @@ export function RepoPanel({ active }: { active: boolean }) {
                                 set_needs_git(null);
                                 return run("open", async () => {
                                     try {
-                                        await add_repo(wanted);
+                                        await add_repo(wanted, false, settings);
                                         set_path("");
+                                        set_settings(undefined);
                                     } catch (cause) {
                                         const said = cause instanceof Error ? cause.message : String(cause);
                                         // A folder that is not a repository yet is not a
@@ -148,6 +143,8 @@ export function RepoPanel({ active }: { active: boolean }) {
                         </Press>
                     </div>
 
+                    <ProjectOptions value={settings ?? empty_project_settings()} on_change={set_settings} disabled={busy_on.has("open") || busy_on.has("clone")} />
+
                     {needs_git ? (
                         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-sun px-2 py-1">
                             <span className="font-mono text-[11px] text-sun">
@@ -160,9 +157,10 @@ export function RepoPanel({ active }: { active: boolean }) {
                                 busy_says="starting one…"
                                 on_press={() =>
                                     run("open", async () => {
-                                        await add_repo(needs_git, true);
+                                        await add_repo(needs_git, true, settings);
                                         set_needs_git(null);
                                         set_path("");
+                                        set_settings(undefined);
                                     })
                                 }
                             >
@@ -198,8 +196,9 @@ export function RepoPanel({ active }: { active: boolean }) {
                             busy_says="cloning…"
                             on_press={() =>
                                 run("clone", async () => {
-                                    await clone_repo(as_url(url), into.trim());
+                                    await clone_repo(as_url(url), into.trim(), settings);
                                     set_url("");
+                                    set_settings(undefined);
                                 })
                             }
                         >
@@ -252,6 +251,8 @@ export function RepoPanel({ active }: { active: boolean }) {
                                 </Press>
                             </span>
                         </header>
+
+                        <SavedProjectOptions repository={repo} />
 
                         {repo.missing ? (
                             <p className="border-b border-coral/40 bg-coral/10 px-2 py-1 font-mono text-[11px] text-coral">

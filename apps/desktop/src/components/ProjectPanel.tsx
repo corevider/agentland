@@ -91,9 +91,9 @@ export function ProjectPanel({ active, repositories, going }: Props) {
         [repos, repositories],
     );
 
-    useEffect(() => {
+    use_poll(() => {
         list_repos().then(set_repos).catch((cause) => set_error(String(cause)));
-    }, []);
+    }, 10000, active);
 
     useEffect(() => {
         if (!repository_id && shown.length > 0) {

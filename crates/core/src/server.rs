@@ -332,6 +332,7 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
         .route("/metrics", get(read_metrics).post(record_metrics))
         .route("/repos", get(list_repos).post(add_repo))
         .route("/repos/{id}", delete(forget_repo))
+        .route("/repos/{id}/settings", post(save_project_settings))
         .route("/repos/{id}/worktrees", get(list_worktrees).post(create_worktree))
         .route("/repos/{id}/worktrees/{name}", delete(remove_worktree))
         .route("/worktrees", get(list_places))
@@ -837,8 +838,9 @@ async fn compose_brief(state: &AppState, agent: &Agent, base: &str) -> String {
         mail,
     });
 
-    // Rules are attached by Crew::start, including resumes and login handovers.
-    written
+    // Running agents also receive settings updated since their session started.
+    let project = state.repos.repositories().into_iter().find(|project| project.id == agent.repository_id);
+    format!("{written}{}", project.map(|project| project.settings.brief()).unwrap_or_default())
 }
 
 async fn start_agent_with_brief(state: &AppState, agent: &Agent, base: &str) -> Result<(), ApiError> {
@@ -2452,6 +2454,11 @@ async fn open_cli(
     State(state): State<AppState>,
     Json(request): Json<crate::crew::CliRequest>,
 ) -> Result<Json<SessionReport>, ApiError> {
+    if request.authority == crate::crew::Authority::Crew {
+        if let Some(id) = &request.repository_id {
+            project_allows_engine(&state, id, &request.engine_id)?;
+        }
+    }
     let info = state.crew.open_cli(&request)?;
     Ok(Json(report_of(&state, info)?))
 }
@@ -2519,6 +2526,8 @@ async fn read_log(
 
 #[derive(Deserialize)]
 struct AddRepoBody {
+    #[serde(default)]
+    settings: Option<crate::project_settings::ProjectSettings>,
     #[serde(default)]
     path: Option<String>,
     #[serde(default)]
@@ -2948,8 +2957,10 @@ fn room_for_engine(state: &AppState, engine: &str) -> crate::budget::Room {
 
 async fn add_repo(
     State(state): State<AppState>,
+    scope: Option<axum::Extension<crate::auth::Scope>>,
     Json(body): Json<AddRepoBody>,
 ) -> Result<Json<Repository>, ApiError> {
+    let settings = human_project_settings(body.settings, scope)?;
     let opened = if let Some(url) = body.url {
         let into = body
             .into
@@ -2968,6 +2979,11 @@ async fn add_repo(
         }
     };
 
+    let opened = match settings {
+        Some(settings) => state.repos.set_settings(&opened.id, settings)?,
+        None => opened,
+    };
+
     // A folder opened belongs to the workspace it was opened in, and when there
     // is not one yet it gets one named after itself rather than nothing.
     let (workspace, _) = standing_in(&state, &opened.name)?;
@@ -2975,6 +2991,52 @@ async fn add_repo(
     state.workspaces.activate(Some(&workspace.id))?;
 
     Ok(Json(opened))
+}
+
+fn human_project_settings(
+    settings: Option<crate::project_settings::ProjectSettings>,
+    scope: Option<axum::Extension<crate::auth::Scope>>,
+) -> Result<Option<crate::project_settings::ProjectSettings>, ApiError> {
+    if settings.is_some() && matches!(scope, Some(axum::Extension(held)) if held != crate::auth::Scope::Full) {
+        return Err(ApiError(anyhow::anyhow!("project engine choices and reference folders are set by a person")));
+    }
+    settings.map(|settings| settings.validate().map_err(ApiError)).transpose()
+}
+
+async fn save_project_settings(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    scope: Option<axum::Extension<crate::auth::Scope>>,
+    Json(settings): Json<crate::project_settings::ProjectSettings>,
+) -> Result<Json<Repository>, ApiError> {
+    let settings = human_project_settings(Some(settings), scope)?.expect("provided settings");
+    Ok(Json(state.repos.set_settings(&id, settings)?))
+}
+
+fn project_allows_engine(state: &AppState, repository_id: &str, engine: &str) -> Result<(), ApiError> {
+    if let Some(project) = state.repos.repositories().into_iter().find(|project| project.id == repository_id) {
+        if !project.settings.allows(engine) {
+            return Err(ApiError(anyhow::anyhow!("{engine} is not enabled for project {}; change its project settings first", project.name)));
+        }
+    }
+    Ok(())
+}
+
+fn project_commander_engine(state: &AppState, repository: &Repository, chosen: Option<&str>) -> Result<String, ApiError> {
+    let chosen = chosen.filter(|id| !id.trim().is_empty()).or(repository.settings.commander_engine_id.as_deref());
+    if let Some(id) = chosen {
+        if !crate::crew::commanding_engine(id) {
+            return Err(ApiError(anyhow::anyhow!("{id} cannot use the crew tools required by a commander")));
+        }
+        project_allows_engine(state, &repository.id, id)?;
+        return engine_or_the_default(state, Some(id));
+    }
+    let rules = hiring_rules(state);
+    let engines = crate::crew::engines().into_iter()
+        .filter(|engine| engine.takes_the_tools && rules.engine_open(engine.id) && repository.settings.allows(engine.id))
+        .collect::<Vec<_>>();
+    crate::start::engine_for_a_commander(&engines)
+        .ok_or_else(|| ApiError(anyhow::anyhow!("no installed commander engine is enabled for this project; check project engines and global hiring settings")))
 }
 
 async fn forget_repo(
@@ -5451,6 +5513,7 @@ fn take_on(state: &AppState, mut request: HireRequest) -> Result<Agent, ApiError
         }
     }
 
+    project_allows_engine(state, &request.repository_id, &request.engine_id)?;
     may_hire_onto(state, &request.engine_id, request.account.as_deref())?;
 
     let commander = request.role == "commander";
@@ -6019,6 +6082,7 @@ async fn shape_agent(
                 None if moving.is_some() => None,
                 None => agent.account.as_deref(),
             };
+            project_allows_engine(&state, &agent.repository_id, engine)?;
             may_hire_onto(&state, engine, account)?;
         }
     }
@@ -6458,7 +6522,7 @@ async fn ignite(
 
     let hiring_on = held
         .is_none()
-        .then(|| engine_or_the_default(&state, body.engine_id.as_deref()))
+        .then(|| project_commander_engine(&state, &repository, body.engine_id.as_deref()))
         .transpose()?;
 
     // Hiring is starting work. Telling a commander that already exists is not,
@@ -8893,6 +8957,8 @@ async fn list_starters(
 
 #[derive(Deserialize)]
 struct Beginning {
+    #[serde(default)]
+    settings: Option<crate::project_settings::ProjectSettings>,
     /// What the crew is being asked for. It becomes the commander's first brief.
     goal: String,
     /// A folder on this machine, or the git URL of something to clone. One of
@@ -8956,8 +9022,10 @@ struct Begun {
 /// finds the commander, and hands it the new goal.
 async fn begin(
     State(state): State<AppState>,
+    scope: Option<axum::Extension<crate::auth::Scope>>,
     Json(body): Json<Beginning>,
 ) -> Result<Json<Begun>, ApiError> {
+    let settings = human_project_settings(body.settings, scope)?;
     let goal = body.goal.trim().to_owned();
     if goal.is_empty() {
         return Err(ApiError(anyhow::anyhow!(
@@ -9105,6 +9173,11 @@ async fn begin(
         }
     };
 
+    let repository = match settings {
+        Some(settings) => state.repos.set_settings(&repository.id, settings)?,
+        None => repository,
+    };
+
     note(&state, "project.opened", "a person", &repository.id, &repository.name);
 
     did.push(if known_before.iter().any(|held| held == &repository.id) {
@@ -9189,7 +9262,7 @@ async fn begin(
     let commander = match held {
         Some(commander) => commander,
         None => {
-            let engine_id = engine_or_the_default(&state, body.engine_id.as_deref())?;
+            let engine_id = project_commander_engine(&state, &repository, body.engine_id.as_deref())?;
 
             let ids: Vec<String> = crew.iter().map(|agent| agent.id.clone()).collect();
             let hired = take_on(
@@ -10126,5 +10199,19 @@ mod card_binding_tests {
         assert!(ensure_card_worktree(&task, "repo", "desk").is_ok());
         assert!(ensure_card_worktree(&task, "other", "desk").is_err());
         assert!(ensure_card_worktree(&task, "repo", "other").is_err());
+    }
+}
+
+#[cfg(test)]
+mod project_settings_authority_tests {
+    use super::*;
+    #[test]
+    fn agents_may_open_projects_but_cannot_set_or_relax_project_policy() {
+        let agent = || Some(axum::Extension(crate::auth::Scope::Agent));
+        assert!(human_project_settings(None, agent()).is_ok());
+        assert!(human_project_settings(Some(Default::default()), agent()).is_err());
+        assert!(human_project_settings(Some(Default::default()), Some(axum::Extension(crate::auth::Scope::Full))).is_ok());
+        assert!(!crate::auth::permits(crate::auth::Scope::Agent, "POST", "/repos/demo/settings"));
+        assert!(crate::auth::permits(crate::auth::Scope::Full, "POST", "/repos/demo/settings"));
     }
 }

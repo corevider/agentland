@@ -1,3 +1,4 @@
+import { use_poll } from "@/lib/poll";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -61,6 +62,8 @@ export function WorkspaceTabs({ turn, active, on_active, on_switched, counts }: 
     useEffect(() => {
         refresh().catch((cause) => set_error(cause instanceof Error ? cause.message : String(cause)));
     }, [refresh, turn]);
+
+    use_poll(() => { refresh().catch(() => undefined); }, 10000);
 
     const choose = useCallback(
         (id: string) => {

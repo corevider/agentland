@@ -244,6 +244,14 @@ fn version_of(command: &str) -> Option<String> {
         })
 }
 
+pub fn known_engine(id: &str) -> bool {
+    CATALOG.iter().any(|engine| engine.id == id)
+}
+
+pub fn commanding_engine(id: &str) -> bool {
+    CATALOG.iter().any(|engine| engine.id == id && engine.takes_the_tools)
+}
+
 pub fn engines() -> Vec<Engine> {
     CATALOG
         .iter()
@@ -1086,6 +1094,7 @@ impl Crew {
             &self.data_dir, &format!("shell-{}", slugify(engine_id)), cwd,
             self.standing.lock().as_deref(),
         )?;
+        crate::project_settings::attach(&self.data_dir, request.repository_id.as_deref().unwrap_or_default(), &file)?;
         args.extend(crate::instructions::args(engine_id, &file));
         if let Some(brief) = crate::instructions::brief(engine_id, &file, None) {
             let engine = engine(engine_id).ok_or_else(|| anyhow!("unknown engine: {engine_id}"))?;
@@ -1193,6 +1202,7 @@ impl Crew {
             &self.data_dir, &slugify(&agent.id), worktree_path,
             self.standing.lock().as_deref(),
         )?;
+        crate::project_settings::attach(&self.data_dir, &agent.repository_id, &rules_file)?;
         args.extend(crate::instructions::args(&agent.engine_id, &rules_file));
 
         args.extend(permission_args(&agent.engine_id, &mode));

@@ -1,4 +1,5 @@
 import { change_key, is_a_change, send_change } from "@/lib/pending";
+import { changes_projects, projects_changed } from "@/lib/project_changes";
 
 export interface CoreEndpoint {
     host: string;
@@ -111,6 +112,8 @@ async function send<T>(path: string, init?: RequestInit): Promise<T> {
         const detail = await response.text();
         throw new Error(`${response.status} ${detail}`);
     }
+
+    if (changes_projects(path, init?.method)) projects_changed();
 
     if (response.status === 204) {
         return undefined as T;
@@ -239,6 +242,19 @@ export interface Repository {
     origin: string | null;
     /// The checkout is not on disk any more.
     missing?: boolean;
+    settings?: ProjectSettings;
+}
+
+export interface ProjectSettings {
+    engine_ids: string[];
+    commander_engine_id: string | null;
+    reference_folders: { path: string; note: string }[];
+}
+
+export function save_project_settings(id: string, settings: ProjectSettings): Promise<Repository> {
+    return request<Repository>(`/repos/${encodeURIComponent(id)}/settings`, {
+        method: "POST", body: JSON.stringify(settings),
+    });
 }
 
 export interface WorktreeStatus {
@@ -259,10 +275,10 @@ export function list_repos(): Promise<Repository[]> {
 /// Take a folder as a project. `start_git` says yes to starting a repository in
 /// a folder that is not one yet — it writes to the folder, so the panel asks
 /// before passing it.
-export function add_repo(path: string, start_git = false): Promise<Repository> {
+export function add_repo(path: string, start_git = false, settings?: ProjectSettings): Promise<Repository> {
     return request<Repository>("/repos", {
         method: "POST",
-        body: JSON.stringify({ path, start_git }),
+        body: JSON.stringify({ path, start_git, settings }),
     });
 }
 
@@ -272,10 +288,10 @@ export async function forget_repo(id: string): Promise<void> {
 }
 
 /// Clone a repository into a folder the person picked.
-export function clone_repo(url: string, into: string): Promise<Repository> {
+export function clone_repo(url: string, into: string, settings?: ProjectSettings): Promise<Repository> {
     return request<Repository>("/repos", {
         method: "POST",
-        body: JSON.stringify({ url, into }),
+        body: JSON.stringify({ url, into, settings }),
     });
 }
 
@@ -376,6 +392,7 @@ export interface Vetting {
 
 /// What a project needs to begin: somewhere to work, and something to do.
 export interface Beginning {
+    settings?: ProjectSettings;
     goal: string;
     path?: string;
     url?: string;
