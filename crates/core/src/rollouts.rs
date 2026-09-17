@@ -42,6 +42,17 @@ impl Rollout {
         fs::read_to_string(&self.path).unwrap_or_default()
     }
 
+    /// Read lifecycle events from this exact conversation, excluding earlier
+    /// launches of a resumed conversation. Limit reads on long transcripts.
+    pub fn activity_since(&self, since: u64) -> Option<crate::activity::State> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = fs::File::open(&self.path).ok()?;
+        let size = file.metadata().ok()?.len();
+        file.seek(SeekFrom::Start(size.saturating_sub(256 * 1024))).ok()?;
+        let mut bytes = Vec::new(); file.take(256 * 1024).read_to_end(&mut bytes).ok()?;
+        activity(&String::from_utf8_lossy(&bytes), since)
+    }
+
     /// Whether this session was told something, in a person's own message.
     pub fn mentions(&self, fingerprint: &str) -> bool {
         mentions(&self.text(), fingerprint)
@@ -51,6 +62,24 @@ impl Rollout {
     pub fn spending_since(&self, since: u64) -> Vec<Spend> {
         spending_since(&self.text(), since)
     }
+}
+
+pub fn activity(raw: &str, since: u64) -> Option<crate::activity::State> {
+    for line in raw.lines().rev() {
+        let Ok(row) = serde_json::from_str::<Value>(line) else { continue; };
+        if row.get("type").and_then(Value::as_str) != Some("event_msg") { continue; }
+        let Some(at) = row.get("timestamp").and_then(Value::as_str).and_then(seconds_of) else { continue; };
+        // The launch clock has second precision: reject its entire first
+        // second rather than accepting a preceding turn from that second.
+        if at <= since { continue; }
+        match row["payload"]["type"].as_str() {
+            Some("task_started") => return Some(crate::activity::State::Active),
+            Some("task_complete") => return Some(crate::activity::State::Idle),
+            Some("turn_aborted") => return Some(crate::activity::State::WaitingInput),
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Where a login keeps its sessions: the folder handed to it as `CODEX_HOME`,
@@ -398,5 +427,22 @@ mod tests {
 
         let claude = ("CLAUDE_CONFIG_DIR".to_owned(), "/accounts/claude/work".to_owned());
         assert_ne!(home(Some(&claude)), Some(PathBuf::from("/accounts/claude/work")));
+    }
+}
+
+#[cfg(test)]
+mod activity_tests {
+    use super::*;
+    #[test]
+    fn native_codex_lifecycle_is_scoped_to_the_current_launch() {
+        let raw = r#"{"timestamp":"2026-09-17T08:00:00Z","type":"event_msg","payload":{"type":"task_started"}}
+{"timestamp":"2026-09-17T08:00:02Z","type":"event_msg","payload":{"type":"task_complete"}}
+{"timestamp":"2026-09-17T08:00:03Z","type":"event_msg","payload":{"type":"token_count"}}"#;
+        let start = seconds_of("2026-09-17T07:59:59Z").unwrap();
+        assert_eq!(activity(raw, start), Some(crate::activity::State::Idle));
+        assert_eq!(activity(raw.lines().next().unwrap(), start), Some(crate::activity::State::Active));
+        assert_eq!(activity(raw, start + 4), None, "a resumed conversation cannot inherit the prior launch's idle state");
+        let interrupted = format!("{raw}\n{{\"timestamp\":\"2026-09-17T08:00:04Z\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"turn_aborted\"}}}}");
+        assert_eq!(activity(&interrupted, start), Some(crate::activity::State::WaitingInput));
     }
 }

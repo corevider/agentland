@@ -67,6 +67,6 @@ and evidence; do not mark an engine equivalent solely because it launches.
 
 [Workflow hardening](workflow-hardening.md) adds a common commit-bound merge
 gate, isolated `repo_test` execution and durable, bounded repair feedback.
-Agentland's own lifecycle hooks now normalize activity from Claude, Codex and
-Gemini; this does not import or translate a person's existing provider hooks.
+Agentland normalizes Claude/Gemini lifecycle hooks and Codex native task events;
+this does not import, translate or bypass trust for a person's provider hooks.
 The same PR and test requirements apply regardless of a role's selected engine.
