@@ -129,8 +129,8 @@ export interface Machine {
     shell: string;
 }
 
-export function read_machine(): Promise<Machine> {
-    return request<Machine>("/machine");
+export function read_machine(signal?: AbortSignal): Promise<Machine> {
+    return request<Machine>("/machine", { signal });
 }
 
 /// A pane running the machine's own shell — bash or what SHELL says, PowerShell
