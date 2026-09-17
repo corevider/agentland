@@ -100,6 +100,7 @@ pub enum Verdict {
     Working,
     Resend,
     Finished(String),
+    NeedsReview(String),
     LostIt(String),
 }
 
@@ -120,13 +121,13 @@ pub fn judge(watch: &Watch, seen: &Observation, rules: &Rules) -> Verdict {
     // "working", every one undelivered, the oldest two days old — each one read
     // a pane, a transcript and a worktree on every tick.
     if !seen.session_alive {
-        return Verdict::Finished(if seen.changed_files > 0 {
+        return Verdict::LostIt(if seen.changed_files > 0 {
             format!(
-                "{} finished and left {} changed file(s)",
+                "{} was interrupted and left {} changed file(s); inspect and resume the work",
                 watch.agent_id, seen.changed_files
             )
         } else {
-            format!("{} stopped without changing anything", watch.agent_id)
+            format!("{} was interrupted without changing anything", watch.agent_id)
         });
     }
 
@@ -156,14 +157,14 @@ pub fn judge(watch: &Watch, seen: &Observation, rules: &Rules) -> Verdict {
     // turn had not started yet.
     if seen.changed_files > 0 && watch.worked {
         if seen.quiet_turn {
-            return Verdict::Finished(format!(
+            return Verdict::NeedsReview(format!(
                 "{} is waiting at an empty prompt with {} changed file(s)",
                 watch.agent_id, seen.changed_files
             ));
         }
 
         if seen.idle_seconds >= rules.idle_before_finished {
-            return Verdict::Finished(format!(
+            return Verdict::NeedsReview(format!(
                 "{} has written nothing for {}s with {} changed file(s)",
                 watch.agent_id, seen.idle_seconds, seen.changed_files
             ));
@@ -896,19 +897,19 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_that_exited_is_finished_and_the_reason_says_whether_it_left_work() {
+    fn an_agent_that_exited_is_interrupted_and_preserves_the_work_report() {
         let mut held = watch();
         held.delivered = true;
 
         let empty_handed = Observation { session_alive: false, ..seen() };
         match judge(&held, &empty_handed, &Rules::default()) {
-            Verdict::Finished(why) => assert!(why.contains("without changing anything"), "{why}"),
+            Verdict::LostIt(why) => assert!(why.contains("without changing anything"), "{why}"),
             other => panic!("{other:?}"),
         }
 
         let with_work = Observation { session_alive: false, changed_files: 3, ..seen() };
         match judge(&held, &with_work, &Rules::default()) {
-            Verdict::Finished(why) => assert!(why.contains("3 changed file"), "{why}"),
+            Verdict::LostIt(why) => assert!(why.contains("3 changed file"), "{why}"),
             other => panic!("{other:?}"),
         }
     }
@@ -924,7 +925,7 @@ mod tests {
         assert_eq!(judge(&held, &thinking, &rules), Verdict::Working, "silence is not proof");
 
         let done = Observation { idle_seconds: 200, changed_files: 1, ..seen() };
-        assert!(matches!(judge(&held, &done, &rules), Verdict::Finished(_)));
+        assert!(matches!(judge(&held, &done, &rules), Verdict::NeedsReview(_)));
     }
 
     #[test]
@@ -942,7 +943,7 @@ mod tests {
         };
 
         match judge(&held, &waiting, &Rules::default()) {
-            Verdict::Finished(why) => assert!(why.contains("waiting at an empty prompt"), "{why}"),
+            Verdict::NeedsReview(why) => assert!(why.contains("waiting at an empty prompt"), "{why}"),
             other => panic!("a redrawing status line hid a finished agent: {other:?}"),
         }
 
@@ -1034,7 +1035,7 @@ mod tests {
 
         let ran = Watch { worked: true, ..fresh };
         assert!(
-            matches!(judge(&ran, &quiet, &Rules::default()), Verdict::Finished(_)),
+            matches!(judge(&ran, &quiet, &Rules::default()), Verdict::NeedsReview(_)),
             "once it has actually run, a quiet pane over changed files is done"
         );
     }
@@ -1049,7 +1050,7 @@ mod tests {
         };
 
         assert!(
-            matches!(judge(&held, &gone, &Rules::default()), Verdict::Finished(_)),
+            matches!(judge(&held, &gone, &Rules::default()), Verdict::LostIt(_)),
             "resending needs a pane; without one the watch used to ask forever"
         );
     }

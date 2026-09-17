@@ -35,6 +35,7 @@ import {
     set_merge_policy,
     shelved_file,
     submit_review,
+    resume_repairs,
     list_races,
     type Agent,
     type Race,
@@ -777,6 +778,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                     task={tasks.find((task) => task.id === opened)!}
                     moving={busy}
                     move_error={error}
+                    on_resume_repairs={() => void run(() => resume_repairs(opened))}
                     on_move={(column) => void run(() => place_task(opened, column))}
                     agents={agents}
                     race={race_on(races, opened)}
@@ -839,6 +841,8 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                                             card.id,
                                             "request_changes",
                                             notes_as_review(sending),
+                                            review.data.head_sha,
+                                            review.data.pull_url,
                                         );
                                         set_notes([]);
                                         set_error(
@@ -1090,6 +1094,10 @@ function said(entry: Entry): string {
                 : "";
             return `${what.summary}${size}`;
         }
+        case "pull_observed":
+            return `PR commit ${String(what.head_sha ?? "").slice(0, 12)}`;
+        case "tested":
+            return `${what.passed ? "passed" : "failed"}: ${what.program} ${Array.isArray(what.args) ? what.args.join(" ") : ""} · ${String(what.head_sha ?? "").slice(0, 12)}\n${String(what.output ?? "")}`;
         case "reviewed":
             return `${String(what.verdict)}${what.summary ? ` — ${String(what.summary)}` : ""}`;
         default:
@@ -1107,6 +1115,7 @@ function CardDetail({
     moving,
     move_error,
     on_move,
+    on_resume_repairs,
     agents,
     merges_itself,
     on_menu,
@@ -1123,6 +1132,7 @@ function CardDetail({
     moving: boolean;
     move_error: string | null;
     on_move: (column: Column) => void;
+    on_resume_repairs: () => void;
     agents: Agent[];
     merges_itself: boolean;
     /// The race running on this card, if one is.
@@ -1195,6 +1205,14 @@ function CardDetail({
                     />
                     {moving ? <Spinner label="moving card" /> : null}
                 </label>
+                {task.evidence.filter((entry) => entry.by === "repair limit" || entry.by === "repair resumed").at(-1)?.by === "repair limit" ? (
+                    <div className="rounded-lg border border-coral p-2 text-[11px] text-shell">
+                        <p>Automatic repairs paused after three rounds. Review the feedback before continuing.</p>
+                        <button type="button" disabled={moving} onClick={on_resume_repairs} className="mt-2 rounded border border-reef px-2 py-1">
+                            resume repairs
+                        </button>
+                    </div>
+                ) : null}
                 {move_error ? (
                     <p role="alert" className="rounded-lg border border-coral px-2 py-1 font-mono text-[11px] text-coral">
                         {move_error}

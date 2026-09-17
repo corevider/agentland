@@ -137,9 +137,11 @@ pub enum Evidence {
     Commit { sha: String, subject: String },
     Diff { files: usize, insertions: u32, deletions: u32 },
     PullRequest { url: String },
+    PullObserved { url: String, head_sha: String },
+    Tested { head_sha: String, program: String, args: Vec<String>, #[serde(default)] is_test: bool, passed: bool, output: String },
     Note { text: String },
     /// What somebody who did not write the work made of it.
-    Reviewed { verdict: String, summary: String },
+    Reviewed { verdict: String, summary: String, #[serde(default)] head_sha: String, #[serde(default)] role: String, #[serde(default)] pull_url: String },
     /// What an agent says it did when its turn on this card ended, and what the
     /// worktree looked like when it stopped. The one entry on a card that is a
     /// report rather than a remark.
@@ -1616,6 +1618,9 @@ mod tests {
                 Evidence::Reviewed {
                     verdict: "approve".into(),
                     summary: "reads right".into(),
+                    head_sha: String::new(),
+                    role: "reviewer".into(),
+                    pull_url: String::new(),
                 },
                 "rex",
                 50,

@@ -15,6 +15,10 @@ fn split_env(name: &str, fallback: Vec<String>) -> Vec<String> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if std::env::args().nth(1).as_deref() == Some(agentland_core::activity::SUBCOMMAND) {
+        agentland_core::activity::run(&std::env::args().nth(2).unwrap_or_default());
+        return Ok(());
+    }
     let mut args = std::env::args().skip(1);
     if args.next().as_deref() == Some(agentland_core::status_line::SUBCOMMAND) {
         let data_dir = args

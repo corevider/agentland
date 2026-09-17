@@ -38,7 +38,7 @@ impl Check {
             &self.state
         };
 
-        ["FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ERROR", "ACTION_REQUIRED"]
+        ["FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ERROR", "ACTION_REQUIRED", "CANCELLED", "STALE"]
             .iter()
             .any(|bad| verdict.eq_ignore_ascii_case(bad))
     }
@@ -46,6 +46,8 @@ impl Check {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct PullState {
+    #[serde(default, rename = "headRefOid")]
+    pub head_sha: String,
     #[serde(default)]
     pub number: u64,
     #[serde(default)]
@@ -441,6 +443,7 @@ mod tests {
 
     fn open(mergeable: &str, review: &str, checks: Vec<Check>) -> PullState {
         PullState {
+            head_sha: "a".repeat(40),
             number: 12,
             url: "https://github.com/o/r/pull/12".to_owned(),
             state: "OPEN".to_owned(),
@@ -683,7 +686,7 @@ mod tests {
 
     #[test]
     fn a_check_nobody_ran_is_not_a_failure() {
-        for skipped in ["SKIPPED", "NEUTRAL", "CANCELLED", ""] {
+        for skipped in ["SKIPPED", "NEUTRAL", ""] {
             let pull = open("MERGEABLE", "APPROVED", vec![check("optional", "COMPLETED", skipped)]);
 
             assert_eq!(
@@ -730,6 +733,7 @@ mod tests {
         // opened: mergeable, clean, no review asked for, and no checks reported
         // — while a workflow was being registered behind it.
         let fresh = PullState {
+            head_sha: "a".repeat(40),
             number: 1,
             url: "https://github.com/corevider/ccdo/pull/1".to_owned(),
             state: "OPEN".to_owned(),
@@ -799,9 +803,8 @@ mod tests {
 
 /// The roles that judge somebody else's work, in the order a person reads them.
 ///
-/// A check is required when the crew has somebody to do it. Hire a security
-/// agent and security gates the card; hire none and it does not. That way the
-/// gate is the crew a person built rather than a list this file insists on.
+/// Required independently of the current roster. A missing role means hiring
+/// is needed, not that its check has already passed.
 pub const CHECKS: &[&str] = &["reviewer", "tester", "security"];
 
 /// Which checks a card still owes, given who is on the crew and who has
@@ -810,18 +813,18 @@ pub const CHECKS: &[&str] = &["reviewer", "tester", "security"];
 /// Approving is per role, not per agent: two reviewers do not make two checks,
 /// and one agent approving does not answer for a role nobody has filled.
 pub fn checks_outstanding(
-    on_the_crew: &[(String, String)],
+    _on_the_crew: &[(String, String)],
     approvals: &[(String, String)],
 ) -> Vec<String> {
     CHECKS
         .iter()
-        .filter(|role| on_the_crew.iter().any(|(_, held)| held == *role))
         .filter(|role| !approvals.iter().any(|(_, held)| held == *role))
         .map(|role| (*role).to_owned())
         .collect()
 }
 
-/// Who has approved since the work last went back to be changed.
+/// Ledger helper for reviews already scoped to one commit. Merge authorization
+/// must use `merge_gate`, which also verifies commit identity and test proof.
 ///
 /// An approval is of the code it read. Once somebody asks for changes the card
 /// goes back to working and the code moves on, so a yes given before that is a
@@ -857,19 +860,19 @@ pub fn asked_to_judge(on_the_crew: &[(String, String)], author: &str) -> Vec<Str
 /// own job.
 pub fn asked_to_judge_it(role: &str, task_id: &str, repository_id: &str, worktree: &str) -> String {
     let what = match role {
-        "tester" => "run its tests and say whether they prove what the card asks",
+        "tester" => "run its tests with repo_test at that head_sha and say whether they prove what the card asks; install dependencies there first and reuse its returned checkout if needed",
         "security" => "look for what it could leak, expose or let in",
         _ => "read it for whether it does what the card asks, and does it well",
     };
 
     format!(
-        "{task_id} is up for review on {repository_id}, in the {worktree} worktree. Read it with repo_review, {what}, and give your verdict with pr_review on that card. Approve it when it is ready to merge as it is. If anything has to change first, however small, that is request_changes — say what has to change rather than that something does, and it goes back to its author. A comment asks for nothing and leaves the card where it is. You judge it; you do not edit it."
+        "{task_id} is up for review on {repository_id}, in the {worktree} worktree. Read it with repo_review, {what}, and give your verdict with pr_review on that card, including the exact head_sha returned by repo_review. Approve it when it is ready to merge as it is. If anything has to change first, however small, that is request_changes — say what has to change rather than that something does, and it goes back to its author. A comment asks for nothing and leaves the card where it is. You judge it; you do not edit it."
     )
 }
 
 #[cfg(test)]
 mod check_tests {
-    use super::{asked_to_judge, asked_to_judge_it, checks_outstanding, standing_approvers};
+    use super::{asked_to_judge, asked_to_judge_it, checks_outstanding, standing_approvers, CHECKS};
 
     fn crew(roles: &[(&str, &str)]) -> Vec<(String, String)> {
         roles
@@ -879,11 +882,11 @@ mod check_tests {
     }
 
     #[test]
-    fn a_check_nobody_was_hired_for_does_not_gate_the_card() {
+    fn missing_check_roles_still_gate_the_card() {
         let on_the_crew = crew(&[("rex", "reviewer"), ("ada", "implementer")]);
         let approvals = crew(&[("rex", "reviewer")]);
 
-        assert!(checks_outstanding(&on_the_crew, &approvals).is_empty());
+        assert_eq!(checks_outstanding(&on_the_crew, &approvals), vec!["tester", "security"]);
     }
 
     #[test]
@@ -899,13 +902,13 @@ mod check_tests {
         let on_the_crew = crew(&[("rex", "reviewer"), ("sec", "security")]);
         let approvals = crew(&[("rex", "reviewer"), ("rex", "reviewer")]);
 
-        assert_eq!(checks_outstanding(&on_the_crew, &approvals), vec!["security"]);
+        assert_eq!(checks_outstanding(&on_the_crew, &approvals), vec!["tester", "security"]);
     }
 
     #[test]
-    fn a_crew_with_nobody_to_check_owes_nothing() {
+    fn an_empty_check_roster_owes_every_role() {
         let on_the_crew = crew(&[("ada", "implementer")]);
-        assert!(checks_outstanding(&on_the_crew, &[]).is_empty());
+        assert_eq!(checks_outstanding(&on_the_crew, &[]), CHECKS);
     }
 
     fn reviews(said: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -960,5 +963,129 @@ mod check_tests {
             assert!(said.contains("you do not edit it"));
             assert!(said.contains("however small, that is request_changes"), "a change asked for is not a comment");
         }
+    }
+}
+
+/// All merge entry points use the same fail-closed decision. Review roles are
+/// stored with the evidence so dismissing a crew member cannot change policy.
+pub fn merge_gate(task: &crate::board::Task, pull: &crate::pulls::PullState) -> anyhow::Result<()> {
+    anyhow::ensure!(pull.state == "OPEN" && (pull.head_sha.len() == 40 || pull.head_sha.len() == 64) && pull.head_sha.bytes().all(|c| c.is_ascii_hexdigit()), "no open pull request with a known commit");
+    // An empty CI result cannot prove that checks have finished registering.
+    anyhow::ensure!(!pull.checks.is_empty(), "no CI checks have reported for this commit");
+    anyhow::ensure!(matches!(crate::pulls::where_it_stands(pull, 0), crate::pulls::Standing::Ready),
+        "the forge has not cleared checks, conflicts and branch protection");
+    anyhow::ensure!(pull.checks.iter().all(|check| {
+        let verdict = if check.state.is_empty() { &check.conclusion } else { &check.state };
+        check.is_finished() && ["SUCCESS", "NEUTRAL", "SKIPPED"].iter().any(|allowed| verdict.eq_ignore_ascii_case(allowed))
+    }), "CI checks have not all completed successfully");
+    let bound_url = task.evidence.iter().rev().find_map(|entry| match &entry.what {
+        crate::board::Evidence::PullRequest { url } => Some(url), _ => None,
+    });
+    anyhow::ensure!(bound_url == Some(&pull.url) && !pull.url.is_empty(), "the pull request is not the one recorded on this card");
+    let mut approved = std::collections::BTreeSet::new();
+    for entry in &task.evidence {
+        if let crate::board::Evidence::Reviewed { verdict, head_sha, role, pull_url, .. } = &entry.what {
+            if head_sha != &pull.head_sha || pull_url != &pull.url || task.assignee.as_deref() == Some(entry.by.as_str()) { continue; }
+            if verdict == Verdict::ChangesRequested.word() { approved.clear(); }
+            if verdict == Verdict::Approved.word() {
+                let tested = role != "tester" || task.evidence.iter().rev().find_map(|proof| match &proof.what {
+                    crate::board::Evidence::Tested { head_sha, program, args, passed, .. }
+                        if head_sha == &pull.head_sha && proof.by == entry.by && crate::proving::is_test(program, args) => Some(*passed),
+                    _ => None,
+                }).unwrap_or(false);
+                if tested { approved.insert(role.as_str()); }
+            }
+        }
+    }
+    for role in crate::pulls::CHECKS {
+        anyhow::ensure!(approved.contains(role), "this commit still needs a {role} approval");
+    }
+    Ok(())
+
+}
+
+
+#[cfg(test)]
+mod merge_gate_tests {
+    use super::*;
+    use crate::board::{Entry, Evidence, Task};
+
+    fn approved() -> (Task, PullState) {
+        let mut task: Task = serde_json::from_value(serde_json::json!({
+            "id": "task", "title": "work", "column": "review", "repository_id": "repo", "assignee": "author"
+        })).unwrap();
+        let pull = PullState {
+            url: "https://github.com/org/repo/pull/1".into(), head_sha: "a".repeat(40), state: "OPEN".into(), mergeable: "MERGEABLE".into(),
+            merge_state: "CLEAN".into(), checks: vec![Check {
+                name: "test".into(), status: "COMPLETED".into(), conclusion: "SUCCESS".into(), state: String::new()
+            }], ..Default::default()
+        };
+        task.evidence.push(Entry { by: "author".into(), at: 0, what: Evidence::PullRequest { url: pull.url.clone() }});
+        for role in CHECKS {
+            task.evidence.push(Entry { by: role.to_string(), at: 1, what: Evidence::Reviewed {
+                verdict: Verdict::Approved.word().into(), summary: "checked".into(), role: role.to_string(), head_sha: pull.head_sha.clone(), pull_url: pull.url.clone()
+            }});
+        }
+        task.evidence.push(Entry { by: "tester".into(), at: 1, what: Evidence::Tested {
+            is_test: true, head_sha: pull.head_sha.clone(), program: "cargo".into(), args: vec!["test".into()], passed: true, output: "passed".into()
+        }});
+        (task, pull)
+    }
+
+    #[test]
+    fn only_the_reviewed_commit_can_merge() {
+        let (task, mut pull) = approved();
+        assert!(merge_gate(&task, &pull).is_ok());
+        pull.head_sha = "b".repeat(40);
+        assert!(merge_gate(&task, &pull).is_err());
+    }
+
+    #[test]
+    fn missing_roles_self_review_and_legacy_reviews_do_not_pass() {
+        let (mut task, pull) = approved();
+        task.evidence.remove(3);
+        assert!(merge_gate(&task, &pull).is_err());
+        let (mut task, pull) = approved();
+        task.evidence[1].by = "author".into();
+        assert!(merge_gate(&task, &pull).is_err());
+        let (mut task, pull) = approved();
+        if let Evidence::Reviewed { head_sha, .. } = &mut task.evidence[1].what { head_sha.clear(); }
+        assert!(merge_gate(&task, &pull).is_err());
+    }
+
+    #[test]
+    fn tester_approval_requires_a_passing_test_on_this_commit() {
+        let (mut task, pull) = approved();
+        task.evidence.pop();
+        assert!(merge_gate(&task, &pull).is_err());
+        let (mut task, pull) = approved();
+        if let crate::board::Evidence::Tested { passed, .. } = &mut task.evidence.last_mut().unwrap().what { *passed = false; }
+        assert!(merge_gate(&task, &pull).is_err());
+    }
+
+    #[test]
+    fn changes_requested_clear_all_prior_approvals() {
+        let (mut task, pull) = approved();
+        let mut rejection = task.evidence[1].clone();
+        if let Evidence::Reviewed { verdict, .. } = &mut rejection.what { *verdict = Verdict::ChangesRequested.word().into(); }
+        task.evidence.push(rejection);
+        assert!(merge_gate(&task, &pull).is_err());
+    }
+
+    #[test]
+    fn ci_pending_cancelled_missing_conflicts_and_closed_block_merge() {
+        let (task, pull) = approved();
+        for conclusion in ["FAILURE", "CANCELLED", "TIMED_OUT", "STALE"] {
+            let mut held = pull.clone(); held.checks[0].conclusion = conclusion.into();
+            assert!(merge_gate(&task, &held).is_err(), "{conclusion}");
+        }
+        let mut held = pull.clone(); held.checks.clear();
+        assert!(merge_gate(&task, &held).is_err());
+        let mut held = pull.clone(); held.checks[0].status = "IN_PROGRESS".into();
+        assert!(merge_gate(&task, &held).is_err());
+        let mut held = pull.clone(); held.mergeable = "CONFLICTING".into();
+        assert!(merge_gate(&task, &held).is_err());
+        let mut held = pull.clone(); held.state = "CLOSED".into();
+        assert!(merge_gate(&task, &held).is_err());
     }
 }

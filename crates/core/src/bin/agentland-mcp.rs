@@ -570,6 +570,17 @@ fn tools() -> Value {
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
+            "name": "repo_test",
+            "description": "Run tests or install test dependencies in an isolated copy of the reviewed commit. Uses the same runner for every engine. Retains logs and checkout; never runs in the author's worktree. Maximum 300 seconds per call.",
+            "inputSchema": { "type": "object", "properties": {
+                "repository_id": { "type": "string" }, "worktree": { "type": "string" },
+                "task_id": { "type": "string" }, "head_sha": { "type": "string" },
+                "program": { "type": "string" }, "args": { "type": "array", "items": { "type": "string" } },
+                "directory": { "type": "string", "description": "Relative directory inside the isolated checkout" },
+                "checkout": { "type": "string", "description": "Optional checkout path returned by a prior repo_test call for the same commit; reuse after installing dependencies" }
+            }, "required": ["repository_id", "worktree", "task_id", "head_sha", "program", "args"] }
+        },
+        {
             "name": "repo_review",
             "description": "Read the diff for a worktree: committed range, working tree and untracked files.",
             "inputSchema": {
@@ -605,13 +616,15 @@ fn tools() -> Value {
                     "repository_id": { "type": "string" },
                     "worktree": { "type": "string" },
                     "task_id": { "type": "string" },
+                    "head_sha": { "type": "string", "description": "Exact head_sha returned by repo_review; read again if it changes" },
+                    "pull_url": { "type": "string", "description": "Exact pull_url returned by repo_review" },
                     "verdict": {
                         "type": "string",
                         "enum": ["approve", "request_changes", "comment"]
                     },
                     "summary": { "type": "string" }
                 },
-                "required": ["repository_id", "worktree", "task_id", "verdict", "summary"]
+                "required": ["repository_id", "worktree", "task_id", "head_sha", "pull_url", "verdict", "summary"]
             }
         }
     ])
@@ -933,9 +946,20 @@ fn call_tool(core: &Core, name: &str, arguments: &Value) -> Result<Value, String
             Some(json!({
                 "task_id": text("task_id")?,
                 "verdict": text("verdict")?,
+                "pull_url": text("pull_url")?,
+                "head_sha": text("head_sha")?,
                 "summary": text("summary")?,
                 "by": std::env::var("AGENTLAND_AGENT").unwrap_or_else(|_| "unknown".to_owned()),
             })),
+        ),
+        "repo_test" => core.call(
+            "POST",
+            &format!("/repos/{}/worktrees/{}/test", text("repository_id")?, text("worktree")?),
+            Some(json!({ "task_id": text("task_id")?, "head_sha": text("head_sha")?,
+                "program": text("program")?, "args": arguments.get("args").cloned().unwrap_or(json!([])),
+                "directory": arguments.get("directory").and_then(Value::as_str).unwrap_or(""),
+                "checkout": arguments.get("checkout"),
+                "by": std::env::var("AGENTLAND_AGENT").unwrap_or_else(|_| "unknown".to_owned()) })),
         ),
         "repo_review" => core.call(
             "GET",
