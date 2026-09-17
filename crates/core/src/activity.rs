@@ -114,7 +114,7 @@ pub fn install(
     args: &mut Vec<String>,
     env: &mut BTreeMap<String, String>,
 ) -> anyhow::Result<()> {
-    if !matches!(engine, "claude" | "codex" | "gemini") {
+    if !matches!(engine, "claude" | "gemini") {
         return Ok(());
     }
     let binary = std::env::current_exe()?
@@ -134,12 +134,6 @@ pub fn install(
             "Notification",
             "SessionEnd",
         ],
-        "codex" => &[
-            "SessionStart",
-            "UserPromptSubmit",
-            "PermissionRequest",
-            "Stop",
-        ],
         _ => &[
             "SessionStart",
             "UserPromptSubmit",
@@ -150,20 +144,7 @@ pub fn install(
             "SessionEnd",
         ],
     };
-    if engine == "codex" {
-        // Session config composes with the user's own hooks; project hooks.json
-        // is intentionally not used by the native CLI.
-        for name in names {
-            let command = format!("{} {SUBCOMMAND} {name}", quote(&binary, cfg!(windows)));
-            args.extend([
-                "-c".into(),
-                format!(
-                    "hooks.{name}=[{{hooks=[{{type=\"command\",command={},timeout=5}}]}}]",
-                    serde_json::to_string(&command)?
-                ),
-            ]);
-        }
-    } else if engine == "claude" {
+    if engine == "claude" {
         if let Some(index) = args.iter().position(|arg| arg == "--settings") {
             let path = PathBuf::from(&args[index + 1]);
             let mut settings: Value = serde_json::from_slice(&std::fs::read(&path)?)?;
@@ -265,12 +246,10 @@ mod tests {
         let mut first = BTreeMap::new();
         let mut second = BTreeMap::new();
         let mut args = Vec::new();
-        install("codex", &root, &mut args, &mut first).unwrap();
-        install("codex", &root, &mut Vec::new(), &mut second).unwrap();
+        install("gemini", &root, &mut args, &mut first).unwrap();
+        install("gemini", &root, &mut Vec::new(), &mut second).unwrap();
         assert_ne!(first[FILE_ENV], second[FILE_ENV]);
-        assert!(args
-            .iter()
-            .any(|arg| arg.starts_with("hooks.PermissionRequest=")));
+
         std::fs::write(
             &first[FILE_ENV],
             serde_json::to_vec(&Reading {
@@ -282,5 +261,15 @@ mod tests {
         .unwrap();
         assert!(read(Path::new(&second[FILE_ENV])).is_none());
         std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn codex_launch_does_not_change_hook_trust_or_install_untrusted_hooks() {
+        let mut args = vec!["--sandbox".into(), "read-only".into()];
+        let mut env = BTreeMap::new();
+        let root = std::env::temp_dir().join(format!("codex-activity-{}", crate::generate_token()));
+        install("codex", &root, &mut args, &mut env).unwrap();
+        assert_eq!(args, ["--sandbox", "read-only"]);
+        assert!(env.is_empty());
+        assert!(!root.exists());
     }
 }

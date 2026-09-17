@@ -881,6 +881,16 @@ fn strip_ansi(raw: &[u8]) -> String {
     out.replace('\r', "\n")
 }
 
+fn activity_of(state: &AppState, session_id: &str) -> Option<crate::activity::State> {
+    let session = state.manager.get(session_id)?;
+    if let Some(reading) = session.activity() { return Some(reading.state); }
+    let agent = state.crew.list().into_iter().find(|agent| agent.engine_id == "codex" && agent.session_id.as_deref() == Some(session_id))?;
+    // Never infer identity from the newest transcript in a shared folder.
+    let conversation = agent.conversation.as_deref()?;
+    let home = codex_home_of(state, &agent)?;
+    crate::rollouts::find(&home, conversation)?.activity_since(session.stats().started_at)
+}
+
 fn look_at(state: &AppState, watch: &Watch, previous_frame: &str, now: u64) -> Observation {
     let session = state.manager.get(&watch.session_id);
     let alive = session.as_ref().map(|entry| entry.alive()).unwrap_or(false);
@@ -896,7 +906,7 @@ fn look_at(state: &AppState, watch: &Watch, previous_frame: &str, now: u64) -> O
         .map(|raw| strip_ansi(&raw))
         .unwrap_or_default();
 
-    let activity = session.as_ref().and_then(|held| held.activity()).map(|reading| reading.state);
+    let activity = activity_of(state, &watch.session_id);
     let quiet_turn = !tail.is_empty() && safe_to_type(previous_frame, &tail)
         && crate::activity::may_deliver(activity, &tail);
     let looks_done = !alive || quiet_turn || idle >= state.supervisor.rules.idle_before_finished;
@@ -1047,7 +1057,7 @@ fn spawn_supervisor(state: AppState) {
                 // Seeing the turn run is what separates "finished" from "has
                 // not started": the verdicts that read changed files lean on it.
                 if !watch.worked && (crate::supervisor::turn_running(&seen.tail)
-                    || state.manager.get(&watch.session_id).and_then(|s| s.activity()).is_some_and(|r| r.state == crate::activity::State::Active)) {
+                    || activity_of(&state, &watch.session_id) == Some(crate::activity::State::Active)) {
                     state.supervisor.mark_worked(&watch.id);
                 }
 
@@ -3352,7 +3362,7 @@ async fn deliver_input(state: &AppState, session_id: &str, text: &str, replying:
     if replying {
         if !crate::supervisor::resume_is_waiting(&frame) && !crate::supervisor::plan_is_waiting(&frame) { return false; }
     } else {
-        if !crate::activity::may_deliver(session.activity().as_ref().map(|r| r.state), &frame) { return false; }
+        if !crate::activity::may_deliver(activity_of(state, session_id), &frame) { return false; }
     }
 
     let clean: String = text.chars().filter(|c| !c.is_control() || matches!(c, '\n' | '\t')).collect();
@@ -3379,7 +3389,7 @@ async fn deliver_input(state: &AppState, session_id: &str, text: &str, replying:
         return true;
     }
     if !replying && (crate::supervisor::asking_the_human(&composed)
-        || session.activity().is_some_and(|reading| matches!(reading.state, crate::activity::State::Blocked | crate::activity::State::Active | crate::activity::State::Exited))) { return false; }
+        || activity_of(state, session_id).is_some_and(|activity| matches!(activity, crate::activity::State::Blocked | crate::activity::State::Active | crate::activity::State::Exited))) { return false; }
     if session.write_input(b"\r").is_err() {
         return false;
     }

@@ -50,10 +50,13 @@ build artifacts; it is not an OS sandbox for malicious test code.
 
 ## Activity and delivery
 
-Crew launches install native lifecycle hooks for Claude Code, Codex and Gemini.
-Each launch, including a resume or provider change, gets a separate activity
-file. Old-session events cannot change the new session's state. Only activity
-and timestamps are stored; hook payloads are not retained.
+Crew launches install native lifecycle hooks for Claude Code and Gemini.
+Each hook-enabled launch, including a resume or provider change, gets a separate
+activity file. Codex uses its native task lifecycle events from the agent's
+exact conversation, ignoring events before the current launch. This avoids
+introducing a hook-trust prompt or bypassing trust for a user's existing hooks.
+Old-session events cannot change the new session's state. Only activity and
+timestamps are stored; hook payloads are not retained.
 
 Active, blocked and exited native states veto automatic delivery. Pane checks
 remain necessary to protect text a person is composing, and provide fallback
@@ -64,8 +67,8 @@ unrecognized screen. A stopped process is reported as interrupted; quietness
 with a diff requests verification rather than asserting successful completion.
 A failed process probe conservatively keeps a session alive.
 
-Hook contracts were checked against local Claude Code 2.1.274, Codex 0.154.0
-and Gemini 0.58.0. Native provider permissions and model behavior remain distinct;
+Native lifecycle contracts were checked against local Claude Code 2.1.274,
+Codex 0.154.0 and Gemini 0.58.0. Native provider permissions and model behavior remain distinct;
 see [engine parity](engine-parity.md).
 
 ## Feedback and recovery
