@@ -593,8 +593,13 @@ fn tools() -> Value {
             }
         },
         {
+            "name": "workflow_run",
+            "description": "Run the project-selected commit, push, PR and merge stages for a finished task. Never bypass disabled stages. Returns completed stages and anything waiting for the person or review checks.",
+            "inputSchema": { "type": "object", "properties": { "task_id": { "type": "string" } }, "required": ["task_id"] }
+        },
+        {
             "name": "pr_open",
-            "description": "Open a pull request for the work in your worktree, and put the card up for review. Do this when your step is finished and committed — it is how the work leaves your hands: the card moves to review, the pull request is recorded on it under your name, and somebody who is not you reads it. Title it the way a commit is titled. Say in the body what changed and how you know it works.",
+            "description": "Open a pull request for the work in your worktree, and put the card up for review. Use workflow_run for normal delivery. This tool requires automatic PR creation to be enabled and the branch to be committed and already pushed; it never pushes implicitly. When it succeeds: the card moves to review, the pull request is recorded on it under your name, and somebody who is not you reads it. Title it the way a commit is titled. Say in the body what changed and how you know it works.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -922,6 +927,7 @@ fn call_tool(core: &Core, name: &str, arguments: &Value) -> Result<Value, String
             &format!("/repos/{}/worktrees", text("repository_id")?),
             None,
         ),
+        "workflow_run" => core.call("POST", &format!("/tasks/{}/workflow", text("task_id")?), Some(json!({}))),
         "pr_open" => core.call(
             "POST",
             &format!(

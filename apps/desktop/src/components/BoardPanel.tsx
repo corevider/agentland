@@ -1,3 +1,4 @@
+import { DeliveryCard } from "@/components/DeliveryCard";
 import { use_poll } from "@/lib/poll";
 import type { MenuItem } from "@/components/ContextMenu";
 import { on_a_control, without_text_selection } from "@/lib/controls";
@@ -790,7 +791,7 @@ export function BoardPanel({ active, repositories }: { active: boolean; reposito
                         set_comparing(race.id);
                         void refresh();
                     }}
-                    merges_itself={dispatch?.merge_when_checks_pass === true}
+                    merges_itself={(() => { const policy = repos.find((repo) => repo.id === tasks.find((task) => task.id === opened)?.repository_id)?.settings?.delivery; return policy ? policy.auto_merge && policy.trigger !== "manual" : dispatch?.merge_when_checks_pass === true; })()}
                     on_menu={(event) => {
                         const held = tasks.find((task) => task.id === opened);
                         if (held) {
@@ -1051,11 +1052,11 @@ function MergeSwitch({
             on_press={() => (on ? on_set(false) : on_arm())}
             title={
                 on
-                    ? "cards that pass every check merge themselves — click to turn this off"
-                    : "cards that pass every check wait in ready to merge for you — click to let them merge themselves"
+                    ? "Default for projects without a custom Git workflow. Project settings take precedence. Click to turn off."
+                    : "Default for projects without a custom Git workflow. Project settings take precedence. Click to enable merge after checks."
             }
         >
-            auto-merge {on ? "on" : "off"}
+            default auto-merge {on ? "on" : "off"}
         </Press>
     );
 }
@@ -1207,6 +1208,7 @@ function CardDetail({
                     />
                     {moving ? <Spinner label="moving card" /> : null}
                 </label>
+                <DeliveryCard task={task} on_changed={on_changed} />
                 {task.evidence.filter((entry) => entry.by === "repair limit" || entry.by === "repair resumed").at(-1)?.by === "repair limit" ? (
                     <div className="rounded-lg border border-coral p-2 text-[11px] text-shell">
                         <p>Automatic repairs paused after three rounds. Review the feedback before continuing.</p>

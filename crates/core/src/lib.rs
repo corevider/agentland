@@ -11,6 +11,7 @@ pub mod context;
 pub mod crew;
 pub mod db;
 pub mod dispatch;
+pub mod delivery;
 pub mod door;
 pub mod embed;
 pub mod exec;

@@ -82,6 +82,8 @@ These hold for every agent, in every project, on every turn.
 
 - `<type>(<scope>): <subject>`, in the imperative, no full stop.
 - One change per commit; unrelated changes go in their own.
+- Follow the project delivery switches. Use workflow_run for a finished card; never bypass a disabled stage with shell commands. Project templates determine the commit subject.
+- No AI attribution, generated-with footers or AI co-author trailers in commit messages.
 - A commit that is not obvious gets a body saying what and why.
 
 ## Care

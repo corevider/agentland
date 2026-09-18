@@ -109,7 +109,7 @@ fn a_pull_request_refuses_work_that_is_not_committed_yet() {
     assert!(refused.to_string().contains("commit the work first"), "{refused}");
 
     let blank = registry.commit("demo", "work1", "   ");
-    assert!(blank.unwrap_err().to_string().contains("needs a message"));
+    assert!(blank.unwrap_err().to_string().contains("message"));
 
     let commit = registry
         .commit("demo", "work1", "feat(demo): add the feature")
@@ -118,6 +118,12 @@ fn a_pull_request_refuses_work_that_is_not_committed_yet() {
     assert_eq!(commit.branch, "agent/work1");
     assert!(!commit.sha.is_empty());
 
+    let refused = registry.open_pull_request("demo", "work1", "Add the feature", "body").unwrap_err();
+    assert!(refused.to_string().contains("push is required"));
+    let remote = Command::new("git").args(["branch", "--list", "agent/work1"]).current_dir(&bare).output().unwrap();
+    assert!(remote.stdout.is_empty(), "PR creation must not push implicitly");
+    registry.push("demo", "work1").expect("explicit push");
+    registry.require_pushed("demo", "work1").expect("remote matches HEAD");
     let opened = registry
         .open_pull_request("demo", "work1", "Add the feature", "body")
         .expect("a committed branch can be pushed");
@@ -137,6 +143,19 @@ fn a_pull_request_refuses_work_that_is_not_committed_yet() {
         String::from_utf8_lossy(&pushed.stdout).contains("agent/work1"),
         "the branch reached the remote"
     );
+    // An external shell commit with an attribution cannot bypass managed push.
+    fs::write(worktree.path.join("feature.txt"), "changed").unwrap();
+    git(&["add", "-A"], &worktree.path);
+    git(&["commit", "-qm", "fix: change\n\nCo-authored-by: Codex <noreply@openai.com>"], &worktree.path);
+    assert!(registry.push("demo", "work1").unwrap_err().to_string().contains("AI attribution"));
+    let remote_sha = Command::new("git").args(["rev-parse", "refs/heads/agent/work1"]).current_dir(&bare).output().unwrap();
+    assert!(String::from_utf8_lossy(&remote_sha.stdout).starts_with(&commit.sha));
+    git(&["checkout", "-b", "unexpected"], &worktree.path);
+    fs::write(worktree.path.join("another.txt"), "do not stage").unwrap();
+    assert!(registry.commit("demo", "work1", "fix: change").is_err());
+    let staged = Command::new("git").args(["diff", "--cached", "--name-only"]).current_dir(&worktree.path).output().unwrap();
+    assert!(staged.stdout.is_empty(), "wrong-branch refusal must happen before staging");
+
 }
 
 #[test]
