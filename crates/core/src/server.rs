@@ -281,6 +281,7 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
 
     spawn_supervisor(state.clone());
     spawn_pull_watcher(state.clone());
+    spawn_delivery_worker(state.clone());
 
     // The crew gets a key of its own rather than the app's. An agent can read and
     // work with everything; it cannot reshape the crew or dismiss anyone, so the
@@ -470,6 +471,8 @@ pub async fn serve(manager: Arc<PtyManager>, mut config: ServerConfig) -> Result
         .route("/repos/{id}/issues/{number}/card", post(card_from_issue))
         .route("/repos/{id}/review", get(review_project))
         .route("/repos/{id}/worktrees/{name}/review", get(review_worktree))
+        .route("/tasks/{id}/workflow", get(workflow_preview).post(workflow_run))
+        .route("/repos/{id}/worktrees/{name}/push", post(push_worktree))
         .route("/repos/{id}/worktrees/{name}/commit", post(commit_worktree))
         .route("/repos/{id}/worktrees/{name}/pr", post(open_pull_request))
         .route("/repos/{id}/worktrees/{name}/merge", post(merge_worktree))
@@ -840,7 +843,7 @@ async fn compose_brief(state: &AppState, agent: &Agent, base: &str) -> String {
 
     // Running agents also receive settings updated since their session started.
     let project = state.repos.repositories().into_iter().find(|project| project.id == agent.repository_id);
-    format!("{written}{}", project.map(|project| project.settings.brief()).unwrap_or_default())
+    format!("{written}{}{}", project.map(|project| project.settings.brief()).unwrap_or_default(), delivery_policy(state, &agent.repository_id).instructions())
 }
 
 async fn start_agent_with_brief(state: &AppState, agent: &Agent, base: &str) -> Result<(), ApiError> {
@@ -1151,16 +1154,15 @@ fn spawn_supervisor(state: AppState) {
                             .is_some_and(|task| crate::board::may_go_up_for_review(&task));
 
                         if let Some(column) = wanted {
-                            // Finished is not the same as up for review. A card
-                            // moved there without its pull request told no check
-                            // and sat waiting; its holder is told what is left
-                            // instead, and the card stays where it is.
+                            // Delivery may pause here for a manual commit or push.
+                            // Review agents are notified only once a real PR exists.
                             if column == Column::Review && !held_by_the_commander && !up_for_review {
                                 state.crew_words.lock().entry(watch.agent_id.clone()).or_default().push(format!(
-                                    "{task} is finished but not up for review, and nothing tells the checks until it is. Commit anything left, then open it with pr_open — task_id {task}, worktree {worktree}.",
+                                    "{task} is finished but not up for review, and nothing tells the checks until it is. Call workflow_run with task_id {task}; obey the project delivery switches and report any stage waiting for a person. Worktree: {worktree}.",
                                     task = watch.task_id,
                                     worktree = watch.worktree,
                                 ));
+                                let _ = state.board.move_to(&watch.task_id, Column::Review);
                                 note(&state, "card.needs_a_pull_request", "the supervisor", &watch.task_id, &reason);
                             } else if state.board.move_to(&watch.task_id, column).is_ok() {
                                 note(
@@ -2030,8 +2032,8 @@ fn spawn_pull_watcher(state: AppState) {
                             continue;
                         }
                         let _ = state.board.move_to(&task.id, Column::Ready);
-                        if state.dispatch.merges_when_checks_pass() {
-                            match state.repos.merge_pull_request(&task.repository_id, &worktree, &pull.head_sha) {
+                        if automatic_merge(&state, &task.repository_id) {
+                            match merge_delivery(&state, &task, &worktree, &pull.head_sha) {
                                 Ok(_) => { let _ = state.board.move_to(&task.id, Column::Done); }
                                 Err(error) => tracing::warn!(%error, card = %task.id, "merge was refused"),
                             }
@@ -3009,6 +3011,7 @@ async fn save_project_settings(
     scope: Option<axum::Extension<crate::auth::Scope>>,
     Json(settings): Json<crate::project_settings::ProjectSettings>,
 ) -> Result<Json<Repository>, ApiError> {
+    let _lock = state.merge_lock.lock().await;
     let settings = human_project_settings(Some(settings), scope)?.expect("provided settings");
     Ok(Json(state.repos.set_settings(&id, settings)?))
 }
@@ -3867,13 +3870,16 @@ struct MergePolicyBody {
 
 async fn set_merge_policy(
     State(state): State<AppState>,
+    Extension(scope): Extension<TokenScope>,
     Json(body): Json<MergePolicyBody>,
-) -> Json<DispatchState> {
-    Json(
+) -> Result<Json<DispatchState>, ApiError> {
+    only_a_person(scope, "changing automatic merge")?;
+    let _lock = state.merge_lock.lock().await;
+    Ok(Json(
         state
             .dispatch
             .set_merge_when_checks_pass(body.merge_when_checks_pass),
-    )
+    ))
 }
 
 #[derive(Default, Deserialize)]
@@ -4234,17 +4240,395 @@ async fn review_project(
     Ok(Json(state.repos.review_project(&id)?))
 }
 
+fn delivery_attempt_key(
+    task: &Task,
+    policy: &crate::delivery::Policy,
+    status: &serde_json::Value,
+) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    task.id.hash(&mut hash);
+    task.title.hash(&mut hash);
+    task.body.hash(&mut hash);
+    serde_json::to_string(&task.issue)
+        .unwrap_or_default()
+        .hash(&mut hash);
+    task.evidence
+        .iter()
+        .rfind(|entry| matches!(entry.what, Evidence::Finished { .. }))
+        .map(|entry| entry.at)
+        .hash(&mut hash);
+    serde_json::to_string(policy)
+        .unwrap_or_default()
+        .hash(&mut hash);
+    status["head_sha"].as_str().hash(&mut hash);
+    format!("delivery attempt {:016x}", hash.finish())
+}
+
+fn delivery_is_idle(state: &AppState, repository_id: &str, worktree: &str) -> bool {
+    let Some(held) = state.repos.worktrees().into_iter().find(|held| {
+        held.worktree.repository_id == repository_id && held.worktree.name == worktree
+    }) else {
+        return false;
+    };
+    if state
+        .crew
+        .list()
+        .iter()
+        .filter(|agent| agent.repository_id == repository_id && agent.worktree == worktree)
+        .filter_map(|agent| agent.session_id.as_deref())
+        .any(|id| {
+            state.manager.live(id).is_some()
+                && activity_of(state, id) != Some(crate::activity::State::Idle)
+        })
+    {
+        return false;
+    }
+    // Unknown/blocked state is never an idle signal. This also covers manually
+    // opened terminals in the same checkout, not just a card's assigned agent.
+    state
+        .manager
+        .list()
+        .into_iter()
+        .filter(|session| {
+            session.cwd.as_ref().is_some_and(|cwd| {
+                crate::exec::settled(std::path::Path::new(cwd)).starts_with(&held.worktree.path)
+            })
+        })
+        .all(|session| {
+            state.manager.live(&session.id).is_none()
+                || activity_of(state, &session.id) == Some(crate::activity::State::Idle)
+        })
+}
+
+fn spawn_delivery_worker(state: AppState) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(20));
+        loop {
+            ticker.tick().await;
+            for task in state.board.list() {
+                if !matches!(task.column, Column::Review | Column::Ready)
+                    || state.races.open_for(&task.id).is_some()
+                {
+                    continue;
+                }
+                let policy = delivery_policy(&state, &task.repository_id);
+                if policy.trigger == "manual"
+                    || !(policy.auto_commit || policy.auto_push || policy.auto_pr)
+                {
+                    continue;
+                }
+                if policy.trigger == "finished"
+                    && !task
+                        .evidence
+                        .iter()
+                        .any(|entry| matches!(entry.what, Evidence::Finished { .. }))
+                {
+                    continue;
+                }
+                let Some(name) = task.worktree.as_deref() else {
+                    continue;
+                };
+                if !delivery_is_idle(&state, &task.repository_id, name) {
+                    continue;
+                }
+                let Ok(status) = state.repos.delivery_status(&task.repository_id, name) else {
+                    continue;
+                };
+                let key = delivery_attempt_key(&task, &policy, &status);
+                if task.evidence.iter().any(|entry| matches!(&entry.what, Evidence::Note { text } if text.starts_with(&key))) { continue; }
+                // Persist before side effects so a restart does not create a retry loop.
+                if state
+                    .board
+                    .attach(
+                        &task.id,
+                        Evidence::Note { text: key.clone() },
+                        "delivery workflow",
+                        now_secs(),
+                    )
+                    .is_err()
+                {
+                    continue;
+                }
+                let outcome =
+                    execute_workflow(state.clone(), TokenScope::Agent, task.id.clone(), true).await;
+                let text = match outcome {
+                    Ok(Json(value)) => value.to_string(),
+                    Err(error) => error.0.to_string(),
+                };
+                let after = state
+                    .repos
+                    .delivery_status(&task.repository_id, name)
+                    .unwrap_or(status);
+                let final_key = delivery_attempt_key(&task, &policy, &after);
+                let _ = state.board.attach(
+                    &task.id,
+                    Evidence::Note {
+                        text: format!("{final_key}: {text}"),
+                    },
+                    "delivery workflow",
+                    now_secs(),
+                );
+            }
+        }
+    });
+}
+
+fn delivery_policy(state: &AppState, id: &str) -> crate::delivery::Policy {
+    state
+        .repos
+        .repositories()
+        .into_iter()
+        .find(|repo| repo.id == id)
+        .and_then(|repo| repo.settings.delivery)
+        .unwrap_or_else(|| crate::delivery::Policy {
+            auto_merge: state.dispatch.merges_when_checks_pass(),
+            ..Default::default()
+        })
+}
+
+fn automatic_merge(state: &AppState, id: &str) -> bool {
+    let policy = delivery_policy(state, id);
+    policy.auto_merge && policy.trigger != "manual"
+}
+
+fn merge_delivery(
+    state: &AppState,
+    task: &Task,
+    worktree: &str,
+    head: &str,
+) -> anyhow::Result<String> {
+    let subject = delivery_policy(state, &task.repository_id).message(task)?;
+    let body = format!(
+        "Task: {}{}",
+        task.id,
+        task.issue
+            .as_ref()
+            .map(|issue| format!("\nCloses #{}", issue.number))
+            .unwrap_or_default()
+    );
+    state
+        .repos
+        .merge_pull_request(&task.repository_id, worktree, head, &subject, &body)
+}
+
+#[derive(Deserialize)]
+struct PushBody {
+    #[serde(default)]
+    task_id: Option<String>,
+}
+
+async fn push_worktree(
+    State(state): State<AppState>,
+    Extension(scope): Extension<TokenScope>,
+    Path((id, name)): Path<(String, String)>,
+    Json(body): Json<PushBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _lock = state.merge_lock.lock().await;
+    if scope == TokenScope::Agent && !delivery_policy(&state, &id).auto_push {
+        return Err(anyhow::anyhow!("automatic push is disabled").into());
+    }
+    if let Some(task_id) = body.task_id {
+        let task = state
+            .board
+            .get(&task_id)
+            .ok_or_else(|| anyhow::anyhow!("unknown task"))?;
+        ensure_card_worktree(&task, &id, &name)?;
+        if scope == TokenScope::Agent && !delivery_policy(&state, &id).permits_agent("push", &task)
+        {
+            return Err(anyhow::anyhow!("push waits for the configured workflow trigger").into());
+        }
+    } else {
+        only_a_person(scope, "pushing without a task")?;
+    }
+    Ok(Json(
+        serde_json::json!({"output":state.repos.push(&id, &name)?}),
+    ))
+}
+
+async fn workflow_preview(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let task = state
+        .board
+        .get(&id)
+        .ok_or_else(|| anyhow::anyhow!("unknown task"))?;
+    let policy = delivery_policy(&state, &task.repository_id);
+    Ok(Json(
+        serde_json::json!({"message": policy.message(&task)?, "policy":policy}),
+    ))
+}
+
+/// Run the selected stages only. Each stage rechecks current settings under the
+/// same lock as settings writes and merges. A successful earlier stage is kept
+/// when a later stage is waiting; retries inspect Git rather than duplicating it.
+async fn workflow_run(
+    State(state): State<AppState>,
+    Extension(scope): Extension<TokenScope>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    execute_workflow(state, scope, id, false).await
+}
+
+async fn execute_workflow(
+    state: AppState,
+    scope: TokenScope,
+    id: String,
+    background: bool,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let task = state
+        .board
+        .get(&id)
+        .ok_or_else(|| anyhow::anyhow!("unknown task"))?;
+    if task.column == Column::Done {
+        return Ok(Json(serde_json::json!({"performed": [], "waiting": "task is already done", "policy": delivery_policy(&state, &task.repository_id)})));
+    }
+    let name = task
+        .worktree
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("task has no worktree"))?;
+    ensure_card_worktree(&task, &task.repository_id, &name)?;
+    if state.races.open_for(&id).is_some() {
+        return Err(anyhow::anyhow!("choose the race winner before delivery").into());
+    }
+    let repo = task.repository_id.clone();
+    let mut performed = Vec::<String>::new();
+    let result: Result<(), ApiError> = async {
+        {
+            let _lock = state.merge_lock.lock().await;
+            let policy = delivery_policy(&state, &repo);
+            if scope == TokenScope::Agent && policy.trigger == "manual" {
+                return Err(anyhow::anyhow!("workflow waits for a person to run it").into());
+            }
+            if policy.trigger == "review" && !matches!(task.column, Column::Review | Column::Ready)
+            {
+                return Err(anyhow::anyhow!("workflow waits for the review column").into());
+            }
+            if background && !delivery_is_idle(&state, &repo, &name) {
+                return Err(anyhow::anyhow!("worktree is no longer idle").into());
+            }
+            let status = state.repos.delivery_status(&repo, &name)?;
+            if policy.auto_commit && status["dirty"] == true {
+                let message = policy.message(&task)?;
+                let commit = state.repos.commit(&repo, &name, &message)?;
+                state.board.attach(
+                    &id,
+                    Evidence::Commit {
+                        sha: commit.sha,
+                        subject: message,
+                    },
+                    task.assignee.as_deref().unwrap_or("a person"),
+                    now_secs(),
+                )?;
+                performed.push("commit".into());
+            }
+            if policy.auto_push {
+                state.repos.push(&repo, &name)?;
+                performed.push("push".into());
+            }
+        }
+        // This handler independently rechecks auto_pr and takes the mutation lock.
+        if delivery_policy(&state, &repo).auto_pr {
+            let request = create_delivery_pr(
+                state.clone(),
+                repo.clone(),
+                name.clone(),
+                scope,
+                PullRequestBody {
+                    title: delivery_policy(&state, &repo).message(&task)?,
+                    body: task.body.clone(),
+                    task_id: Some(id.clone()),
+                    by: task.assignee.clone(),
+                },
+                true,
+            )
+            .await?;
+            if !request.0.created {
+                return Err(anyhow::anyhow!("finish creating the PR at {}", request.0.url).into());
+            }
+            performed.push("pr".into());
+        }
+        {
+            let _lock = state.merge_lock.lock().await;
+            if delivery_policy(&state, &repo).auto_merge {
+                let task = state
+                    .board
+                    .get(&id)
+                    .ok_or_else(|| anyhow::anyhow!("unknown task"))?;
+                if scope == TokenScope::Agent && !delivery_policy(&state, &repo).permits_agent("merge", &task) {
+                    return Err(anyhow::anyhow!("merge waits for the configured workflow trigger").into());
+                }
+                let pull = state
+                    .repos
+                    .pull_request_state(&repo, &name)?
+                    .ok_or_else(|| anyhow::anyhow!("merge waits for a PR"))?;
+                crate::pulls::merge_gate(&task, &pull)?;
+                merge_delivery(&state, &task, &name, &pull.head_sha)?;
+                state.board.move_to(&id, Column::Done)?;
+                performed.push("merge".into());
+            }
+        }
+        Ok(())
+    }
+    .await;
+    let waiting = result.err().map(|error| error.0.to_string());
+    Ok(Json(
+        serde_json::json!({"performed":performed, "waiting":waiting, "policy":delivery_policy(&state, &repo)}),
+    ))
+}
+
 #[derive(Deserialize)]
 struct CommitBody {
+    #[serde(default)]
     message: String,
+    #[serde(default)]
+    task_id: Option<String>,
 }
 
 async fn commit_worktree(
     State(state): State<AppState>,
     Path((id, name)): Path<(String, String)>,
+    Extension(scope): Extension<TokenScope>,
     Json(body): Json<CommitBody>,
 ) -> Result<Json<Commit>, ApiError> {
-    Ok(Json(state.repos.commit(&id, &name, &body.message)?))
+    let _lock = state.merge_lock.lock().await;
+    let policy = delivery_policy(&state, &id);
+    if scope == TokenScope::Agent && !policy.auto_commit {
+        return Err(anyhow::anyhow!("automatic commit is disabled").into());
+    }
+    let task_id = body.task_id.clone();
+    let message = if let Some(task_id) = body.task_id {
+        let task = state
+            .board
+            .get(&task_id)
+            .ok_or_else(|| anyhow::anyhow!("unknown task"))?;
+        ensure_card_worktree(&task, &id, &name)?;
+        if scope == TokenScope::Agent && !policy.permits_agent("commit", &task) {
+            return Err(anyhow::anyhow!("commit waits for the configured workflow trigger").into());
+        }
+        if scope == TokenScope::Agent || body.message.is_empty() {
+            policy.message(&task)?
+        } else {
+            body.message
+        }
+    } else {
+        only_a_person(scope, "committing without a task")?;
+        body.message
+    };
+    let commit = state.repos.commit(&id, &name, &message)?;
+    if let Some(task_id) = task_id {
+        state.board.attach(
+            &task_id,
+            Evidence::Commit {
+                sha: commit.sha.clone(),
+                subject: message,
+            },
+            "a person",
+            now_secs(),
+        )?;
+    }
+    Ok(Json(commit))
 }
 
 #[derive(Deserialize)]
@@ -4371,7 +4755,7 @@ async fn submit_review(
     let ready = state.board.move_to(&task.id, Column::Ready)?;
     note(&state, "card.ready", &reviewer, &task.id, "every check the crew can do has passed");
 
-    if !state.dispatch.merges_when_checks_pass() {
+    if !automatic_merge(&state, &task.repository_id) {
         return Ok(Json(ready));
     }
 
@@ -4379,7 +4763,7 @@ async fn submit_review(
     // crew merges its own work. A merge that will not go through is not a
     // failure of the review — the card keeps its yes and waits in `ready`,
     // which is where it would have been anyway.
-    match state.repos.merge_pull_request(&id, &name, &pull.head_sha) {
+    match merge_delivery(&state, &task, &name, &pull.head_sha) {
         Ok(said) => {
             state.board.attach(
                 &task.id,
@@ -4430,7 +4814,7 @@ async fn merge_worktree(
     let pull = state.repos.pull_request_state(&id, &name)?
         .ok_or_else(|| anyhow::anyhow!("no pull request for this card"))?;
     crate::pulls::merge_gate(&task, &pull)?;
-    let said = state.repos.merge_pull_request(&id, &name, &pull.head_sha)?;
+    let said = merge_delivery(&state, &task, &name, &pull.head_sha)?;
     let now = now_secs();
 
     state.board.attach(
@@ -4470,11 +4854,20 @@ fn ask_for_checks(state: &AppState, task_id: &str, repository_id: &str, worktree
 async fn open_pull_request(
     State(state): State<AppState>,
     Path((id, name)): Path<(String, String)>,
-    Json(mut body): Json<PullRequestBody>,
+    Extension(scope): Extension<TokenScope>,
+    Json(body): Json<PullRequestBody>,
 ) -> Result<Json<PullRequest>, ApiError> {
+    create_delivery_pr(state, id, name, scope, body, false).await
+}
+
+async fn create_delivery_pr(state: AppState, id: String, name: String, scope: TokenScope, mut body: PullRequestBody, require_auto: bool) -> Result<Json<PullRequest>, ApiError> {
+    let _lock = state.merge_lock.lock().await;
+    if require_auto && !delivery_policy(&state, &id).auto_pr { return Err(anyhow::anyhow!("automatic PR creation was disabled").into()); }
+    if scope == TokenScope::Agent && (!delivery_policy(&state, &id).auto_pr || body.task_id.is_none()) { return Err(anyhow::anyhow!("automatic PR creation is disabled or task_id is missing").into()); }
     if let Some(task_id) = &body.task_id {
         let task = state.board.get(task_id).ok_or_else(|| anyhow::anyhow!("unknown card: {task_id}"))?;
         ensure_card_worktree(&task, &id, &name)?;
+        if scope == TokenScope::Agent && !delivery_policy(&state, &id).permits_agent("pr", &task) { return Err(anyhow::anyhow!("PR waits for the configured workflow trigger").into()); }
     }
     // An entrant works toward a person's choice, not toward a review: its
     // pull request would move the card before anybody had compared the rest.
@@ -4502,6 +4895,7 @@ async fn open_pull_request(
         .repos
         .open_pull_request(&id, &name, &body.title, &body.body)?;
 
+    if !request.created { return Ok(Json(request)); }
     if let Some(task_id) = body.task_id {
         let _ = state.board.attach(
             &task_id,
@@ -5865,7 +6259,7 @@ async fn pick_the_winner(
         .entry(winner.agent_id.clone())
         .or_default()
         .push(format!(
-            "Your work on {task} is the one kept; the others were let go. Finish it, commit, then open it for review with pr_open — task_id {task}, worktree {worktree}.",
+            "Your work on {task} is the one kept; the others were let go. Finish it, then call workflow_run with task_id {task}, respecting the project delivery switches. Worktree: {worktree}.",
             task = race.task_id,
             worktree = winner.worktree,
         ));

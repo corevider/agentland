@@ -91,6 +91,7 @@ pub fn card_from(issue: &GitHubIssue, repository_id: &str) -> CreateTask {
         issue: Some(Issue {
             number: issue.number,
             url: issue.url.clone(),
+            labels: issue.labels.iter().map(|label| label.name.clone()).collect(),
         }),
     }
 }

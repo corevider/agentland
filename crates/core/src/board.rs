@@ -269,6 +269,8 @@ pub struct Task {
 pub struct Issue {
     pub number: u64,
     pub url: String,
+    #[serde(default)]
+    pub labels: Vec<String>,
 }
 
 /// A card as a list shows it: what it is, where it is and who has it.
@@ -420,7 +422,7 @@ impl Task {
         // test beside it: it had been told what to do and never told what done
         // looks like.
         brief.push_str(&format!(
-            "\n\nWhen this is finished: commit it, then pr_open with task_id {} and the worktree you worked in. That is what puts it up for review — somebody who is not you reads it, and the card leaves your hands. Do not merge it yourself.",
+            "\n\nWhen this is finished: call workflow_run with task_id {}. Follow the project's delivery settings: do not commit, push, open a PR or merge through other tools to bypass a disabled stage. Report any stage waiting on the person. Do not merge it yourself.",
             self.id
         ));
 
@@ -1436,7 +1438,7 @@ mod tests {
 
         let brief = card.brief();
         assert!(brief.starts_with(&asked));
-        assert!(brief.contains(&format!("pr_open with task_id {}", card.id)));
+        assert!(brief.contains(&format!("workflow_run with task_id {}", card.id)));
     }
 
     #[test]
@@ -1451,6 +1453,7 @@ mod tests {
                 issue: Some(Issue {
                     number: 12,
                     url: "https://github.com/shop/web/issues/12".to_owned(),
+                    labels: vec!["bug".into()],
                 }),
             })
             .unwrap();

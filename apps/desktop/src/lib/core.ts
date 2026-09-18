@@ -245,7 +245,14 @@ export interface Repository {
     settings?: ProjectSettings;
 }
 
+export interface DeliveryPolicy {
+    auto_commit: boolean; auto_push: boolean; auto_pr: boolean; auto_merge: boolean;
+    trigger: "finished" | "review" | "manual"; commit_template: string; default_type: string;
+    rules: { issue_label: string; title_prefix: string; commit_type: string }[];
+}
+
 export interface ProjectSettings {
+    delivery?: DeliveryPolicy | null;
     engine_ids: string[];
     commander_engine_id: string | null;
     reference_folders: { path: string; note: string }[];
@@ -2095,4 +2102,16 @@ export function list_approvals(): Promise<Approval[]> {
 
 export function resume_repairs(task_id: string): Promise<Task> {
     return request<Task>(`/tasks/${encodeURIComponent(task_id)}/resume-repairs`, { method: "POST" });
+}
+
+export function delivery_preview(task_id: string): Promise<{message: string; policy: DeliveryPolicy}> {
+    return request(`/tasks/${encodeURIComponent(task_id)}/workflow`);
+}
+export function delivery_run(task_id: string): Promise<{performed: string[]; waiting: string | null}> {
+    return request(`/tasks/${encodeURIComponent(task_id)}/workflow`, {method: "POST", body: JSON.stringify({})});
+}
+export function delivery_stage(task: Task, stage: "commit" | "push" | "pr", message: string): Promise<unknown> {
+    return request(`/repos/${encodeURIComponent(task.repository_id)}/worktrees/${encodeURIComponent(task.worktree!)}/${stage}`, {
+        method: "POST", body: JSON.stringify({task_id: task.id, message, title: message, body: task.body}),
+    });
 }

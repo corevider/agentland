@@ -8,7 +8,7 @@ pub fn attach(
     instructions: &std::path::Path,
 ) -> Result<()> {
     use std::io::Write;
-    let context = crate::repo::saved_project_settings(data, repository_id).brief();
+    let context = format!("{}{}", crate::repo::saved_project_settings(data, repository_id).brief(), crate::delivery::saved(data, repository_id).instructions());
     if !context.is_empty() {
         std::fs::OpenOptions::new()
             .append(true)
@@ -104,6 +104,8 @@ mod tests {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct ProjectSettings {
+    /// Absent keeps the legacy global merge preference. Other stages default off.
+    pub delivery: Option<crate::delivery::Policy>,
     /// Empty inherits the workspace's global hiring policy.
     pub engine_ids: Vec<String>,
     pub commander_engine_id: Option<String>,
@@ -123,6 +125,7 @@ impl ProjectSettings {
     }
 
     pub fn validate(mut self) -> Result<Self> {
+        if let Some(delivery) = &self.delivery { delivery.validate()?; }
         self.engine_ids.sort();
         self.engine_ids.dedup();
         for id in &self.engine_ids {

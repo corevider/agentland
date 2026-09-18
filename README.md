@@ -2302,7 +2302,7 @@ to do and never told what done looks like. Now the path from a finished step to
 a merged one is the crew's own, and the last step on it is a person's.
 
 ```
-implementer commits → pr_open → review
+implementer → selected project Git workflow → PR → review
     → reviewer · tester · security   (whichever the crew holds, in parallel)
     → ready to merge                 (a person merges — or the crew, if a switch says so)
 ```
@@ -2781,3 +2781,9 @@ a button still reaches the core once. Keystrokes, resizes, benchmark samples
 and pen marks are left out of both: they come by the dozen and each one has to
 arrive. On the phone, approve, reject, send and delete say they are working as
 well.
+
+### Configurable project delivery
+
+Commit, push, PR creation and merge are independent project settings. Configure
+triggers and task/issue-based commit templates in project settings, or run
+individual steps from a card. See [Project Git workflows](docs/delivery-workflows.md).

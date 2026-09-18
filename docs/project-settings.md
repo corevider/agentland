@@ -40,3 +40,6 @@ other visible panels and application windows. Workspace membership, Board,
 Crew, Files & Git and the sidebar re-read their data without **Reload
 interface**. Visible panels also poll as a fallback for changes made outside
 that window; returning to a hidden window refreshes it.
+
+Project settings also include independent commit, push, PR and merge switches,
+triggers and commit classification templates. See [Git workflows](delivery-workflows.md).

@@ -385,7 +385,7 @@ impl RepoRegistry {
         // cannot have a worktree cut from it — so it gets an empty commit rather
         // than a repository the crew cannot work in.
         let staged = git(&["diff", "--cached", "--name-only"], Some(&canonical)).unwrap_or_default();
-        let message = "chore: start tracking this folder with Agentland";
+        let message = "chore: initialize repository";
         if staged.trim().is_empty() {
             commit_as_somebody(&["commit", "--allow-empty", "-m", message], &canonical)?;
         } else {
@@ -1272,7 +1272,9 @@ impl RepoRegistry {
         worktree_name: &str,
         message: &str,
     ) -> Result<Commit> {
+        self.delivery_status(repository_id, worktree_name)?;
         let message = message.trim();
+        crate::delivery::validate_message(message)?;
         if message.is_empty() {
             bail!("a commit needs a message");
         }
@@ -1297,6 +1299,53 @@ impl RepoRegistry {
             files: staged.lines().filter(|line| !line.is_empty()).count(),
             message: message.to_owned(),
         })
+    }
+
+    pub fn delivery_status(&self, repository_id: &str, name: &str) -> Result<serde_json::Value> {
+        let (repository, worktree) = self.locate(repository_id, name)?;
+        let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"], Some(&worktree.path))?;
+        if branch != worktree.branch || branch == repository.default_branch {
+            bail!("delivery requires the task's own branch; checkout is on {branch}");
+        }
+        let head = git(&["rev-parse", "HEAD"], Some(&worktree.path))?;
+        let dirty = !git(&["status", "--porcelain"], Some(&worktree.path))?.is_empty();
+        let ahead = git(&["rev-list", "--count", &format!("{}..HEAD", repository.default_branch)], Some(&worktree.path))?.parse::<u64>()?;
+        Ok(serde_json::json!({ "head_sha": head, "dirty": dirty, "ahead": ahead, "branch": branch }))
+    }
+
+    fn validate_outgoing_commits(&self, repository_id: &str, name: &str) -> Result<()> {
+        let (repository, worktree) = self.locate(repository_id, name)?;
+        let messages = git(&["log", "--format=%B%x00", &format!("{}..HEAD", repository.default_branch)], Some(&worktree.path))?;
+        for message in messages.split('\0').filter(|message| !message.trim().is_empty()) {
+            crate::delivery::validate_message(message)?;
+        }
+        Ok(())
+    }
+
+    pub fn require_pushed(&self, repository_id: &str, name: &str) -> Result<()> {
+        let status = self.delivery_status(repository_id, name)?;
+        if status["dirty"] == true { bail!("commit the work first; uncommitted changes remain"); }
+        if status["ahead"] == 0 { bail!("no task commits to publish"); }
+        self.validate_outgoing_commits(repository_id, name)?;
+        let (repository, worktree) = self.locate(repository_id, name)?;
+        let remote = repository.remotes.iter().find(|remote| remote.name == "origin").or(repository.remotes.first())
+            .ok_or_else(|| anyhow!("project has no remote"))?;
+        let found = git(&["ls-remote", "--heads", &remote.name, &format!("refs/heads/{}", worktree.branch)], Some(&worktree.path))?;
+        if found.split_whitespace().next() != status["head_sha"].as_str() {
+            bail!("push is required: the remote branch does not match the local commit; PR creation never pushes implicitly");
+        }
+        Ok(())
+    }
+
+    pub fn push(&self, repository_id: &str, name: &str) -> Result<String> {
+        let status = self.delivery_status(repository_id, name)?;
+        if status["dirty"] == true { bail!("commit the work first; uncommitted changes remain"); }
+        if status["ahead"] == 0 { bail!("no task commits to push"); }
+        self.validate_outgoing_commits(repository_id, name)?;
+        let (repository, worktree) = self.locate(repository_id, name)?;
+        let remote = repository.remotes.iter().find(|remote| remote.name == "origin").or(repository.remotes.first())
+            .ok_or_else(|| anyhow!("project has no remote"))?;
+        git(&["push", "-u", &remote.name, &format!("HEAD:refs/heads/{}", worktree.branch)], Some(&worktree.path))
     }
 
     /// What the forge says about the pull request on this worktree's branch.
@@ -1467,11 +1516,13 @@ impl RepoRegistry {
     /// Squashed, because a card is one piece of work and its branch is the
     /// workings. The branch is left alone: deleting it is destroying something
     /// and belongs to whoever decides to.
-    pub fn merge_pull_request(&self, repository_id: &str, worktree_name: &str, head_sha: &str) -> Result<String> {
+    pub fn merge_pull_request(&self, repository_id: &str, worktree_name: &str, head_sha: &str, subject: &str, body: &str) -> Result<String> {
+        crate::delivery::validate_message(subject)?;
+        crate::delivery::validate_message(body)?;
         let (_, worktree) = self.locate(repository_id, worktree_name)?;
 
         let output = crate::exec::command("gh")
-            .args(["pr", "merge", &worktree.branch, "--squash", "--match-head-commit", head_sha])
+            .args(["pr", "merge", &worktree.branch, "--squash", "--match-head-commit", head_sha, "--subject", subject, "--body", body])
             .current_dir(&worktree.path)
             .output()
             .context("gh could not be run")?;
@@ -1493,6 +1544,7 @@ impl RepoRegistry {
         title: &str,
         body: &str,
     ) -> Result<PullRequest> {
+        crate::delivery::validate_message(title)?;
         let (repository, worktree) = self.locate(repository_id, worktree_name)?;
 
         let pending = git(&["status", "--porcelain"], Some(&worktree.path))?;
@@ -1529,10 +1581,7 @@ impl RepoRegistry {
             .or_else(|| repository.remotes.first())
             .ok_or_else(|| anyhow!("this repository has no remote to open a pull request against"))?;
 
-        git(
-            &["push", "-u", &origin.name, &worktree.branch],
-            Some(&worktree.path),
-        )?;
+        self.require_pushed(repository_id, worktree_name)?;
 
         let gh_available = crate::exec::command("gh")
             .arg("--version")
@@ -1541,6 +1590,11 @@ impl RepoRegistry {
             .unwrap_or(false);
 
         if origin.provider == "github" && gh_available {
+            if let Some(existing) = self.pull_request_state(repository_id, worktree_name)? {
+                if existing.state == "OPEN" {
+                    return Ok(PullRequest { url: existing.url, created: true, detail: "existing pull request".into() });
+                }
+            }
             let url = git_command(
                 "gh",
                 &[
@@ -1650,6 +1704,7 @@ mod tests {
         let settings = crate::project_settings::ProjectSettings {
             engine_ids: vec!["codex".into()], commander_engine_id: Some("codex".into()),
             reference_folders: vec![crate::project_settings::ReferenceFolder { path: folder.clone(), note: "reference only".into() }],
+            delivery: None,
         }.validate().unwrap();
         registry.set_settings(&project.id, settings.clone()).unwrap();
         assert_eq!(registry.register(&folder).unwrap().settings, settings);
@@ -1702,7 +1757,7 @@ mod tests {
         assert_eq!(repository.default_branch, "main");
         assert!(dir.join(".git").exists(), "it is a repository now");
         let log = git(&["log", "--oneline"], Some(&dir)).unwrap();
-        assert!(log.contains("start tracking this folder"), "and it has a commit: {log}");
+        assert!(log.contains("initialize repository"), "and it has a commit: {log}");
     }
 
     #[test]

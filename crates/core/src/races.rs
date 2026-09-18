@@ -111,7 +111,7 @@ pub fn worktree_name(race_id: &str, index: usize) -> String {
 /// pull request, and in a race both come after a person has chosen.
 pub fn race_brief(card_brief: &str, entrants: usize) -> String {
     format!(
-        "You are one of {entrants} agents given this same work at the same time, each in a worktree of its own and on a different engine or model. A person will read every result side by side and keep one.\n\nWork only in this worktree, and commit what you make on its branch. Do not open a pull request and do not move the card: whoever is kept is told what comes next.\n\n{}",
+        "You are one of {entrants} agents given this same work at the same time, each in a worktree of its own and on a different engine or model. A person will read every result side by side and keep one.\n\nWork only in this worktree. Follow the project delivery policy; do not commit unless its automatic commit stage is enabled or a person explicitly requests it. Do not open a pull request and do not move the card: whoever is kept is told what comes next.\n\n{}",
         card_brief.trim()
     )
 }
